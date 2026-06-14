@@ -1,0 +1,39 @@
+[workspace]
+members = ["programs/*", "crates/*", "integration-tests"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Fusion-Core-Finance/fusion-core"
+
+[workspace.dependencies]
+anchor-lang = "0.32.1"
+anchor-spl = "0.32.1"
+fusd-math = { path = "crates/fusd-math" }
+fusd-oracle = { path = "crates/fusd-oracle" }
+
+# Money math must keep overflow checks in release — never silently wrap.
+[profile.release]
+overflow-checks = true
+# Explicit panic strategy for the DEPLOYED artifact: `cargo-build-sbf` builds with `cargo build
+# --release` (verified: its embedded invocation is `+solana build --release …`), so the on-chain
+# program uses THIS profile. The SBF target already forces abort (no unwinder on-chain); pinning it
+# makes that deterministic for the verifiable build. Host `cargo test`/bench auto-override to unwind,
+# so `cargo test` and `cargo kani` are unaffected. (This toolchain does NOT select a custom `sbf`
+# profile, so the pin belongs here on `[profile.release]`.)
+panic = "abort"
+# Verifiable/deterministic builds ADDITIONALLY set `lto = "fat"` and `codegen-units = 1`
+# (applied by the verifiable-build pipeline / solana-verify Docker).
+
+# Kani (bounded model checking, CBMC) — pre-audit formal verification of the pure money-math core.
+# Harnesses live under `#[cfg(kani)]` in `crates/fusd-math` (invisible to normal builds). Run with
+# `cargo install --locked kani-verifier && cargo kani setup && cargo kani -p fusd-math`.
+# Kani CANNOT verify the Anchor/SBF program entrypoint (no syscall model) — only the extracted pure
+# crates, so invariant-bearing math stays factored into `fusd-math`/`fusd-oracle`. The unwind covers
+# `bnum`'s U256 divide loops; if a divide-bearing harness exceeds it, the documented contingency is a
+# `#[cfg(kani)]` `[u128;2]` U256 shim — not added pre-emptively.
+[[workspace.metadata.kani.proof]]
+harness = ".*"
+unwind = 264

@@ -1,0 +1,25 @@
+{
+  "name": "fusd",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "fUSD — Solana-native, futarchy-governed overcollateralized CDP stablecoin",
+  "scripts": {
+    "lint": "prettier --check \"{tests,sdk,scripts,migrations}/**/*.ts\"",
+    "lint:fix": "prettier --write \"{tests,sdk,scripts,migrations}/**/*.ts\""
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1"
+  },
+  "devDependencies": {
+    "@sqds/multisig": "2.1.4",
+    "@types/bn.js": "^5.1.5",
+    "@types/chai": "^4.3.16",
+    "@types/mocha": "^10.0.7",
+    "chai": "^4.4.1",
+    "mocha": "^10.6.0",
+    "prettier": "^3.3.0",
+    "ts-mocha": "^10.0.0",
+    "typescript": "^5.5.0"
+  }
+}

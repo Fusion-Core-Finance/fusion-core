@@ -1,0 +1,45 @@
+name: kani
+
+# The FULL Kani formal-verification pass over fusd-math (the multi-hour solver run that the fast
+# per-PR `ci` job only tag-gates). Run on demand and weekly, never on every push — cbmc is too slow
+# for the PR path. `scripts/kani-audit.sh` runs each harness in isolation, regenerates
+# crates/fusd-math/kani_audit.tsv, and fails on any non-PASS / TIMEOUT / untagged / VACUOUS harness.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+jobs:
+  kani:
+    name: fusd-math formal proofs
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fusd-kani
+
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      # Heavier per-harness budget than the local default; the gate fails on any non-PASS / TIMEOUT.
+      - name: Run Kani audit
+        env:
+          BUDGET_S: "1800"
+        run: scripts/kani-audit.sh
+
+      # Surface the regenerated proof table even on failure (drift in cbmc/wall times is expected).
+      - name: Upload proof table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kani-audit-tsv
+          path: crates/fusd-math/kani_audit.tsv

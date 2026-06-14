@@ -1,0 +1,54 @@
+[package]
+name = "fusd-core"
+description = "fUSD — Solana-native overcollateralized CDP stablecoin engine (see ../../docs/fusion-docs.md)"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "fusd_core"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Dev/test only: enables `dev_set_price` so the CDP flow is testable before the real
+# oracle (fusd-oracle + Pyth/Switchboard) is wired. NEVER enabled for mainnet builds.
+dev-oracle = []
+
+[dependencies]
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+anchor-spl = { workspace = true }
+fusd-math = { workspace = true }
+# `pod` = bytemuck impls so ObservationRing embeds in the zero-copy DexTwap account.
+fusd-oracle = { workspace = true, features = ["pod"] }
+# Required by `#[account(zero_copy)]` (the EpochToScaleToSum grid); min_const_generics for the
+# large `[u128; N]` array.
+bytemuck = { version = "1", features = ["min_const_generics"] }
+# Oracle feeds (fusion-docs.md). Versions chosen for anchor 0.32 / solana 2.3 / SBF
+# cargo 1.84 compatibility — mind the Cargo.lock pins before ANY
+# `cargo update`: both SDKs have open-ended anchor/solana reqs that re-resolve to a second
+# anchor-lang 1.x + solana-program 4.x without the pins.
+pyth-solana-receiver-sdk = "1.2.0"
+# `client` (host RPC) stays OFF on-chain; `anchor` = the QuoteVerifier + Anchor account types.
+switchboard-on-demand = { version = "0.12.1", default-features = false, features = ["anchor"] }
+# On-chain `security.txt` (Neodyme; fusion-docs.md). Dependency-free, embeds a string in a
+# `.security.txt` ELF section so white-hats can find the disclosure contact on-chain. Emitted only
+# in the deployable program (gated `not(no-entrypoint)`), never in CPI/lib consumers.
+solana-security-txt = "1.1.1"
+
+# NOTE: the host-side litesvm integration tests live in the separate `integration-tests` crate
+# (a non-program workspace member), NOT here. Keeping the `dev-oracle` self-dep out of this
+# manifest guarantees `dev_set_price` can never unify into the deployed `.so`/IDL.
+
+# Silence the cfg flags that Anchor/Solana entrypoint macros reference but we don't enable.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("anchor-debug", "custom-heap", "custom-panic", "solana"))',
+    # The #[program] entrypoint macro uses cfg(target_os = "solana"); declare it so host
+    # (cargo test) builds don't warn. The SBF target sets it for real.
+    'cfg(target_os, values("solana"))',
+] }

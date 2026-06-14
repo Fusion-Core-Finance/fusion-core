@@ -1,0 +1,21 @@
+[package]
+name = "fusd-math"
+description = "fUSD fixed-point money math (WAD/RAY/RAD), U256-backed mul-div, ray_pow, bps"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "fusd_math"
+
+[dependencies]
+# Zero-dependency, no_std 256-bit integers for exact WAD/RAY/RAD intermediates.
+# Chosen over a hand-rolled 256-bit divide (the most bug-prone code to own) and over
+# heavier bignum crates, to keep this crown-jewel crate's supply-chain surface minimal.
+bnum = { version = "0.12", default-features = false }
+# `cfg(kani)` is set only by the Kani verifier; declare it so normal builds don't warn (the
+# `#[cfg(kani)] mod kani_proofs` formal-verification harnesses are excluded from every other build).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[dev-dependencies]
+proptest = "1.6.0"

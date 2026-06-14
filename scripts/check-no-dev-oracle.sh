@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Release gate: a PRODUCTION `anchor build` (no `dev-oracle` feature) must NEVER expose the
+# dev/test-only `dev_set_price` instruction in the deployed program or its IDL.
+#
+# `dev_set_price` is `#[cfg(feature = "dev-oracle")]` and is enabled only by the separate
+# `integration-tests` crate (a non-program workspace member) for litesvm tests. This script proves
+# that isolation holds: it does a clean build and asserts the artifacts are free of it.
+#
+# Run before any deploy / IDL publish. Exits non-zero (failing CI) if the leak ever returns.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "Building fusd-core WITHOUT dev-oracle (production build)..."
+anchor build
+
+idl="target/idl/fusd_core.json"
+so="target/deploy/fusd_core.so"
+
+fail=0
+
+# The IDL must not declare `dev_set_price` as an instruction. (Prose docstrings may mention it;
+# we only reject an actual instruction entry, matched by jq.)
+if command -v jq >/dev/null 2>&1; then
+  if jq -e '.instructions[] | select(.name == "dev_set_price")' "$idl" >/dev/null 2>&1; then
+    echo "FAIL: '$idl' exposes a dev_set_price instruction." >&2
+    fail=1
+  fi
+else
+  # jq-less fallback: the instruction name appears as a quoted "name" key inside instructions.
+  if grep -q '"name": *"dev_set_price"' "$idl"; then
+    echo "FAIL: '$idl' appears to expose a dev_set_price instruction (install jq for a precise check)." >&2
+    fail=1
+  fi
+fi
+
+# The compiled program must carry no DevSetPrice symbol/string.
+if strings "$so" | grep -qi "DevSetPrice"; then
+  echo "FAIL: '$so' contains a DevSetPrice symbol — the dev-oracle feature leaked into the build." >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "dev-oracle isolation BROKEN. Ensure no program-crate dependency enables the 'dev-oracle' feature." >&2
+  exit 1
+fi
+
+echo "OK: production build is free of dev_set_price (IDL + .so clean)."

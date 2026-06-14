@@ -1,0 +1,34 @@
+[package]
+name = "fusd-integration-tests"
+description = "In-process litesvm integration tests + shared harness for fusd-core (host-only; never deployed)."
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "fusd_integration_tests"
+
+# Host-side litesvm integration harness. These are real `[dependencies]` (not dev-deps) because
+# the harness library itself (src/lib.rs) uses them; the scenario files under `tests/` consume it.
+# litesvm 0.7.1 is the last release on the Solana 2.3 crate line, so it co-resolves with
+# anchor 0.32.1 (solana ^2). This crate is NOT a program (no declare_id) and is excluded from
+# `anchor build`, so depending on fusd-core with `dev-oracle` here can never leak `dev_set_price`
+# into the deployed program or its IDL — that is the whole point of isolating it from the program crate.
+[dependencies]
+anchor-lang = { workspace = true }
+fusd-math = { workspace = true }
+fusd-core = { path = "../programs/fusd-core", default-features = false, features = ["no-entrypoint", "dev-oracle"] }
+litesvm = "=0.7.1"
+solana-sdk = "2.3"
+spl-token = { version = "8.0", default-features = false, features = ["no-entrypoint"] }
+spl-associated-token-account = "7.0"
+# Host-only: construct real oracle account fixtures (Pyth PriceUpdateV2 / Switchboard
+# PullFeedAccountData) so the litesvm oracle-crank tests exercise the ACTUAL on-chain parsers.
+# Same pins as the program crate; never deployed (this crate is excluded from `anchor build`).
+pyth-solana-receiver-sdk = "1.2.0"
+switchboard-on-demand = { version = "0.12.1", default-features = false, features = ["anchor"] }
+bytemuck = "1"
+# Host-only: build the BPF-upgradeable-loader account layout (program + programdata) so the harness
+# can load fusd_core as an UPGRADEABLE program with a chosen upgrade authority — required to exercise
+# `init_protocol`'s upgrade-authority gate. Frozen on-chain formats; never deployed.
+bincode = "1"

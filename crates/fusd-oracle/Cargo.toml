@@ -1,0 +1,20 @@
+[package]
+name = "fusd-oracle"
+description = "fUSD oracle validation (Pyth + Switchboard + DEX TWAP), asymmetric pricing, freeze modes"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "fusd_oracle"
+
+[features]
+# Implements bytemuck Pod/Zeroable for ObservationRing so it can embed in an Anchor
+# zero_copy account (the DexTwap PDA). Default-off: the crate stays dependency-free
+# for pure host testing; only fusd-core enables it.
+pod = ["dep:bytemuck"]
+
+[dependencies]
+# Dependency-free by default (types + TWAP + aggregation logic, host-testable).
+# The feed parsing (pyth-solana-receiver-sdk, switchboard-on-demand) lives in
+# fusd-core's oracle adapters, NOT here. fusion-docs.md.
+bytemuck = { version = "1", optional = true }

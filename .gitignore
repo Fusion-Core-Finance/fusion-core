@@ -1,0 +1,33 @@
+# Rust / Anchor
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Anchor
+.anchor
+test-ledger
+**/.DS_Store
+
+# Node / TS
+node_modules
+dist
+build
+*.tsbuildinfo
+
+# Keys & secrets — NEVER commit (the dev program keypair lives under target/deploy, ignored)
+*.pem
+.env
+.env.*
+
+# Logs
+*.log
+
+# Claude Code session / memory data (never commit)
+.claude/
+
+# Fetched program binaries for PoC test fixtures (re-create via scripts/fetch-*.sh)
+/fixtures/
+
+# proptest writes deterministic failure-repro seeds here on a counterexample; nothing
+# should fail in CI, and we do not commit them.
+proptest-regressions/

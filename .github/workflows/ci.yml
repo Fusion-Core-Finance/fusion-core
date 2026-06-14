@@ -1,0 +1,78 @@
+name: ci
+
+# Enforce the release gates: nothing merges or deploys without the same checks
+# `scripts/ci-checks.sh` runs locally — pure-crate tests, the litesvm integration suite, the
+# Kani strength+artifact gate, the dev_set_price isolation gate, and the SBF stack-frame gate.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# One run per ref; a new push cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin the toolchain to the versions Anchor.toml locks (anchor 0.32.1 · solana 2.3.13).
+  SOLANA_VERSION: "2.3.13"
+  ANCHOR_VERSION: "0.32.1"
+
+jobs:
+  gates:
+    name: release gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # jq for the precise dev_set_price IDL check (the script has a grep fallback, but be exact).
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install Rust (host toolchain)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # `clippy` for the fusd-oracle lint gate in scripts/ci-checks.sh (default profile is minimal).
+          components: clippy
+
+      # Cargo + target cache across runs (keyed on Cargo.lock). Caches the heavy SBF/anchor builds.
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fusd-ci
+
+      - name: Install Solana CLI (Agave)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Show solana version
+        run: solana --version
+
+      # avm builds anchor-cli from source; cache the installed binary so later runs skip the compile.
+      - name: Cache anchor-cli
+        id: cache-anchor
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/anchor
+            ~/.cargo/bin/avm
+            ~/.avm
+          key: anchor-${{ env.ANCHOR_VERSION }}
+
+      - name: Install Anchor ${{ env.ANCHOR_VERSION }}
+        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v${ANCHOR_VERSION} avm --locked --force
+          avm install ${ANCHOR_VERSION}
+          avm use ${ANCHOR_VERSION}
+
+      - name: Show anchor version
+        run: anchor --version
+
+      # The single aggregate gate — the same script a developer runs before a deploy/PR.
+      - name: Run release gates
+        run: scripts/ci-checks.sh

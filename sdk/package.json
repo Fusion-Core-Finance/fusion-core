@@ -1,0 +1,17 @@
+{
+  "name": "@fusd/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "fUSD TypeScript SDK — PDA derivation, account decoders, instruction builders",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
