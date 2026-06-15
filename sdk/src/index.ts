@@ -1,52 +1,177 @@
 /**
- * Fusion (FUSD) SDK — PDA derivation helpers.
+ * Fusion (FUSD) SDK — everything a client needs to read state and build instructions.
  *
- * Seeds mirror `programs/fusd-core/src/constants.rs`. Account decoders and
- * instruction builders are added from the generated Anchor IDL as flows land.
+ * - PDA derivation for every account (seeds mirror `programs/fusd-core/src/constants.rs`).
+ * - A `Program` factory over the bundled, production (non-dev) IDL — instruction builders + typed
+ *   account decoders come from Anchor (`program.methods.*`, `program.account.*`); Anchor auto-resolves
+ *   most PDA seeds, so callers usually pass only the signer, ATAs, and oracle accounts.
+ * - Pure fixed-point health math (ports `cdp.rs` / `accrual.rs`) so a UI can show a borrower's CURRENT
+ *   debt, collateral ratio, health, and remaining borrow capacity without re-running the program.
  */
 import { PublicKey } from "@solana/web3.js";
+import { Program, AnchorProvider, type Idl } from "@coral-xyz/anchor";
+import idlJson from "./idl/fusd_core.json";
 
 export const FUSD_CORE_PROGRAM_ID = new PublicKey(
   "FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud"
 );
+export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+);
 
+export const IDL = idlJson as Idl;
+
+/** Build an Anchor `Program` (instruction builders + account decoders) from the bundled IDL. */
+export function getProgram(provider: AnchorProvider): Program {
+  return new Program(IDL, provider);
+}
+
+// --- seeds (byte strings, exactly as in constants.rs) -------------------------------------------
 export const SEEDS = {
   config: Buffer.from("config"),
-  market: Buffer.from("market"),
-  position: Buffer.from("position"),
-  reactorPool: Buffer.from("reactor"),
-  reactorDeposit: Buffer.from("reactor_dep"),
-  dexTwap: Buffer.from("twap"),
-  surplus: Buffer.from("surplus"),
-  collSurplus: Buffer.from("coll_surplus"),
-  rateLimiter: Buffer.from("ratelimit"),
-  registry: Buffer.from("registry"),
+  fusdMint: Buffer.from("fusd_mint"),
+  mintAuthority: Buffer.from("mint_authority"),
   govGate: Buffer.from("gov_gate"),
   timelock: Buffer.from("timelock"),
-  mintAuthority: Buffer.from("mint_authority"),
+  globalTimelock: Buffer.from("gtimelock"),
+  backstop: Buffer.from("backstop"),
+  backstopFusdVault: Buffer.from("backstop_fusd"),
+  registry: Buffer.from("registry"),
+  market: Buffer.from("market"),
+  collateralVault: Buffer.from("coll_vault"),
+  marketOracle: Buffer.from("oracle"),
+  dexTwap: Buffer.from("twap"),
+  redemptionBitmap: Buffer.from("redeem_bitmap"),
+  rateLimiter: Buffer.from("ratelimit"),
+  reactorPool: Buffer.from("reactor"),
+  epochToScaleToSum: Buffer.from("ess"),
+  reactorFusdVault: Buffer.from("reactor_fusd"),
+  reactorCollVault: Buffer.from("reactor_coll"),
+  insuranceBuffer: Buffer.from("buffer"),
+  bufferFusdVault: Buffer.from("buffer_fusd"),
+  position: Buffer.from("position"),
+  reactorDeposit: Buffer.from("reactor_dep"),
 } as const;
 
-export function deriveConfig(programId: PublicKey = FUSD_CORE_PROGRAM_ID): PublicKey {
-  return PublicKey.findProgramAddressSync([SEEDS.config], programId)[0];
+const pda = (seeds: (Buffer | Uint8Array)[], programId: PublicKey) =>
+  PublicKey.findProgramAddressSync(seeds, programId)[0];
+const PID = FUSD_CORE_PROGRAM_ID;
+
+// --- protocol-wide PDAs -------------------------------------------------------------------------
+export const deriveConfig = (p = PID) => pda([SEEDS.config], p);
+export const deriveFusdMint = (p = PID) => pda([SEEDS.fusdMint], p);
+export const deriveMintAuthority = (p = PID) => pda([SEEDS.mintAuthority], p);
+export const deriveGovGate = (p = PID) => pda([SEEDS.govGate], p);
+export const deriveBackstop = (p = PID) => pda([SEEDS.backstop], p);
+export const deriveBackstopFusdVault = (p = PID) => pda([SEEDS.backstopFusdVault], p);
+/** Queued-param timelock entry, keyed by the gate's queue nonce (u64 little-endian). */
+export const deriveTimelock = (nonce: bigint, p = PID) =>
+  pda([SEEDS.timelock, u64le(nonce)], p);
+export const deriveGlobalTimelock = (nonce: bigint, p = PID) =>
+  pda([SEEDS.globalTimelock, u64le(nonce)], p);
+
+// --- per-market PDAs ----------------------------------------------------------------------------
+const perMarket = (seed: Buffer) => (collateralMint: PublicKey, p = PID) =>
+  pda([seed, collateralMint.toBuffer()], p);
+export const deriveMarket = perMarket(SEEDS.market);
+export const deriveCollateralVault = perMarket(SEEDS.collateralVault);
+export const deriveMarketOracle = perMarket(SEEDS.marketOracle);
+export const deriveDexTwap = perMarket(SEEDS.dexTwap);
+export const deriveRedemptionBitmap = perMarket(SEEDS.redemptionBitmap);
+export const deriveRateLimiter = perMarket(SEEDS.rateLimiter);
+export const deriveReactorPool = perMarket(SEEDS.reactorPool);
+export const deriveEpochToScaleToSum = perMarket(SEEDS.epochToScaleToSum);
+export const deriveReactorFusdVault = perMarket(SEEDS.reactorFusdVault);
+export const deriveReactorCollVault = perMarket(SEEDS.reactorCollVault);
+export const deriveInsuranceBuffer = perMarket(SEEDS.insuranceBuffer);
+export const deriveBufferFusdVault = perMarket(SEEDS.bufferFusdVault);
+
+// --- per-user PDAs ------------------------------------------------------------------------------
+export const derivePosition = (collateralMint: PublicKey, owner: PublicKey, p = PID) =>
+  pda([SEEDS.position, collateralMint.toBuffer(), owner.toBuffer()], p);
+export const deriveReactorDeposit = (collateralMint: PublicKey, owner: PublicKey, p = PID) =>
+  pda([SEEDS.reactorDeposit, collateralMint.toBuffer(), owner.toBuffer()], p);
+
+/** Associated token account (legacy SPL Token — fUSD + the supported collaterals are all legacy). */
+export const deriveAta = (mint: PublicKey, owner: PublicKey) =>
+  pda([owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID);
+
+function u64le(n: bigint): Buffer {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(n);
+  return b;
 }
 
-export function deriveMarket(
-  collateralMint: PublicKey,
-  programId: PublicKey = FUSD_CORE_PROGRAM_ID
-): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [SEEDS.market, collateralMint.toBuffer()],
-    programId
-  )[0];
+// --- health math (mirrors cdp.rs / accrual.rs; all BigInt, round AGAINST the protocol) ----------
+// `spot` is RAY-scaled fUSD-native per 1 native collateral unit; debt is fUSD-native. bps scale.
+export const RAY = 10n ** 27n;
+export const BPS = 10_000n;
+export const SECONDS_PER_YEAR = 31_536_000n;
+export const INTEREST_DENOM = SECONDS_PER_YEAR * BPS;
+
+/** `floor(a*b / RAY)`. */
+export const rayMul = (a: bigint, b: bigint) => (a * b) / RAY;
+/** Collateral value in fUSD-native units (floored — conservative). */
+export const collateralValue = (ink: bigint, spot: bigint) => rayMul(ink, spot);
+/** Max fUSD debt for a collateral value at `mcrBps` (floored). 0 if `mcrBps == 0`. */
+export const maxDebt = (value: bigint, mcrBps: bigint) => (mcrBps === 0n ? 0n : (value * BPS) / mcrBps);
+/** Interest accrued over `periodSecs` at `rateBps`, floored (the per-position direction). */
+export const accruedInterest = (recordedDebt: bigint, rateBps: bigint, periodSecs: bigint) =>
+  (recordedDebt * rateBps * periodSecs) / INTEREST_DENOM;
+
+/**
+ * A position's CURRENT debt = `recorded_debt` + interest accrued since `lastDebtUpdate`.
+ * NOTE: pending tier-2 redistribution (`Market.l_art`) is NOT included — it is applied lazily on the
+ * next touch and is zero for the common case; this is a display estimate, not the exact on-touch value.
+ */
+export function currentDebt(
+  recordedDebt: bigint,
+  rateBps: bigint,
+  lastDebtUpdate: bigint,
+  nowSecs: bigint
+): bigint {
+  const dt = nowSecs > lastDebtUpdate ? nowSecs - lastDebtUpdate : 0n;
+  return recordedDebt + accruedInterest(recordedDebt, rateBps, dt);
 }
 
-export function derivePosition(
-  collateralMint: PublicKey,
-  owner: PublicKey,
-  programId: PublicKey = FUSD_CORE_PROGRAM_ID
-): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [SEEDS.position, collateralMint.toBuffer(), owner.toBuffer()],
-    programId
-  )[0];
+export const isHealthy = (ink: bigint, debt: bigint, spot: bigint, mcrBps: bigint) =>
+  debt <= maxDebt(collateralValue(ink, spot), mcrBps);
+/** Collateral ratio in bps (value/debt), or `null` when there is no debt. */
+export const collateralRatioBps = (ink: bigint, debt: bigint, spot: bigint) =>
+  debt === 0n ? null : (collateralValue(ink, spot) * BPS) / debt;
+/** Remaining fUSD a position can still borrow at `mcrBps` (floored at 0). */
+export const maxBorrow = (ink: bigint, debt: bigint, spot: bigint, mcrBps: bigint) => {
+  const m = maxDebt(collateralValue(ink, spot), mcrBps);
+  return m > debt ? m - debt : 0n;
+};
+
+/** A position's raw on-chain fields a UI needs for the health view (all native/bps units). */
+export interface PositionInput {
+  ink: bigint;
+  recordedDebt: bigint;
+  userRateBps: bigint;
+  lastDebtUpdate: bigint;
+}
+export interface HealthView {
+  currentDebt: bigint;
+  collateralValue: bigint;
+  collateralRatioBps: bigint | null;
+  healthy: boolean;
+  maxBorrow: bigint;
+}
+/** One-call health view: current debt (interest-accrued), CR, healthy?, and remaining borrow. */
+export function positionHealth(
+  pos: PositionInput,
+  market: { spot: bigint; mcrBps: bigint },
+  nowSecs: bigint
+): HealthView {
+  const debt = currentDebt(pos.recordedDebt, pos.userRateBps, pos.lastDebtUpdate, nowSecs);
+  return {
+    currentDebt: debt,
+    collateralValue: collateralValue(pos.ink, market.spot),
+    collateralRatioBps: collateralRatioBps(pos.ink, debt, market.spot),
+    healthy: isHealthy(pos.ink, debt, market.spot, market.mcrBps),
+    maxBorrow: maxBorrow(pos.ink, debt, market.spot, market.mcrBps),
+  };
 }

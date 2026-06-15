@@ -6,9 +6,11 @@
   "description": "fUSD TypeScript SDK — PDA derivation, account decoders, instruction builders",
   "main": "src/index.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "sync-idl": "cp ../target/idl/fusd_core.json src/idl/fusd_core.json"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
     "@solana/web3.js": "^1.95.0"
   },
   "devDependencies": {
