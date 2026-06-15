@@ -73,6 +73,13 @@ pub struct InitProtocol<'info> {
 }
 
 pub fn handler(ctx: Context<InitProtocol>, args: InitProtocolArgs) -> Result<()> {
+    // The default (all-zeros) pubkey has no signer, so it could never drive `migrate_gov_authority`
+    // (which requires the CURRENT authority to sign) — setting it here would permanently brick every
+    // gov-gated bootstrap (init_market, init_gate, set_guardian, …). Mirrors the `init_gate` guard
+    // (`require!(inbound_authority != Pubkey::default(), …)`). Guardian needs no guard: a default
+    // guardian is "no guardian yet", repairable via the gov_authority-gated `set_guardian`.
+    require!(args.gov_authority != Pubkey::default(), FusdError::ParamOutOfBounds);
+
     let config = &mut ctx.accounts.config;
     config.gov_authority = args.gov_authority;
     config.guardian = args.guardian;
