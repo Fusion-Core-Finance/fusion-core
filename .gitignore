@@ -8,6 +8,9 @@ Cargo.lock.bak
 test-ledger
 **/.DS_Store
 
+# Certora prover local working/output dir (large; regenerated per run — never commit)
+.certora_internal/
+
 # Node / TS
 node_modules
 dist
@@ -31,3 +34,7 @@ build
 # proptest writes deterministic failure-repro seeds here on a counterexample; nothing
 # should fail in CI, and we do not commit them.
 proptest-regressions/
+
+# Local-only session memory (never commit to the public repo)
+/CLAUDE.md
+/.internal/
