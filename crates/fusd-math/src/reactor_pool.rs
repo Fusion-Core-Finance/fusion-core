@@ -633,10 +633,12 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(2_000))]
 
         // PARTIAL offset (0 < debt < total): the pool stays solvent. Deposits fall by EXACTLY the
-        // debt; P stays in the valid range [SCALE_FACTOR, DECIMAL_PRECISION]; epoch/scale don't roll
-        // backwards; the loss-per-unit "+1" round-up holds; and the whole-pool depositor's compounded
-        // deposit never exceeds what remains. Generate `total` first, then `debt`/`coll` within it so
-        // the `offset` precondition (debt <= total) is always honored.
+        // debt; P stays in the valid range [SCALE_FACTOR, DECIMAL_PRECISION]; the loss-per-unit "+1"
+        // round-up holds; and the whole-pool depositor's compounded deposit never exceeds what remains.
+        // The epoch rolls IFF that "+1" pushes loss-per-unit to DECIMAL_PRECISION (product_factor == 0):
+        // impossible below a 1e18 pool, possible at/above it when `debt` is within `total/1e18` of `total`
+        // (the dedicated `partial_offset_rolls_epoch_at_1e18_boundary` test pins that case). Generate
+        // `total` first, then `debt`/`coll` within it so the `offset` precondition (debt <= total) holds.
         #[test]
         fn partial_offset_stays_solvent(
             total in 2u128..=1_000_000_000_000u128,
@@ -661,7 +663,11 @@ mod tests {
             prop_assert_eq!(st.total_deposits, total - debt, "deposits fall by exactly the debt");
             prop_assert!(st.p >= SCALE_FACTOR, "P stays above the floor: {}", st.p);
             prop_assert!(st.p <= DECIMAL_PRECISION, "P stays within precision: {}", st.p);
-            prop_assert_eq!(st.epoch, 0, "a partial offset never rolls the epoch");
+            // Epoch rolls IFF the solvency "+1" makes loss-per-unit reach DECIMAL_PRECISION (fresh
+            // state here, so last_loss_error == 0). `debt * DECIMAL_PRECISION` <= 1e30 < u128::MAX.
+            let loss_per_unit = debt * DECIMAL_PRECISION / total + 1;
+            let expect_roll = loss_per_unit == DECIMAL_PRECISION;
+            prop_assert_eq!(st.epoch, u64::from(expect_roll), "epoch rolls iff product_factor hits 0");
             prop_assert!(
                 st.last_loss_error >= 1 && st.last_loss_error <= total,
                 "loss-per-unit '+1' rounds the loss up, never under-counted: {}", st.last_loss_error
@@ -721,6 +727,32 @@ mod tests {
             // Sole depositor owns 100% of the pool, so the gain is `coll` minus at most one dust unit.
             prop_assert!(coll - gain <= 1, "gain shortfall is at most one dust unit: {}", coll - gain);
         }
+    }
+
+    /// PARTIAL offset that ROLLS the epoch — the boundary `partial_offset_stays_solvent` can't reach
+    /// (its random pool sizes are < 1e18). At pool size `DECIMAL_PRECISION` (a $1T market, inside the
+    /// documented overflow envelope) a near-total partial offset drives loss-per-unit to exactly
+    /// `DECIMAL_PRECISION` via the solvency "+1", so `product_factor == 0` and the epoch rolls even
+    /// though `debt < total`. Solvency still holds: the residual is protocol-favoring dust and every
+    /// pre-roll depositor compounds to 0 (the Liquity full-drain semantics applied to the residual).
+    #[test]
+    fn partial_offset_rolls_epoch_at_1e18_boundary() {
+        let total = DECIMAL_PRECISION; // 1e18
+        let debt = total - 1; // PARTIAL: strictly less than total (not the full-drain branch)
+        let mut st = PoolState::new();
+        st.total_deposits = total;
+        let mut g = grid();
+        let snap = st.snapshot(&g, STRIDE);
+
+        offset(&mut st, &mut g, STRIDE, debt, 0).expect("in-contract offset never errors");
+
+        assert!(debt < total, "this is a partial offset, not a full drain");
+        assert_eq!(st.epoch, 1, "a near-total partial offset at >=1e18 rolls the epoch");
+        assert_eq!(st.scale, 0, "the rolled epoch resets scale");
+        assert_eq!(st.p, DECIMAL_PRECISION, "the rolled epoch resets P to 1.0");
+        assert_eq!(st.total_deposits, total - debt, "deposits still fall by exactly the debt");
+        // Solvency: the pre-roll whole-pool depositor is wiped, never exceeding the dust residual.
+        assert_eq!(compounded_deposit(&st, total, &snap), 0, "pre-roll depositor compounds to 0");
     }
 
     proptest! {
