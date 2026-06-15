@@ -19,7 +19,9 @@ pub struct WithdrawFromReactor<'info> {
     #[account(mut, seeds = [REACTOR_POOL_SEED, collateral_mint.key().as_ref()], bump = reactor_pool.bump)]
     pub reactor_pool: Account<'info, ReactorPool>,
 
-    #[account(mut, seeds = [ESS_SEED, collateral_mint.key().as_ref()], bump,
+    // Read-only here (only `.load()` — the grid is written exclusively by `liquidate`), so NOT `mut`,
+    // matching the sibling read-only consumer `claim_reactor_gains`; avoids an unneeded write lock.
+    #[account(seeds = [ESS_SEED, collateral_mint.key().as_ref()], bump,
         address = reactor_pool.epoch_to_scale_to_sum)]
     pub epoch_to_scale_to_sum: AccountLoader<'info, EpochToScaleToSum>,
 
