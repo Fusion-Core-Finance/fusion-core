@@ -9,7 +9,9 @@
     "lint:fix": "prettier --write \"{tests,sdk,scripts,migrations}/**/*.ts\""
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1"
+    "@coral-xyz/anchor": "^0.32.1",
+    "@pythnetwork/hermes-client": "^1.3.0",
+    "@pythnetwork/pyth-solana-receiver": "^0.10.0"
   },
   "devDependencies": {
     "@sqds/multisig": "2.1.4",
