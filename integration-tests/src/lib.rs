@@ -1283,7 +1283,6 @@ pub fn execute_param_change_ix(executor: &Pubkey, coll: &Pubkey, nonce: u64) -> 
         program_id: fusd_core::ID,
         accounts: fusd_core::accounts::ExecuteParamChange {
             executor: *executor,
-            gov_gate: gov_gate_pda(),
             market: market_pda(coll),
             timelocked_param: timelock_pda(nonce),
             event_authority: event_authority_pda(),

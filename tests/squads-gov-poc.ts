@@ -163,7 +163,7 @@ describe("MetaDAO→Squads→fUSD governance PoC", () => {
     // timelock 0 → permissionless execute applies it immediately.
     await program.methods
       .executeParamChange()
-      .accounts({ executor: signer.publicKey, govGate, market, timelockedParam: timelockPda(0) })
+      .accounts({ executor: signer.publicKey, market, timelockedParam: timelockPda(0) })
       .rpc();
 
     const m = await program.account.market.fetch(market);

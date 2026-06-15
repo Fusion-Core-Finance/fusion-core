@@ -371,9 +371,8 @@ pub struct ExecuteParamChange<'info> {
     #[account(mut)]
     pub executor: Signer<'info>,
 
-    #[account(seeds = [GOV_GATE_SEED], bump = gov_gate.bump)]
-    pub gov_gate: Box<Account<'info, GovernanceGate>>,
-
+    // No `gov_gate`: execution is permissionless and the timelock is baked into `op.eta` at queue
+    // time, so `execute` never reads the gate (matching the `ExecuteGlobalParamChange` twin).
     #[account(mut)]
     pub market: Box<Account<'info, Market>>,
 
