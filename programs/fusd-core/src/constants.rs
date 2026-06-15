@@ -35,10 +35,6 @@ pub const REACTOR_GRID_LEN: usize = (REACTOR_MAX_EPOCHS * REACTOR_MAX_SCALES) as
 pub const DEX_TWAP_SEED: &[u8] = b"twap";
 /// `[b"coll_vault", collateral_mint]` — program-owned escrow holding a market's collateral.
 pub const COLLATERAL_VAULT_SEED: &[u8] = b"coll_vault";
-/// `[b"surplus", collateral_mint]`
-pub const SURPLUS_SEED: &[u8] = b"surplus";
-/// `[b"coll_surplus", collateral_mint, owner]`
-pub const COLL_SURPLUS_SEED: &[u8] = b"coll_surplus";
 /// `[b"ratelimit", collateral_mint]`
 pub const RATE_LIMITER_SEED: &[u8] = b"ratelimit";
 /// `[b"registry"]`
@@ -238,7 +234,7 @@ pub const BITMAP_WORDS: usize = NUM_RATE_BUCKETS / 64; // 4
 pub const ZOMBIE_BUCKET: usize = NUM_RATE_BUCKETS; // 256
 
 /// Bucket width (bps) — the governance-adjustable quantization of `user_rate`, within these clamps.
-/// Default 10 bps (0.10%) → 256 buckets span 0–25.5%. Width × count sets the addressable rate range.
+/// Default 10 bps (0.10%) → 256 buckets span 0–25.6%. Width × count sets the addressable rate range.
 pub const DEFAULT_BUCKET_WIDTH_BPS: u16 = 10;
 pub const MIN_BUCKET_WIDTH_BPS: u16 = 1; // 0.01%
 pub const MAX_BUCKET_WIDTH_BPS: u16 = 100; // 1.00%
@@ -332,11 +328,12 @@ pub const MAX_BACKSTOP_DRAW_DEBT_SHARE_BPS: u16 = 10_000;
 // --- Borrower interest rate (the Liquity-v2 / BOLD user-set rate; fusion-docs.md) -----------
 // Each position picks its own annual interest rate (`Position.user_rate_bps`), validated within these
 // compile-time clamps at borrow / `adjust_rate`. The rate is BOTH the accrual rate and the redemption
-// rate-bucket key. The MAX is pinned to the default redemption layout (256 buckets × 10 bps =
-// 0–25.5%) so every valid rate maps to a distinct bucket — the bitmap is fUSD's ordering primitive.
+// rate-bucket key. The MAX sits within the default redemption layout (256 buckets × 10 bps =
+// 0–25.6%, i.e. NUM_RATE_BUCKETS × DEFAULT_BUCKET_WIDTH_BPS = 2560 ≥ 2550, one bucket of headroom)
+// so every valid rate maps to a distinct bucket — the bitmap is fUSD's ordering primitive.
 // MIN matches BOLD's 0.5% floor.
 pub const MIN_USER_RATE_BPS: u16 = 50; // 0.5%  (BOLD parity)
-pub const MAX_USER_RATE_BPS: u16 = 2_550; // 25.5% (= NUM_RATE_BUCKETS × DEFAULT_BUCKET_WIDTH_BPS)
+pub const MAX_USER_RATE_BPS: u16 = 2_550; // 25.5% (≤ NUM_RATE_BUCKETS × DEFAULT_BUCKET_WIDTH_BPS = 2560)
 
 // --- Oracle validation (fusion-docs.md) --------------------------------------------------
 // Per-market thresholds live in `MarketOracle`, governance-adjustable WITHIN these clamps.
