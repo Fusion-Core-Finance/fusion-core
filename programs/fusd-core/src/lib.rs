@@ -34,7 +34,7 @@ mod certora;
 
 use instructions::*;
 
-declare_id!("HrhK2RRpMj4CaHS43dxCcnmt6xjt6w64cEDX7iAg9CkK");
+declare_id!("FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud");
 
 // On-chain disclosure contact (Neodyme `security.txt`). Embedded in the deployable program only
 // (`not(no-entrypoint)`), so CPI/lib consumers don't carry it. The disclosure CHANNEL is GitHub's

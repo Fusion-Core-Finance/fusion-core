@@ -7,7 +7,7 @@
 import { PublicKey } from "@solana/web3.js";
 
 export const FUSD_CORE_PROGRAM_ID = new PublicKey(
-  "HrhK2RRpMj4CaHS43dxCcnmt6xjt6w64cEDX7iAg9CkK"
+  "FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud"
 );
 
 export const SEEDS = {

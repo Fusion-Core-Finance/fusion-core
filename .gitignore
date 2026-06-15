@@ -18,7 +18,9 @@ build
 *.tsbuildinfo
 
 # Keys & secrets — NEVER commit (the dev program keypair lives under target/deploy, ignored)
+/keys/
 *.pem
+*keypair*.json
 .env
 .env.*
 
