@@ -35,8 +35,9 @@ cargo test -p fusd-integration-tests
 step "5/7  Kani strength + artifact gate (fast; no solver run)"
 scripts/kani-audit.sh --gate
 
-step "6/7  dev_set_price isolation gate (production build must not expose it)"
+step "6/7  isolation gates (production build must not expose dev_set_price or the cvlr/certora deps)"
 scripts/check-no-dev-oracle.sh
+scripts/check-no-certora.sh
 
 step "7/7  SBF stack-frame gate (production + dev-oracle configurations)"
 scripts/check-stack-offsets.sh

@@ -1,0 +1,57 @@
+# Certora Solana Prover — the cross-instruction core-invariant lane.
+#
+# SEPARATE from ci-checks.sh (the always-on local/PR gate) BY DESIGN: the Certora Solana Prover runs on
+# Certora's CLOUD and needs a paid license + API key, so it cannot be a blocking local gate. Mirrors the
+# kani.yml pattern (the long solver pass is its own manual/scheduled job, not in ci-checks.sh).
+#
+# PREREQUISITE: a `CERTORAKEY` repository secret (the Certora cloud API key). Without it this lane is a
+# clean no-op (gated per-step). Never commit the key (see certora/README.md).
+
+name: certora
+
+on:
+  workflow_dispatch: {}      # manual trigger
+  schedule:
+    - cron: "0 6 * * 1"      # weekly (Mondays 06:00 UTC), like the Kani solver pass
+
+permissions:
+  contents: read
+
+jobs:
+  core-invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Certora API key
+        id: gate
+        # Map the secret to an env var (never interpolate a secret into the rendered shell).
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+        run: |
+          if [ -z "$CERTORAKEY" ]; then
+            echo "CERTORAKEY secret not set — Certora lane is not provisioned; skipping."
+            echo "provisioned=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "provisioned=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up toolchain (Rust + Certora CLI + cargo-certora-sbf)
+        if: steps.gate.outputs.provisioned == 'true'
+        run: |
+          rustup show >/dev/null 2>&1 || true
+          pipx install certora-cli || pip install --user certora-cli
+          cargo install cargo-certora-sbf --locked
+          # The SBF platform-tools (v1.53) are fetched on demand by cargo-certora-sbf via each conf's
+          # `cargo_tools_version`.
+
+      - name: Verify the core invariants
+        if: steps.gate.outputs.provisioned == 'true'
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+          certoraSolanaProver certora/round_trip.conf      # pipeline smoke (must VERIFY first)
+          certoraSolanaProver certora/supply.conf          # invariant #1
+          certoraSolanaProver certora/bitmap_helper.conf   # invariant #2a
+          certoraSolanaProver certora/absorb.conf          # invariant #3

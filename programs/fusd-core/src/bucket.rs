@@ -47,7 +47,12 @@ fn target(market: &Market, position: &Position) -> Option<usize> {
 
 /// Add one member to `bucket` (a normal index or `ZOMBIE_BUCKET`); set the bitmap bit on a normal
 /// bucket's empty→non-empty transition.
-fn add_member(bm: &mut RedemptionBitmap, bucket: usize) -> Result<()> {
+// `pub(crate)` + force-inline are verification-only and behavior-neutral (the `certora` feature is never
+// in a mainnet build; `scripts/check-no-certora.sh` enforces it). `certora.rs` calls this directly to
+// prove the words⟺counts coupling (Invariant #2(a)); `inline(always)` makes the body visible to the
+// Solana prover so it isn't an opaque havocing stub.
+#[cfg_attr(feature = "certora", inline(always))]
+pub(crate) fn add_member(bm: &mut RedemptionBitmap, bucket: usize) -> Result<()> {
     if bucket == ZOMBIE_BUCKET {
         bm.zombie_count = bm.zombie_count.checked_add(1).ok_or(FusdError::MathOverflow)?;
     } else {
@@ -61,7 +66,9 @@ fn add_member(bm: &mut RedemptionBitmap, bucket: usize) -> Result<()> {
 
 /// Remove one member from `bucket`; clear the bitmap bit on a normal bucket's non-empty→empty
 /// transition.
-fn remove_member(bm: &mut RedemptionBitmap, bucket: usize) -> Result<()> {
+// `pub(crate)` + force-inline are verification-only, behavior-neutral — see `add_member`.
+#[cfg_attr(feature = "certora", inline(always))]
+pub(crate) fn remove_member(bm: &mut RedemptionBitmap, bucket: usize) -> Result<()> {
     if bucket == ZOMBIE_BUCKET {
         bm.zombie_count = bm.zombie_count.checked_sub(1).ok_or(FusdError::MathOverflow)?;
     } else {

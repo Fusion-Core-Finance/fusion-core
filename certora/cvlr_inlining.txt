@@ -1,0 +1,22 @@
+; CVLR inlining directives for the Certora Solana Prover.
+; Canonical set (from Certora's TestSolana examples) — REQUIRED so the prover can replace Solana
+; memory intrinsics (memcpy/memmove/memset/memcmp) with its sol_* models and handle Rust allocation;
+; without these the prover fails to process the SBF before it ever reaches the rules.
+
+; CVT functions
+#[inline(never)] ^([^:]+::)*CVT_.*$
+
+; Rust memory allocation functions
+#[inline(never)] ^__rust_alloc$
+#[inline(never)] ^__rust_dealloc$
+#[inline(never)] ^__rust_alloc_zeroed$
+#[inline(never)] ^__rg_alloc$
+#[inline(never)] ^__rg_dealloc$
+#[inline(never)] ^__rg_oom$
+
+; memcpy/memmove/memset/memcmp — wrappers around sol_memcpy_/sol_memmove_/sol_memset_/sol_memcmp_.
+; Not inlined, so the prover can replace them directly with the sol_* models.
+#[inline(never)] ^memcpy$
+#[inline(never)] ^memmove$
+#[inline(never)] ^memset$
+#[inline(never)] ^memcmp$

@@ -18,6 +18,10 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 # Dev/test only: enables `dev_set_price` so the CDP flow is testable before the real
 # oracle (fusd-oracle + Pyth/Switchboard) is wired. NEVER enabled for mainnet builds.
 dev-oracle = []
+# Verification only: the Certora/CVLR harness (`src/certora.rs`). Enabled ONLY by the Certora cloud
+# build (`cargo certora-sbf`), NEVER by `default`. `no-entrypoint` drops the on-chain entrypoint for the
+# verification build. `scripts/check-no-certora.sh` enforces that `cvlr` never reaches the mainnet `.so`.
+certora = ["no-entrypoint", "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-spl-token"]
 
 [dependencies]
 anchor-lang = { workspace = true, features = ["event-cpi"] }
@@ -40,6 +44,12 @@ switchboard-on-demand = { version = "0.12.1", default-features = false, features
 # in the deployable program (gated `not(no-entrypoint)`), never in CPI/lib consumers.
 solana-security-txt = "1.1.1"
 
+# Certora/CVLR verification harness deps — OPTIONAL, pulled in only by the `certora` feature (the
+# Certora cloud build). Resolve WITHOUT forking the anchor 0.32.1 / solana 2.3.0 pins.
+cvlr           = { version = "0.6", optional = true }
+cvlr-solana    = { version = "0.5", optional = true }
+cvlr-spl-token = { version = "0.5", optional = true }
+
 # NOTE: the host-side litesvm integration tests live in the separate `integration-tests` crate
 # (a non-program workspace member), NOT here. Keeping the `dev-oracle` self-dep out of this
 # manifest guarantees `dev_set_price` can never unify into the deployed `.so`/IDL.
@@ -52,3 +62,11 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     # (cargo test) builds don't warn. The SBF target sets it for real.
     'cfg(target_os, values("solana"))',
 ] }
+
+# Read by `cargo certora-sbf --json` (the Certora SBF build plugin). `sources` lists the files the
+# prover ingests; `solana_inlining` carries the memcpy/alloc/CVT directives the Solana memory model needs
+# (an empty inlining file yields a generic "prover error / no nodes").
+[package.metadata.certora]
+sources          = ["src/**/*.rs", "../../certora/specs/**/*.rs"]
+solana_inlining  = ["../../certora/cvlr_inlining.txt"]
+solana_summaries = ["../../certora/cvlr_summaries.txt"]

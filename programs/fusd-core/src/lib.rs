@@ -27,6 +27,11 @@ pub mod redist;
 pub mod reactor;
 pub mod state;
 
+// Certora/CVLR verification harness — compiled ONLY under `--features certora` (the Certora cloud
+// build), NEVER in the production `.so` (scripts/check-no-certora.sh enforces it).
+#[cfg(feature = "certora")]
+mod certora;
+
 use instructions::*;
 
 declare_id!("HrhK2RRpMj4CaHS43dxCcnmt6xjt6w64cEDX7iAg9CkK");

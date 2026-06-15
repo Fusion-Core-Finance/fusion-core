@@ -1044,13 +1044,204 @@ dependencies = [
 ]
 
 [[package]]
+name = "cvlr"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6015272082ebd798f562b7a72f3a13c8dc501c0ba27ea240b4c7cdf32bb3e892"
+dependencies = [
+ "cvlr-asserts",
+ "cvlr-decimal",
+ "cvlr-derive",
+ "cvlr-early-panic",
+ "cvlr-fixed",
+ "cvlr-hook",
+ "cvlr-log",
+ "cvlr-macros",
+ "cvlr-mathint",
+ "cvlr-nondet",
+ "cvlr-spec",
+]
+
+[[package]]
+name = "cvlr-asserts"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0096bd5c925bd81ad127b648e980b468b7b0720d2810574a1bb429615d4ba0f8"
+
+[[package]]
+name = "cvlr-decimal"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "727fd61eb25fac13c6fe1556932ab2008143a8d7f921fd5549919ff550891a3e"
+dependencies = [
+ "cvlr-asserts",
+ "cvlr-log",
+ "cvlr-mathint",
+ "cvlr-nondet",
+]
+
+[[package]]
+name = "cvlr-derive"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdf7e216d478ea2f283501e120eb9f9d57debcb0a63c492fbf0352df509333d7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "cvlr-early-panic"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e32d46bc14367046ce1746ba864bf175620e337bf4584f026adf613181d73ffc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "cvlr-fixed"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1856f2f6ea98a03f160c3f68d9aac094f510c9ee067fb9290e0fd43dfab336b8"
+dependencies = [
+ "cvlr-asserts",
+ "cvlr-log",
+ "cvlr-mathint",
+ "cvlr-nondet",
+]
+
+[[package]]
+name = "cvlr-hook"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd5237f52583521859304d0bd301d9f1428350e4615591602149bc9308528a27"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "cvlr-log"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95cb4edf07d36e895f558727f655a4dce7ccdb836fb8e03a1b040baf39db4968"
+dependencies = [
+ "cvlr-mathint",
+]
+
+[[package]]
+name = "cvlr-macros"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95eedd975cc0b7f9bdff15436d8550221c7476a719d33eff1134a6234dfcc284"
+dependencies = [
+ "darling 0.20.11",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "cvlr-mathint"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95ac331829e886d9f74c684f33f1db09f49e9f497de107d0f2581e2b4a150f9b"
+dependencies = [
+ "cvlr-asserts",
+ "cvlr-nondet",
+]
+
+[[package]]
+name = "cvlr-nondet"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02f329573a49e2807e63ef82572c0b5f37a7c3791b8a3ca6af394ac9caeba1f6"
+dependencies = [
+ "cvlr-asserts",
+]
+
+[[package]]
+name = "cvlr-solana"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b3c2491656a363b63424cf5dfa13364df8349a0c006f45de28022251a8cbd37"
+dependencies = [
+ "arrayref",
+ "cvlr-asserts",
+ "cvlr-early-panic",
+ "cvlr-log",
+ "cvlr-macros",
+ "cvlr-mathint",
+ "cvlr-nondet",
+ "solana-program",
+]
+
+[[package]]
+name = "cvlr-spec"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dedbeff92d4eac75c26acea3994644b74ff6734b39e942f6d9a7e1d88cf2525"
+dependencies = [
+ "cvlr-asserts",
+ "cvlr-log",
+ "cvlr-macros",
+ "cvlr-mathint",
+ "cvlr-nondet",
+]
+
+[[package]]
+name = "cvlr-spl-token"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a5847e9be3b871cd19cdd34d3c415cf1eee45ca08502f79e56302e49232798d"
+dependencies = [
+ "arrayref",
+ "cvlr-asserts",
+ "cvlr-early-panic",
+ "cvlr-log",
+ "cvlr-mathint",
+ "cvlr-nondet",
+ "cvlr-solana",
+ "solana-program",
+ "spl-token",
+]
+
+[[package]]
+name = "darling"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
+dependencies = [
+ "darling_core 0.20.11",
+ "darling_macro 0.20.11",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
 dependencies = [
- "darling_core",
- "darling_macro",
+ "darling_core 0.23.0",
+ "darling_macro 0.23.0",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1068,11 +1259,22 @@ dependencies = [
 
 [[package]]
 name = "darling_macro"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
+dependencies = [
+ "darling_core 0.20.11",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "darling_macro"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
 dependencies = [
- "darling_core",
+ "darling_core 0.23.0",
  "quote",
  "syn 2.0.117",
 ]
@@ -1347,6 +1549,9 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "bytemuck",
+ "cvlr",
+ "cvlr-solana",
+ "cvlr-spl-token",
  "fusd-math",
  "fusd-oracle",
  "pyth-solana-receiver-sdk",
@@ -3295,7 +3500,7 @@ version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b90c488738ecb4fb0262f41f43bc40efc5868d9fb744319ddf5f5317f417bfac"
 dependencies = [
- "darling",
+ "darling 0.23.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
