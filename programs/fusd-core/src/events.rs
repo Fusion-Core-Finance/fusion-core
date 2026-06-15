@@ -1,9 +1,11 @@
 //! Anchor events — the off-chain observability layer.
 //!
-//! Every state-changing instruction emits one event so indexers, the public risk dashboard
-//! (fusion-docs.md Phase-1 exit), liquidation/redemption keepers, and proof-of-reserves
+//! Every value-moving / risk-relevant state change emits one event so indexers, the public risk
+//! dashboard (fusion-docs.md Phase-1 exit), liquidation/redemption keepers, and proof-of-reserves
 //! monitoring get a *historical* stream instead of having to poll-and-diff accounts (account state
-//! shows only the present; events show what happened and who did it). Events ride the Anchor
+//! shows only the present; events show what happened and who did it). One-time account-creation
+//! (`init_market_oracle`, `init_reactor_pool`, `init_insurance_buffer`, `open_reactor_deposit`) is
+//! fully observable from the created account itself and intentionally emits none. Events ride the Anchor
 //! `#[event_cpi]` self-CPI transport: each is an inner instruction
 //! (`EVENT_IX_TAG ++ discriminator ++ borsh`), preserved in transaction metadata and immune to
 //! the RPC log truncation that drops `Program data:` lines once a tx exceeds the log budget —
@@ -40,7 +42,7 @@ pub const REACTOR_OP_CLAIM: u8 = 2;
 
 // NOTE: the former `emit_position_updated` helper fn was removed with the event-CPI migration:
 // `emit_cpi!` requires a literal `ctx` in scope (it references
-// `ctx.accounts.event_authority` / `ctx.bumps`), so the six PositionUpdated call sites construct
+// `ctx.accounts.event_authority` / `ctx.bumps`), so the seven PositionUpdated call sites construct
 // the event inline. Events remain non-load-bearing; transport is the stock Anchor self-CPI.
 
 /// One-time protocol genesis (`init_protocol`).

@@ -38,8 +38,8 @@ pub struct Position {
     /// retroactively alter it. Paid to the liquidator on liquidation (then 0); refunded on close.
     pub reserve_lamports: u64,
 
-    /// Redemption rate-bucket this position is currently counted in — valid iff `art > 0` (the
-    /// position joins a bucket when it first takes on debt and leaves when debt hits 0). Stored
+    /// Redemption rate-bucket this position is currently counted in — valid iff `recorded_debt > 0`
+    /// (the position joins a bucket when it first takes on debt and leaves when debt hits 0). Stored
     /// explicitly (not re-derived) so a later `bucket_width_bps` change can't mis-target the
     /// decrement of the bucket it actually joined.
     pub bucket: u16,
@@ -48,7 +48,9 @@ pub struct Position {
     /// surplus above `debt · (1 + liq_bonus_bps)` that a liquidation did NOT seize (fusion-docs.md).
     /// Held in the market collateral vault (NOT in `ink`, NOT staked — so a liquidated owner can't
     /// inherit redistributed debt on the leftover) and withdrawn via `claim_coll_surplus`. The market
-    /// vault invariant is `vault == total_collateral + surplus_collateral + Σ coll_surplus`.
+    /// vault invariant is `vault == total_collateral + surplus_collateral + total_coll_surplus +
+    /// protocol_collateral`, where `Market.total_coll_surplus == Σ Position.coll_surplus` aggregates
+    /// this field.
     pub coll_surplus: u64,
 
     /// Unix timestamp of this position's last interest-rate change (set at `open_position`, updated on

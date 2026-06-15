@@ -25,6 +25,8 @@ pub enum FusdError {
     PositionHealthy,
     #[msg("Reactor Pool deposits cannot fully absorb this liquidation (tier-2 redistribution not yet wired)")]
     ReactorPoolTooSmall,
+    // Currently unconstructed (withdraw_from_reactor CLAMPS an over-withdraw to the deposit rather than
+    // erroring). KEEP — removal would shift every later 6000+ordinal code (pinned by the litesvm `E_*`).
     #[msg("Insufficient Reactor Pool deposit balance")]
     InsufficientReactorDeposit,
     #[msg("Reactor Pool grid exhausted (scale/epoch out of range) — migration required")]
@@ -39,6 +41,8 @@ pub enum FusdError {
     PositionNotEmpty,
     #[msg("Nothing to redeem: no non-empty rate bucket or no valid candidate")]
     NothingToRedeem,
+    // Currently unconstructed (redeem SKIPS a candidate outside the lowest bucket rather than erroring
+    // per-candidate). KEEP — removal would shift every later 6000+ordinal code (pinned by litesvm `E_*`).
     #[msg("Redemption target is not in the lowest non-empty rate bucket")]
     WrongRedemptionBucket,
     #[msg("Duplicate redemption target in the candidate list")]

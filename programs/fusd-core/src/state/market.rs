@@ -106,8 +106,9 @@ pub struct Market {
     /// Flat redemption fee (bps), governance-adjustable within `MAX_REDEMPTION_FEE_BPS`; 0 disables.
     pub redemption_fee_bps: u16,
     /// Collateral retained from redemption fees, held in the collateral vault but not backing any
-    /// position: `vault_balance == total_collateral + surplus_collateral`. Governance-withdrawable
-    /// (a later instruction). Surplus buffer.
+    /// position. Part of the 4-term vault invariant `vault == total_collateral + surplus_collateral
+    /// + total_coll_surplus + protocol_collateral` (see `reconcile.rs`). Governance-withdrawable via
+    /// `withdraw_surplus`. Surplus buffer.
     pub surplus_collateral: u64,
 
     /// Oracle-driven mint gate. Written by `update_price` from the `fusd_oracle`

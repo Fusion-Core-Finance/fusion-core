@@ -114,8 +114,8 @@ pub fn handler(ctx: Context<InitMarket>, args: InitMarketArgs) -> Result<()> {
     // The bitmap must address the WHOLE valid rate range: `width · NUM_RATE_BUCKETS >= MAX_USER_RATE_BPS`.
     // Otherwise `rate_bucket::bucket_of` clamps every rate above `width · 256` into the top bucket,
     // collapsing the per-rate redemption ordering for that range (the bitmap is fUSD's ordering
-    // primitive). With the default width 10 this is exactly the 256 × 10 = 2550 = MAX_USER_RATE_BPS
-    // pinning; this check makes any other chosen width honor the same coverage invariant.
+    // primitive). With the default width 10 the span is 256 × 10 = 2560 ≥ MAX_USER_RATE_BPS = 2550
+    // (one bucket of headroom); this check makes any other chosen width honor the same coverage invariant.
     require!(
         (args.bucket_width_bps as usize)
             .checked_mul(NUM_RATE_BUCKETS)
