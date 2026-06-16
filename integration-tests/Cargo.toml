@@ -32,3 +32,6 @@ bytemuck = "1"
 # can load fusd_core as an UPGRADEABLE program with a chosen upgrade authority — required to exercise
 # `init_protocol`'s upgrade-authority gate. Frozen on-chain formats; never deployed.
 bincode = "1"
+# Host-only: the Surfpool mainnet-fork oracle test (`tests/surfpool_oracle.rs`, `#[ignore]`) talks to
+# a local fork validator over RPC. Never deployed; same Solana 2.3 line as solana-sdk.
+solana-client = "2.3"
