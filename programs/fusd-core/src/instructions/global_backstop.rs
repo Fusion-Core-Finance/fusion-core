@@ -245,8 +245,9 @@ pub struct WithdrawBackstopExcess<'info> {
 }
 
 /// Governance recovers ABOVE-CAP excess from the reserve (never below `reserve_cap` — the cap is the
-/// protective floor). Only protocol-owned fUSD, amount-capped, debit-before-... here debit-after-CPI
-/// (the transfer is the debit). Gated on `gov_gate.inbound_authority`.
+/// protective floor). Only protocol-owned fUSD, amount-capped to the above-cap excess; unlike
+/// `withdraw_surplus`/`sweep` (which debit their counter before transferring), here the CPI transfer
+/// IS the debit and `total_withdrawn` is bumped after. Gated on `gov_gate.inbound_authority`.
 pub fn withdraw_excess(ctx: Context<WithdrawBackstopExcess>, amount: u64) -> Result<()> {
     require_keys_eq!(
         ctx.accounts.authority.key(),

@@ -41,8 +41,10 @@ pub struct ClaimReactorGains<'info> {
 pub fn handler(ctx: Context<ClaimReactorGains>) -> Result<()> {
     let ps = reactor::pool_state(&ctx.accounts.reactor_pool);
 
-    // Fold the latest accrued gain into `pending`, then re-snapshot (deposit unchanged in fUSD
-    // terms — only collateral is claimed).
+    // Fold the latest accrued gain into `pending`, then re-snapshot: this re-compounds
+    // `deposited_fusd` (folding in any losses since the last touch), so the stored value can
+    // shrink. The op moves no fUSD — only collateral is paid — so `reactor_pool.total_deposits`
+    // is untouched (the account is non-mut here).
     let compounded = {
         let grid = ctx.accounts.epoch_to_scale_to_sum.load()?;
         let c = reactor::realize(&ps, &mut ctx.accounts.reactor_deposit, &grid.data)?;
