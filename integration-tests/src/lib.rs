@@ -621,6 +621,28 @@ pub fn init_protocol_ix(gov: &Pubkey) -> Instruction {
     }
 }
 
+/// `init_protocol` with explicit `InitProtocolArgs` (so the per-field clamps — e.g. the
+/// `gov_authority != default` guard — can be exercised). `payer` is the program upgrade authority.
+pub fn init_protocol_args_ix(payer: &Pubkey, args: InitProtocolArgs) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::InitProtocol {
+            payer: *payer,
+            program_data: programdata_pda(),
+            config: config_pda(),
+            mint_authority: mint_authority_pda(),
+            fusd_mint: fusd_mint_pda(),
+            token_program: SPL_TOKEN_ID,
+            system_program: system_program::ID,
+            rent: rent::ID,
+            event_authority: event_authority_pda(),
+            program: fusd_core::ID,
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::InitProtocol { args }.data(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn init_market_ix(
     authority: &Pubkey,
