@@ -149,6 +149,16 @@ fn set_oracle_program_ids_auth_and_validation() {
     .unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "default pubkey rejected");
 
+    // A zero Switchboard PROGRAM id (would brick the secondary feed owner check) is rejected.
+    let f = send(
+        &mut svm,
+        &[set_oracle_program_ids_ix(&gov.pubkey(), None, None, Some(Pubkey::default()))],
+        &gov,
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "default switchboard program id rejected");
+
     // None leaves a field untouched (Switchboard unchanged when only Pyth is updated).
     let new_pyth = Pubkey::new_unique();
     let before = read_protocol_config(&svm).switchboard_program_id;
@@ -228,6 +238,30 @@ fn rebind_market_oracle_feeds_auth_and_validation() {
     let f = send(&mut svm, &[rebind_market_oracle_feeds_ix(&gov.pubkey(), &coll, no_sb)], &gov, &[])
         .unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "default switchboard rejected");
+
+    // Zero Pyth feed id ⇒ rejected (an unverifiable Pyth binding would freeze the market price).
+    // ok_args was moved by the ..ok_args spread above, so build a fresh literal.
+    let zero_feed = RebindOracleFeedsArgs {
+        pyth_feed_id: [0u8; 32],
+        switchboard_feed: h.sb,
+        orca_pool: h.orca_pool,
+        raydium_pool: Pubkey::default(),
+    };
+    let f = send(&mut svm, &[rebind_market_oracle_feeds_ix(&gov.pubkey(), &coll, zero_feed)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "zero pyth feed id rejected");
+
+    // Both pools set to the SAME nonzero account ⇒ rejected (a duplicated source is a fake
+    // 'two independent venues' divergence corridor).
+    let dup_pools = RebindOracleFeedsArgs {
+        pyth_feed_id: [9u8; 32],
+        switchboard_feed: h.sb,
+        orca_pool: h.orca_pool,
+        raydium_pool: h.orca_pool,
+    };
+    let f = send(&mut svm, &[rebind_market_oracle_feeds_ix(&gov.pubkey(), &coll, dup_pools)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "duplicate pool rejected");
 }
 
 #[test]

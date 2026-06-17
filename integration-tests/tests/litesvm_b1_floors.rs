@@ -68,6 +68,21 @@ fn min_debt_floor_blocks_sub_floor_borrow_and_dust_repay() {
 }
 
 #[test]
+fn min_debt_clamp_enforced() {
+    // A min_debt above MAX_MIN_DEBT is rejected at queue (validate_param).
+    let (mut svm, gov, _cma, coll) = setup();
+    let over = fusd_core::constants::MAX_MIN_DEBT + 1;
+    let f = send(
+        &mut svm,
+        &[queue_param_change_ix(&gov.pubkey(), &coll, 0, MarketParam::MinDebt, over)],
+        &gov,
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+}
+
+#[test]
 fn min_debt_disabled_by_default_allows_small_positions() {
     // With min_debt == 0 (the default), tiny positions are still allowed (the floor is opt-in).
     let (mut svm, _gov, cma, coll) = setup();

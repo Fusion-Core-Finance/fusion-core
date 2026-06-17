@@ -85,6 +85,90 @@ fn init_market_oracle_rejects_out_of_clamp_params() {
     let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
         .unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // conf cap of 0 would make the confidence gate reject every nonzero-conf price (mint freeze)
+    let mut args = default_oracle_args();
+    args.max_conf_bps = 0;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // deviation band above the clamp
+    let mut args = default_oracle_args();
+    args.max_deviation_bps = fusd_core::constants::MAX_ORACLE_DEVIATION_BPS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // deviation band of zero (band disabled is NOT a valid config — must be > 0)
+    let mut args = default_oracle_args();
+    args.max_deviation_bps = 0;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // TWAP divergence corridor above the clamp
+    let mut args = default_oracle_args();
+    args.twap_max_divergence_bps = fusd_core::constants::MAX_TWAP_DIVERGENCE_BPS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // TWAP divergence corridor of zero (the corridor is load-bearing for mint mode — must be > 0)
+    let mut args = default_oracle_args();
+    args.twap_max_divergence_bps = 0;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // max age above the clamp
+    let mut args = default_oracle_args();
+    args.max_age_secs = fusd_core::constants::MAX_ORACLE_MAX_AGE_SECS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // max age of zero (staleness gate disabled is NOT a valid config — must be > 0)
+    let mut args = default_oracle_args();
+    args.max_age_secs = 0;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // k above the upper clamp
+    let mut args = default_oracle_args();
+    args.k_bps = fusd_core::constants::MAX_ORACLE_K_BPS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // TWAP window above the 24h cap
+    let mut args = default_oracle_args();
+    args.twap_window_secs = fusd_core::constants::MAX_TWAP_WINDOW_SECS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // TWAP staleness guard above the ring-staleness cap
+    let mut args = default_oracle_args();
+    args.twap_max_staleness_secs = fusd_core::constants::MAX_TWAP_STALENESS_SECS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // TWAP staleness guard cannot be disabled (0)
+    let mut args = default_oracle_args();
+    args.twap_max_staleness_secs = 0;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // liq-divergence threshold above the 100% clamp (0 = gate off is intentional; only over-bound rejects)
+    let mut args = default_oracle_args();
+    args.liq_max_divergence_bps = fusd_core::constants::MAX_LIQ_DIVERGENCE_BPS + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
 }
 
 #[test]
@@ -102,6 +186,13 @@ fn init_market_oracle_rejects_missing_bindings() {
     let mut args = default_oracle_args();
     args.orca_pool = Pubkey::default();
     args.raydium_pool = Pubkey::default();
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // default (all-zero) Switchboard feed — can never own a valid PullFeedAccountData
+    let mut args = default_oracle_args();
+    args.switchboard_feed = Pubkey::default();
     let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
         .unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);

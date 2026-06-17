@@ -107,6 +107,24 @@ fn timelocked_global_param_set_clamp_and_auth() {
         .unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "cut clamp");
 
+    // Clamp: a draw-k above MAX_BACKSTOP_DRAW_K_BPS (100_000) is rejected at queue.
+    let nonce = read_gov_gate(&svm).queue_nonce;
+    let f = send(&mut svm, &[queue_global_param_ix(&gov.pubkey(), nonce, GlobalParam::DrawK, 100_001)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "draw_k clamp");
+
+    // Clamp: a draw-ceiling-share above MAX_BACKSTOP_DRAW_CEILING_SHARE_BPS (10_000) is rejected.
+    let nonce = read_gov_gate(&svm).queue_nonce;
+    let f = send(&mut svm, &[queue_global_param_ix(&gov.pubkey(), nonce, GlobalParam::DrawCeilingShare, 10_001)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "draw_ceiling_share clamp");
+
+    // Clamp: a draw-debt-share above MAX_BACKSTOP_DRAW_DEBT_SHARE_BPS (10_000) is rejected.
+    let nonce = read_gov_gate(&svm).queue_nonce;
+    let f = send(&mut svm, &[queue_global_param_ix(&gov.pubkey(), nonce, GlobalParam::DrawDebtShare, 10_001)], &gov, &[])
+        .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS, "draw_debt_share clamp");
+
     // Auth: a non-inbound-authority cannot queue.
     let rando = Keypair::new();
     airdrop_sol(&mut svm, &rando.pubkey(), 10);

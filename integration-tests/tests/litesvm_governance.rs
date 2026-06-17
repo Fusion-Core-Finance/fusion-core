@@ -4,6 +4,7 @@
 
 use anchor_lang::{InstructionData, ToAccountMetas};
 use fusd_core::instructions::init_market::InitMarketArgs;
+use fusd_core::instructions::init_protocol::InitProtocolArgs;
 use fusd_integration_tests::*;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
@@ -97,6 +98,17 @@ fn queue_validates_clamps_and_authority() {
     // meaningless u16::MAX (655%) that let a captured governance retroactively mass-liquidate.
     let over = fusd_core::constants::MAX_MCR_BPS as u64 + 1;
     let f = send(&mut svm, &[queue_param_change_ix(&gov.pubkey(), &coll, 0, MarketParam::Mcr, over)], &gov, &[]).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // LiqGasComp above MAX_LIQ_GAS_COMP_BPS trips the per-field bound BEFORE the relational branch
+    // (validate_param runs first), so this is E_PARAM_OUT_OF_BOUNDS, not E_PARAM_COMBINATION_INVALID.
+    let over = fusd_core::constants::MAX_LIQ_GAS_COMP_BPS as u64 + 1;
+    let f = send(&mut svm, &[queue_param_change_ix(&gov.pubkey(), &coll, 0, MarketParam::LiqGasComp, over)], &gov, &[]).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // RateAdjustCooldown above MAX_RATE_ADJUST_COOLDOWN_SECS is rejected at queue (validate_param).
+    let over = fusd_core::constants::MAX_RATE_ADJUST_COOLDOWN_SECS as u64 + 1;
+    let f = send(&mut svm, &[queue_param_change_ix(&gov.pubkey(), &coll, 0, MarketParam::RateAdjustCooldown, over)], &gov, &[]).unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
 
     // a non-inbound-authority signer cannot queue.
@@ -312,6 +324,25 @@ fn init_market_rejects_inverted_and_unfundable_configs() {
     assert_eq!(custom_code(&f), E_COLLAR_EXCEEDS_MCR);
     // MCR == SCR boundary accepted.
     try_init(&mut svm, &gov, &cma, 11_000, 0, 0).expect("MCR == SCR accepted at init");
+
+    // Per-field MCR clamp at init (distinct from the gov-queue validate_param path): under
+    // MIN_MCR_BPS and over MAX_MCR_BPS are rejected by the inlined require! at init_market, BEFORE
+    // the relational validate_market_config check (bonus/gas 0 keep the relational checks inert).
+    let f = try_init(&mut svm, &gov, &cma, 9_999, 0, 0).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+    let f = try_init(&mut svm, &gov, &cma, fusd_core::constants::MAX_MCR_BPS + 1, 0, 0).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // Per-field liq_bonus clamp at init: bonus 2_001 > MAX_LIQ_BONUS_BPS trips the per-field require!
+    // (mcr == MAX_MCR_BPS keeps the collar check passing so the per-field bound is the sole rejector).
+    let f = try_init(&mut svm, &gov, &cma, 30_000, 2_001, 0).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // RP-solvency product unfundable at birth: small collar + high gas comp.
+    // seizable = min(10_000+100, 11_000) = 10_100; 10_100 * (10_000-1_000) = 90.9M < 1e8.
+    // (mcr 11_000 >= scr 11_000 so NOT (iii); 10_000+100=10_100 <= 11_000 so NOT (i); (ii) rejects.)
+    let f = try_init(&mut svm, &gov, &cma, 11_000, 100, 1_000).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_COMBINATION_INVALID);
 }
 
 #[test]
@@ -333,7 +364,60 @@ fn init_gate_clamps_and_authority() {
     let f = send(&mut svm, &[init_governance_gate_ix(&gov.pubkey(), &gov.pubkey(), too_long)], &gov, &[]).unwrap_err();
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
 
+    // default inbound_authority would permanently brick param governance — rejected. (Ordered before
+    // the valid creation: the gate is an init-only PDA, so the reject must run while it doesn't exist.)
+    let f = send(&mut svm, &[init_governance_gate_ix(&gov.pubkey(), &Pubkey::default(), TL)], &gov, &[]).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+    assert!(svm.get_account(&gov_gate_pda()).is_none(), "bricking init must not create the gate");
+
+    // negative (under-bound) timelock rejected.
+    let f = send(&mut svm, &[init_governance_gate_ix(&gov.pubkey(), &gov.pubkey(), -1)], &gov, &[]).unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
     // valid creation works.
     send(&mut svm, &[init_governance_gate_ix(&gov.pubkey(), &gov.pubkey(), TL)], &gov, &[]).expect("init gate");
     assert_eq!(read_gov_gate(&svm).timelock_secs, TL);
+}
+
+#[test]
+fn accept_inbound_with_no_pending_fails() {
+    // A fresh gate has pending_inbound_authority == Pubkey::default() (no handoff in flight), so an
+    // accept hits the NoPendingAuthority branch before the Unauthorized check.
+    let (mut svm, _gov, _coll) = setup(0);
+    let rando = Keypair::new();
+    airdrop_sol(&mut svm, &rando.pubkey(), 10);
+    let f = send(&mut svm, &[accept_inbound_authority_ix(&rando.pubkey())], &rando, &[]).unwrap_err();
+    assert_eq!(custom_code(&f), E_NO_PENDING_AUTHORITY);
+}
+
+#[test]
+fn init_protocol_rejects_default_gov_authority() {
+    // gov_authority == default has no signer ⇒ it could never drive migrate_gov_authority, bricking
+    // every gov-gated bootstrap. init_protocol rejects it. The legit upgrade authority is the payer so
+    // the gate at the program_data constraint passes and we reach the line-81 require!.
+    let mut svm = new_svm();
+    let auth = Keypair::new();
+    airdrop_sol(&mut svm, &auth.pubkey(), 1_000);
+    set_program_upgrade_authority(&mut svm, &auth.pubkey());
+
+    let f = send(
+        &mut svm,
+        &[init_protocol_args_ix(&auth.pubkey(), InitProtocolArgs { gov_authority: Pubkey::default(), guardian: auth.pubkey() })],
+        &auth,
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+    assert!(svm.get_account(&config_pda()).is_none(), "bricking init must not create config");
+
+    // Deliberate asymmetry: a default GUARDIAN is accepted ("no guardian yet", repairable via the
+    // gov-gated set_guardian).
+    send(
+        &mut svm,
+        &[init_protocol_args_ix(&auth.pubkey(), InitProtocolArgs { gov_authority: auth.pubkey(), guardian: Pubkey::default() })],
+        &auth,
+        &[],
+    )
+    .expect("default guardian accepted");
+    assert_eq!(read_protocol_config(&svm).gov_authority, auth.pubkey());
 }

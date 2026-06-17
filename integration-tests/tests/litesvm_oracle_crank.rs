@@ -675,6 +675,13 @@ fn init_market_oracle_rejects_unreachable_twap_min_samples() {
     let quote = create_quote_mint(&mut svm, &gov, FUSD_DECIMALS);
     let cap = fusd_core::constants::TWAP_RING_CAPACITY as u32;
 
+    // Below the floor → rejected (the multi-sample guard would be too weak to resist manipulation).
+    let mut args = default_oracle_args();
+    args.twap_min_samples = fusd_core::constants::MIN_TWAP_MIN_SAMPLES - 1; // = 2
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .expect_err("min_samples < MIN_TWAP_MIN_SAMPLES must be rejected");
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
     // Above capacity → rejected (the ring can never satisfy it).
     let mut args = default_oracle_args();
     args.twap_min_samples = cap + 1;
