@@ -111,3 +111,40 @@ describe("SDK health math (mirrors cdp.rs / interest.rs vectors)", () => {
     expect(sdk.currentDebt(1000n, 500n, 100n, 50n)).to.equal(1000n); // nowSecs < lastDebtUpdate => dt 0
   });
 });
+
+describe("positionHealth: healthy (LOW spot) vs liquidatable (HIGH debt_spot)", () => {
+  // spot $150, debt_spot $160 (debt_spot >= spot, the asymmetric pair). ink 2 => value 300 @ spot,
+  // 320 @ debt_spot; mcr 120% => maxDebt 250 @ spot, 266 @ debt_spot. No interest (rate 0, dt 0).
+  const SPOT = 150n * sdk.RAY;
+  const DEBT_SPOT = 160n * sdk.RAY;
+  const market = (spot: bigint, debtSpot: bigint) => ({ spot, debtSpot, mcrBps: 12000n });
+  const pos = (ink: bigint, debt: bigint) => ({
+    ink,
+    recordedDebt: debt,
+    userRateBps: 0n,
+    lastDebtUpdate: 0n,
+  });
+
+  it("the gap band: below MCR at spot but not yet liquidatable at debt_spot", () => {
+    const h = sdk.positionHealth(pos(2n, 260n), market(SPOT, DEBT_SPOT), 0n);
+    expect(h.healthy).to.equal(false); // 260 > maxDebt@spot 250
+    expect(h.liquidatable).to.equal(false); // 260 <= maxDebt@debt_spot 266
+  });
+
+  it("clearly safe: healthy and not liquidatable", () => {
+    const h = sdk.positionHealth(pos(2n, 250n), market(SPOT, DEBT_SPOT), 0n);
+    expect(h.healthy).to.equal(true);
+    expect(h.liquidatable).to.equal(false);
+  });
+
+  it("underwater even at debt_spot: liquidatable", () => {
+    const h = sdk.positionHealth(pos(2n, 270n), market(SPOT, DEBT_SPOT), 0n);
+    expect(h.healthy).to.equal(false);
+    expect(h.liquidatable).to.equal(true); // 270 > maxDebt@debt_spot 266
+  });
+
+  it("unpriced market (debtSpot == 0) is fail-closed un-liquidatable", () => {
+    const h = sdk.positionHealth(pos(2n, 10_000n), market(SPOT, 0n), 0n);
+    expect(h.liquidatable).to.equal(false);
+  });
+});

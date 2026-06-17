@@ -168,18 +168,27 @@ export interface HealthView {
   collateralValue: bigint;
   collateralRatioBps: bigint | null;
   /**
-   * Above-MCR at the LOW `Market.spot` — the BORROW/withdraw view (matches borrow.rs/withdraw.rs),
-   * NOT the liquidation predicate. On-chain liquidation eligibility prices at the HIGH
-   * `Market.debt_spot`, so a position can read `healthy: false` here yet be un-liquidatable on-chain.
-   * To model liquidatability, call `isHealthy(ink, debt, market.debtSpot, mcrBps)` directly.
+   * Above-MCR at the LOW `Market.spot` — the BORROW/withdraw view (matches borrow.rs/withdraw.rs).
+   * Distinct from `liquidatable`, which prices at the HIGH `Market.debt_spot`: a position can read
+   * `healthy: false` (cannot borrow more) while `liquidatable: false` (not yet eligible for liquidation).
    */
   healthy: boolean;
+  /**
+   * Eligible for liquidation on-chain: `!isHealthy(ink, debt, debt_spot, mcrBps)` priced at the HIGH
+   * `Market.debt_spot` (matches liquidate.rs). `false` when `debtSpot == 0` (an unpriced market —
+   * liquidation is fail-closed). This is the liquidation predicate; `healthy` is the borrow predicate.
+   */
+  liquidatable: boolean;
   maxBorrow: bigint;
 }
-/** One-call health view: current debt (interest-accrued), CR, healthy?, and remaining borrow. */
+/**
+ * One-call health view: current debt (interest-accrued), CR, `healthy` (the borrow view at the LOW
+ * `spot`), `liquidatable` (the on-chain liquidation view at the HIGH `debtSpot`), and remaining borrow.
+ * Pass both `Market.spot` and `Market.debt_spot` — both are fields on the Market account.
+ */
 export function positionHealth(
   pos: PositionInput,
-  market: { spot: bigint; mcrBps: bigint },
+  market: { spot: bigint; debtSpot: bigint; mcrBps: bigint },
   nowSecs: bigint
 ): HealthView {
   const debt = currentDebt(pos.recordedDebt, pos.userRateBps, pos.lastDebtUpdate, nowSecs);
@@ -188,6 +197,8 @@ export function positionHealth(
     collateralValue: collateralValue(pos.ink, market.spot),
     collateralRatioBps: collateralRatioBps(pos.ink, debt, market.spot),
     healthy: isHealthy(pos.ink, debt, market.spot, market.mcrBps),
+    // Liquidation eligibility prices at the HIGH debt_spot; debtSpot == 0 (unpriced) is fail-closed.
+    liquidatable: market.debtSpot > 0n && !isHealthy(pos.ink, debt, market.debtSpot, market.mcrBps),
     maxBorrow: maxBorrow(pos.ink, debt, market.spot, market.mcrBps),
   };
 }
