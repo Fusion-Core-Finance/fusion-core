@@ -8,8 +8,10 @@
 //! Pure, dependency-free, host-tested logic against the oracle-agnostic [`PriceView`]:
 //! the [`twap`] observation ring (sampled by a permissionless crank), [`aggregate`]
 //! (cross-oracle validation policy), and the `price ∓ k·σ` asymmetric valuations.
-//! The actual feed parsing (pyth-solana-receiver-sdk, switchboard-on-demand) and the
-//! on-chain `DexTwap` account wiring land with the oracle milestone (joint task).
+//! The feed parsing (pyth-solana-receiver-sdk, switchboard-on-demand) and the on-chain
+//! `DexTwap` account wiring live in fusd-core's oracle instructions (`update_price` /
+//! `sample_twap`), which normalize every feed to a usd_ray [`PriceView`] before calling
+//! [`aggregate`].
 
 pub mod twap;
 
@@ -221,21 +223,6 @@ pub fn aggregate(
         fresh: pyth_fresh || sb_fresh,
         plausible,
         liq_divergent,
-    }
-}
-
-/// Rule-based mode: stale or too-wide-confidence ⇒ freeze new mints only.
-/// (Cross-oracle divergence is added when the second feed is wired in.)
-pub fn evaluate_mode(
-    p: &PriceView,
-    now: Timestamp,
-    max_age_secs: i64,
-    max_conf_bps: u128,
-) -> OracleMode {
-    if p.is_stale(now, max_age_secs) || p.conf_ratio_bps() > max_conf_bps {
-        OracleMode::MintFrozen
-    } else {
-        OracleMode::Ok
     }
 }
 
@@ -504,16 +491,5 @@ mod tests {
         let r = aggregate(fresh_pyth(), Some(sb), Some(1_005_000), NOW, &cfg);
         assert_eq!(r.mode, OracleMode::MintFrozen, "5% disagreement freezes mints");
         assert!(!r.liq_divergent, "but is under the 20% liquidation-divergence threshold");
-    }
-
-    #[test]
-    fn modes() {
-        let fresh_tight = pv(1_000_000, 1_000, 100); // 0.1% conf
-        assert_eq!(evaluate_mode(&fresh_tight, 101, 25, 500), OracleMode::Ok);
-        // stale
-        assert_eq!(evaluate_mode(&fresh_tight, 200, 25, 500), OracleMode::MintFrozen);
-        // wide confidence (5% > 5_00 bps cap... use 600 bps price-conf)
-        let wide = pv(1_000_000, 60_000, 100); // 6% conf
-        assert_eq!(evaluate_mode(&wide, 101, 25, 500), OracleMode::MintFrozen);
     }
 }
