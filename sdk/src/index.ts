@@ -124,6 +124,9 @@ export const accruedInterest = (recordedDebt: bigint, rateBps: bigint, periodSec
  * A position's CURRENT debt = `recorded_debt` + interest accrued since `lastDebtUpdate`.
  * NOTE: pending tier-2 redistribution (`Market.l_art`) is NOT included — it is applied lazily on the
  * next touch and is zero for the common case; this is a display estimate, not the exact on-touch value.
+ * Assumes a LIVE (non-shutdown) market: interest STOPS at shutdown (`accrual.rs::realize` caps the
+ * period at the frozen `Market.last_update_ts`), so for a shut-down market pass that frozen timestamp
+ * as `nowSecs` — otherwise this over-estimates by accruing past the freeze.
  */
 export function currentDebt(
   recordedDebt: bigint,
