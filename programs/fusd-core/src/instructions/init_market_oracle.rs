@@ -40,6 +40,12 @@ pub struct InitMarketOracleArgs {
     /// Liquidation-divergence threshold (bps). `0` = disabled; otherwise clamped
     /// `<= MAX_LIQ_DIVERGENCE_BPS` and intended LOOSER than the mint deviation thresholds.
     pub liq_max_divergence_bps: u16,
+    /// C1 LST canonical-rate leg: the SPL Stake Pool `StakePool` account for this collateral, or
+    /// `Pubkey::default()` (zero) for a non-LST market (leg disabled). When set, this market is an
+    /// LST market: minting requires a fresh canonical rate, and the collateral price is capped at
+    /// `MIN(market, sol_usd · stake_pool_rate)`. The collateral mint must be 9-decimal (SPL pool
+    /// mints are, so `total_lamports / pool_token_supply` is the whole-token SOL/LST rate directly).
+    pub lst_stake_pool: Pubkey,
 }
 
 #[derive(Accounts)]
@@ -168,6 +174,12 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
     // deviation thresholds — enforced by deployer choice, not relationally, matching the other oracle
     // thresholds' init-only clamp pattern).
     require!(args.liq_max_divergence_bps <= MAX_LIQ_DIVERGENCE_BPS, FusdError::ParamOutOfBounds);
+    // C1 LST canonical-rate leg: if a stake pool is bound (LST market), the collateral mint must be
+    // 9-decimal so `total_lamports / pool_token_supply` cancels to the whole-token SOL/LST rate
+    // directly (SPL pool mints are 9-decimal). A non-LST market (`default`) imposes no constraint.
+    if args.lst_stake_pool != Pubkey::default() {
+        require!(ctx.accounts.collateral_mint.decimals == 9, FusdError::ParamOutOfBounds);
+    }
 
     // Zero-initialize the observation ring (empty; all-zero IS the valid empty state).
     ctx.accounts.dex_twap.load_init()?;
@@ -192,7 +204,8 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
     o.price_band_lower_ray = args.price_band_lower_ray;
     o.price_band_upper_ray = args.price_band_upper_ray;
     o.liq_max_divergence_bps = args.liq_max_divergence_bps;
+    o.lst_stake_pool = args.lst_stake_pool;
     o.bump = ctx.bumps.market_oracle;
-    o._reserved = [0u8; 62];
+    o._reserved = [0u8; 30];
     Ok(())
 }

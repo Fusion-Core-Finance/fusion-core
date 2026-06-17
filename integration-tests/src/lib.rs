@@ -104,6 +104,7 @@ pub const E_VAULT_RECONCILIATION_FAILED: u32 = 6042;
 pub const E_INVALID_RECIPIENT: u32 = 6043;
 pub const E_INSUFFICIENT_BACKSTOP_EXCESS: u32 = 6044;
 pub const E_ORACLE_DIVERGENT: u32 = 6045; // B3 — liquidation paused under oracle divergence (consolidation: 6044→6045 behind the backstop's 6044)
+pub const E_INVALID_STAKE_POOL: u32 = 6046; // C1 — wrong SPL stake-pool account on an LST update_price
 
 // ============================ svm / tx helpers ============================
 
@@ -754,6 +755,8 @@ pub fn default_oracle_args() -> InitMarketOracleArgs {
         price_band_upper_ray: 0,
         // B3 liquidation-divergence gate OFF by default.
         liq_max_divergence_bps: 0,
+        // C1 LST canonical-rate leg OFF by default (non-LST market).
+        lst_stake_pool: Pubkey::default(),
     }
 }
 
@@ -834,6 +837,31 @@ pub fn set_pyth_price(
     let mut data = Vec::new();
     pu.try_serialize(&mut data).expect("serialize PriceUpdateV2");
     set_raw_account(svm, key, data, fusd_core::constants::PYTH_RECEIVER_PROGRAM_ID);
+}
+
+/// The market's current epoch (litesvm `Clock`). Use to stamp a fresh stake-pool `last_update_epoch`.
+pub fn now_epoch(svm: &LiteSVM) -> u64 {
+    let clock: solana_sdk::clock::Clock = svm.get_sysvar();
+    clock.epoch
+}
+
+/// Inject a synthetic SPL Stake Pool `StakePool` account (owned by the SPL stake-pool program) at
+/// the verified byte offsets `stake_pool::parse` reads (account_type@0, total_lamports@258,
+/// pool_token_supply@266, last_update_epoch@274). `total_lamports / pool_token_supply` is the
+/// canonical SOL/LST rate the C1 leg consumes (both 9-decimal ⇒ a whole-token ratio).
+pub fn set_stake_pool(
+    svm: &mut LiteSVM,
+    key: &Pubkey,
+    total_lamports: u64,
+    pool_token_supply: u64,
+    last_update_epoch: u64,
+) {
+    let mut data = vec![0u8; 320]; // past min_len (282), mimicking the real account's tail
+    data[0] = 1; // AccountType::StakePool
+    data[258..266].copy_from_slice(&total_lamports.to_le_bytes());
+    data[266..274].copy_from_slice(&pool_token_supply.to_le_bytes());
+    data[274..282].copy_from_slice(&last_update_epoch.to_le_bytes());
+    set_raw_account(svm, key, data, fusd_core::constants::SPL_STAKE_POOL_PROGRAM_ID);
 }
 
 /// As [`set_pyth_price`], but the account is owned by `owner_program` (D3 — to exercise a migrated
@@ -1050,6 +1078,42 @@ pub fn update_price_ix(
             pyth_price_update: *pyth_price_update,
             switchboard_feed,
             dex_twap: dex_twap_pda(coll),
+            // Non-LST: the C1 canonical-rate accounts are omitted (see `update_price_lst_ix`).
+            sol_usd_pyth_update: None,
+            lst_stake_pool: None,
+            event_authority: event_authority_pda(),
+            program: fusd_core::ID,
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::UpdatePrice {}.data(),
+    }
+}
+
+/// C1: build an `update_price` for an LST market, supplying the canonical-rate accounts — the
+/// SOL/USD Pyth `PriceUpdateV2` and the SPL stake-pool account. `sol_usd_pyth` / `stake_pool` are
+/// `None` to deliberately omit a leg (testing the degrade-to-freeze path).
+#[allow(clippy::too_many_arguments)]
+pub fn update_price_lst_ix(
+    cranker: &Pubkey,
+    coll: &Pubkey,
+    pyth_price_update: &Pubkey,
+    switchboard_feed: Option<Pubkey>,
+    sol_usd_pyth: Option<Pubkey>,
+    stake_pool: Option<Pubkey>,
+) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::UpdatePrice {
+            cranker: *cranker,
+            config: config_pda(),
+            collateral_mint: *coll,
+            market: market_pda(coll),
+            market_oracle: market_oracle_pda(coll),
+            pyth_price_update: *pyth_price_update,
+            switchboard_feed,
+            dex_twap: dex_twap_pda(coll),
+            sol_usd_pyth_update: sol_usd_pyth,
+            lst_stake_pool: stake_pool,
             event_authority: event_authority_pda(),
             program: fusd_core::ID,
         }
@@ -1202,10 +1266,55 @@ pub fn bootstrap_oracle_full(
         price_band_lower_ray: band_lower_ray,
         price_band_upper_ray: band_upper_ray,
         liq_max_divergence_bps,
+        lst_stake_pool: Pubkey::default(),
     };
     send(svm, &[init_market_oracle_ix(&gov.pubkey(), coll, &quote, args)], gov, &[])
         .expect("init_market_oracle");
     OracleHandles { quote, orca_pool, raydium_pool, pyth, sb, feed_id }
+}
+
+/// C1: as [`bootstrap_oracle`], but binds an SPL stake pool so this is an LST market (Orca venue,
+/// band/liq off). Returns the handles plus the bound `lst_stake_pool` key. The collateral mint is
+/// 9-decimal (`COLL_DECIMALS`), satisfying the init-time LST decimal check.
+pub fn bootstrap_oracle_lst(
+    svm: &mut LiteSVM,
+    gov: &Keypair,
+    coll: &Pubkey,
+    twap_window_secs: i64,
+    twap_min_samples: u32,
+    twap_max_staleness_secs: i64,
+) -> (OracleHandles, Pubkey) {
+    use fusd_core::constants::{
+        DEFAULT_ORACLE_CONF_BPS, DEFAULT_ORACLE_DEVIATION_BPS, DEFAULT_ORACLE_K_BPS,
+        DEFAULT_ORACLE_MAX_AGE_SECS, DEFAULT_TWAP_DIVERGENCE_BPS,
+    };
+    let quote = create_quote_mint(svm, gov, FUSD_DECIMALS);
+    let orca_pool = Pubkey::new_unique();
+    let pyth = Pubkey::new_unique();
+    let sb = Pubkey::new_unique();
+    let stake_pool = Pubkey::new_unique();
+    let feed_id = [7u8; 32];
+    let args = InitMarketOracleArgs {
+        pyth_feed_id: feed_id,
+        switchboard_feed: sb,
+        orca_pool,
+        raydium_pool: Pubkey::default(),
+        max_conf_bps: DEFAULT_ORACLE_CONF_BPS,
+        max_deviation_bps: DEFAULT_ORACLE_DEVIATION_BPS,
+        twap_max_divergence_bps: DEFAULT_TWAP_DIVERGENCE_BPS,
+        max_age_secs: DEFAULT_ORACLE_MAX_AGE_SECS,
+        k_bps: DEFAULT_ORACLE_K_BPS,
+        twap_window_secs,
+        twap_min_samples,
+        twap_max_staleness_secs,
+        price_band_lower_ray: 0,
+        price_band_upper_ray: 0,
+        liq_max_divergence_bps: 0,
+        lst_stake_pool: stake_pool,
+    };
+    send(svm, &[init_market_oracle_ix(&gov.pubkey(), coll, &quote, args)], gov, &[])
+        .expect("init_market_oracle (LST)");
+    (OracleHandles { quote, orca_pool, raydium_pool: Pubkey::default(), pyth, sb, feed_id }, stake_pool)
 }
 
 pub fn dev_set_price_ix(gov: &Pubkey, coll: &Pubkey, spot: u128) -> Instruction {

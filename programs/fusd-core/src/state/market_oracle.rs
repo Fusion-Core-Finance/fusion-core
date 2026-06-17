@@ -65,13 +65,23 @@ pub struct MarketOracle {
     /// `_reserved`.
     pub liq_max_divergence_bps: u16,
 
+    /// C1 LST canonical-rate leg: the SPL Stake Pool `StakePool` account for this collateral, when
+    /// it is a liquid-staking token. `update_price` reads its `total_lamports / pool_token_supply`
+    /// (SOL per LST) and serves the collateral price at `MIN(market, sol_usd · rate)` so an upward-
+    /// manipulated market feed can't inflate borrowing power past the trustless stake-pool rate
+    /// (BOLD-08). `Pubkey::default()` (zero) = NOT an LST market: the leg is disabled and minting is
+    /// unaffected. When set, minting REQUIRES a fresh, valid stake-pool rate + SOL/USD feed. The
+    /// SOL/USD underlying feed is the shared `constants::PYTH_SOL_USD_FEED_ID`. INIT-ONLY in v1.
+    /// Carved from `_reserved` (the doc's anticipated "LST redemption-rate" refinement).
+    pub lst_stake_pool: Pubkey,
+
     pub bump: u8,
     /// Forward-compat reserve. WIDENED 32 → 64 bytes pre-launch (layout-freeze checklist): a Borsh
     /// account cannot grow without realloc post-launch, so carve-from-`_reserved` headroom is free
     /// now and impossible later. Carve new fields from the HEAD; old accounts' zeroed bytes must
     /// decode as the new field's `0 = disabled/none` sentinel. Holds feed-rebind and future
-    /// oracle refinements (e.g. a second Pyth feed for LST redemption-rate pricing).
-    pub _reserved: [u8; 62],
+    /// oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62.)
+    pub _reserved: [u8; 30],
 }
 
 impl MarketOracle {
@@ -82,6 +92,7 @@ impl MarketOracle {
         + 8 + 4 + 8                 // twap window, min_samples, staleness
         + 16 + 16                   // price_band_lower_ray, price_band_upper_ray
         + 2                         // liq_max_divergence_bps
+        + 32                        // lst_stake_pool (C1 LST canonical-rate leg)
         + 1                         // bump
-        + 62; // reserved (64 → 62 for liq_max_divergence_bps; widened 32 → 64 for freeze headroom)
+        + 30; // reserved (62 → 30 for lst_stake_pool; widened 32 → 64 for freeze headroom)
 }

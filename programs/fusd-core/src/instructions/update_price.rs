@@ -16,7 +16,10 @@ use fusd_oracle::{aggregate, OracleConfig, OracleMode, PriceView, TwapConfig};
 use pyth_solana_receiver_sdk::price_update::{PriceUpdateV2, VerificationLevel};
 use switchboard_on_demand::PullFeedAccountData;
 
-use crate::constants::{CONFIG_SEED, DEX_TWAP_SEED, MARKET_ORACLE_SEED, MARKET_SEED};
+use crate::constants::{
+    CONFIG_SEED, DEX_TWAP_SEED, MARKET_ORACLE_SEED, MARKET_SEED, MAX_STAKE_POOL_EPOCH_LAG,
+    PYTH_SOL_USD_FEED_ID, SPL_STAKE_POOL_PROGRAM_ID,
+};
 use crate::errors::FusdError;
 use crate::instructions::init_protocol::FUSD_DECIMALS;
 use crate::state::{DexTwap, Market, MarketOracle, ProtocolConfig};
@@ -55,6 +58,17 @@ pub struct UpdatePrice<'info> {
 
     #[account(seeds = [DEX_TWAP_SEED, collateral_mint.key().as_ref()], bump)]
     pub dex_twap: AccountLoader<'info, DexTwap>,
+
+    /// CHECK: OPTIONAL Pyth `PriceUpdateV2` for SOL/USD — the C1 canonical underlying. Required only
+    /// when this is an LST market (`market_oracle.lst_stake_pool != default`); verified in the
+    /// handler (owner == a configured Pyth receiver, full verification, feed-id ==
+    /// `PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is unavailable → mints freeze.
+    pub sol_usd_pyth_update: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: OPTIONAL SPL Stake Pool `StakePool` for the C1 canonical-rate leg. Required only for an
+    /// LST market; verified in the handler (owner == `SPL_STAKE_POOL_PROGRAM_ID`, key ==
+    /// `market_oracle.lst_stake_pool`). Absent/stale/degenerate ⇒ leg unavailable → mints freeze.
+    pub lst_stake_pool: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
@@ -82,9 +96,11 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         band_upper_ray: mo.price_band_upper_ray,
         // Liquidation-divergence threshold (bps). 0 = off.
         liq_max_divergence_bps: mo.liq_max_divergence_bps as u128,
-        // C1 LST canonical-rate leg (wired in a follow-up): non-LST markets pass false + None.
-        canonical_required: false,
+        // C1 LST canonical-rate leg: an LST market (a stake pool is bound) cannot mint without a
+        // fresh canonical rate to bound the market price. Non-LST markets (default) ⇒ false.
+        canonical_required: mo.lst_stake_pool != Pubkey::default(),
     };
+    let lst_stake_pool_key = mo.lst_stake_pool;
     let coll_decimals = ctx.accounts.market.collateral_decimals;
     // The bounded-updatable oracle program IDs (genesis = the compile-time constants; updatable by
     // gov via `set_oracle_program_ids` to absorb the Pyth core migration without a redeploy). The
@@ -112,8 +128,27 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         .ring()
         .twap(now, twap_window_secs, &twap_cfg);
 
+    // --- 3b. C1 canonical-rate leg (LST markets only) → RAY USD per whole LST ----------------
+    // `MIN(market, canonical)` caps the COLLATERAL valuation at the trustless on-chain stake-pool
+    // rate. Computed only for an LST market; any degradation (absent/stale/degenerate) ⇒ None ⇒
+    // (because `canonical_required`) mints freeze, but prices still serve off the market leg.
+    let canonical = if lst_stake_pool_key != Pubkey::default() {
+        compute_canonical(
+            ctx.accounts.sol_usd_pyth_update.as_ref(),
+            ctx.accounts.lst_stake_pool.as_ref(),
+            &lst_stake_pool_key,
+            &pyth_program_id,
+            &pyth_program_id_alt,
+            now,
+            cfg.max_age_secs,
+            clock.epoch,
+        )?
+    } else {
+        None
+    };
+
     // --- 4. Aggregate + write spot / mode ---------------------------------------------------
-    let result = aggregate(pyth_pv, sb_pv, twap, None, now, &cfg);
+    let result = aggregate(pyth_pv, sb_pv, twap, canonical, now, &cfg);
     let market = &mut ctx.accounts.market;
 
     // The mode always reflects the latest aggregate (mints freeze the instant feeds degrade).
@@ -257,4 +292,60 @@ fn parse_switchboard(
             _ => return Ok(None),
         };
     Ok(Some(PriceView { price: price_ray, conf: conf_ray, expo: 0, publish_ts: ts }))
+}
+
+/// C1: compute the canonical LST valuation `sol_usd · (total_lamports / pool_token_supply)` as a
+/// RAY-scaled USD-per-whole-LST price (same scale as the market `PriceView.price`), or `None` if
+/// the leg is unavailable. A present-but-WRONG account (bad owner / key / feed / unverified) is a
+/// mis-built crank ⇒ hard error; an ABSENT or STALE/DEGENERATE input ⇒ `None` (degrade → freeze
+/// mints via `canonical_required`, never a revert — a momentarily-unreadable pool must not brick
+/// the permissionless crank). The decimals cancel: SOL and the SPL pool mint are both 9-decimal
+/// (enforced at `init_market_oracle`), so `total_lamports / pool_token_supply` is the whole-token
+/// SOL/LST rate directly. `mul_div_floor` rounds the canonical DOWN — conservative for the MIN cap.
+#[allow(clippy::too_many_arguments)]
+fn compute_canonical(
+    sol_usd_acc: Option<&UncheckedAccount>,
+    stake_pool_acc: Option<&UncheckedAccount>,
+    expected_stake_pool: &Pubkey,
+    pyth_program_id: &Pubkey,
+    pyth_program_id_alt: &Pubkey,
+    now: i64,
+    max_age_secs: i64,
+    current_epoch: u64,
+) -> Result<Option<u128>> {
+    // Both legs must be supplied for an LST market; either absent ⇒ leg unavailable.
+    let (sol_acc, sp_acc) = match (sol_usd_acc, stake_pool_acc) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Ok(None),
+    };
+
+    // SOL/USD underlying — bound to the shared canonical feed id. A wrong/unverified account hard-
+    // errors (caller bug); a STALE-but-valid one degrades the leg to None.
+    let sol_pv = parse_pyth(sol_acc, &PYTH_SOL_USD_FEED_ID, pyth_program_id, pyth_program_id_alt)?;
+    if sol_pv.is_stale(now, max_age_secs) {
+        return Ok(None);
+    }
+
+    // SPL stake pool — owner + key bound hard (caller bug if wrong); a parse failure / epoch-stale /
+    // degenerate rate degrades to None.
+    require!(sp_acc.owner == &SPL_STAKE_POOL_PROGRAM_ID, FusdError::InvalidStakePool);
+    require_keys_eq!(sp_acc.key(), *expected_stake_pool, FusdError::InvalidStakePool);
+    let sample = {
+        let data = sp_acc.try_borrow_data().map_err(|_| FusdError::InvalidStakePool)?;
+        match crate::stake_pool::parse(&data) {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        }
+    };
+    if current_epoch.saturating_sub(sample.last_update_epoch) > MAX_STAKE_POOL_EPOCH_LAG {
+        return Ok(None);
+    }
+
+    // canonical_ray = sol_usd_ray · total_lamports / pool_token_supply (floored). None on overflow
+    // ⇒ leg unavailable (never a fabricated price).
+    Ok(fusd_math::mul_div_floor(
+        sol_pv.price,
+        sample.total_lamports as u128,
+        sample.pool_token_supply as u128,
+    ))
 }
