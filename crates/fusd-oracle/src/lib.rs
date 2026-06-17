@@ -105,6 +105,14 @@ pub struct OracleConfig {
     /// liquidations during a real crash. A MISSING secondary never trips it (an SB/TWAP outage must
     /// not freeze the liquidation engine — only a present-and-divergent feed does).
     pub liq_max_divergence_bps: u128,
+    /// C1 LST canonical-rate leg. `true` for LST markets: minting then REQUIRES a healthy canonical
+    /// price (the `canonical` arg `Some`), so a failed/absent on-chain stake-pool rate FREEZES mints
+    /// (the BOLD-08 upward-manip→over-mint→depeg defense cannot be verified without it). `false`
+    /// (default, non-LST markets) ⇒ the `canonical` arg is ignored for the mode decision. Independent
+    /// of this flag, whenever `canonical` is `Some` the COLLATERAL price is capped at
+    /// `MIN(market, canonical)` before the −k·σ haircut (debt/redemption pricing is left on the raw
+    /// market price — we don't force the worst case on redeemers).
+    pub canonical_required: bool,
 }
 
 /// Validated, asymmetric price + permitted-actions mode. Always returned — even with
@@ -161,10 +169,20 @@ fn deviation_bps(a: u128, b: u128) -> u128 {
 /// conservative prices are still returned from the best available view (Pyth if fresh,
 /// else Switchboard if fresh, else the freshest non-zero of the two). All views and the
 /// TWAP must share one scale/exponent; the feed adapters normalize before calling this.
+///
+/// C1 — for LST collateral, `canonical` carries the trustless on-chain stake-pool valuation
+/// (`sol_usd · canonical_lst_rate`, RAY-scaled USD per whole LST token) computed by the crank.
+/// When `Some`, the COLLATERAL (mint/LTV) price is capped at `MIN(market, canonical)` before the
+/// −k·σ haircut so an upward-manipulated market feed can't inflate borrowing power past the
+/// stake-pool rate. The DEBT price (liquidation/redemption) is left on the raw market view. When
+/// `cfg.canonical_required` (LST markets) and `canonical` is `None` (a stale/zero/absent rate),
+/// mints freeze — the over-mint defense can't be verified. Non-LST markets pass `None` + a
+/// `false` flag and behave exactly as before.
 pub fn aggregate(
     pyth: PriceView,
     switchboard: Option<PriceView>,
     dex_twap: Option<u128>,
+    canonical: Option<u128>,
     now: Timestamp,
     cfg: &OracleConfig,
 ) -> OracleResult {
@@ -205,6 +223,17 @@ pub fn aggregate(
         }) || dex_twap
             .is_some_and(|t| deviation_bps(pyth.price, t) > cfg.liq_max_divergence_bps));
 
+    // C1 canonical leg: cap the COLLATERAL mid at MIN(market, canonical) before the −k·σ haircut,
+    // so an upward-manipulated market price can't inflate borrowing power past the trustless
+    // stake-pool rate. DEBT pricing stays on the raw market view (don't force the worst case on
+    // redeemers). A failed/absent canonical leg on an LST market freezes mints below.
+    let coll_mid = match canonical {
+        Some(c) => chosen.price.min(c),
+        None => chosen.price,
+    };
+    let coll_haircut = chosen.conf.saturating_mul(cfg.k_bps) / BPS;
+    let collateral_price = coll_mid.saturating_sub(coll_haircut);
+
     let mint_allowed = pyth_fresh
         && pyth.conf_ratio_bps() <= cfg.max_conf_bps
         && switchboard.is_some_and(|s| {
@@ -214,10 +243,12 @@ pub fn aggregate(
         })
         && dex_twap
             .is_some_and(|t| deviation_bps(pyth.price, t) <= cfg.twap_max_divergence_bps)
-        && plausible;
+        && plausible
+        // C1: an LST market cannot mint without a healthy canonical rate to bound the market price.
+        && (!cfg.canonical_required || canonical.is_some());
 
     OracleResult {
-        collateral_price: collateral_price(&chosen, cfg.k_bps),
+        collateral_price,
         debt_price: debt_price(&chosen, cfg.k_bps),
         mode: if mint_allowed { OracleMode::Ok } else { OracleMode::MintFrozen },
         fresh: pyth_fresh || sb_fresh,
@@ -260,6 +291,7 @@ mod tests {
         band_lower_ray: 0,  // plausibility band disabled by default (byte-identical to pre-C6)
         band_upper_ray: 0,
         liq_max_divergence_bps: 0, // liquidation-divergence gate disabled by default (pre-B3)
+        canonical_required: false, // C1 LST canonical leg off by default (non-LST markets)
     };
     const NOW: Timestamp = 1_000;
 
@@ -284,7 +316,7 @@ mod tests {
 
     #[test]
     fn aggregate_agree_and_fresh_is_ok() {
-        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::Ok);
         assert!(r.fresh);
         // Prices come from Pyth, ∓ 2.12σ.
@@ -295,7 +327,7 @@ mod tests {
     #[test]
     fn aggregate_deviation_beyond_band_freezes() {
         let sb = pv(1_020_000, 2_000, NOW - 5); // 200 bps off pyth > 100
-        let r = checked(aggregate(fresh_pyth(), Some(sb), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(sb), Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
         assert!(r.fresh, "fresh feed, frozen mode — `fresh` is independent of `mode`");
         assert_eq!(r.collateral_price, 1_000_000 - 2_120); // prices still served (pyth)
@@ -305,13 +337,13 @@ mod tests {
     fn aggregate_one_feed_stale_freezes_but_prices_returned() {
         // Switchboard stale -> frozen, priced off Pyth.
         let stale_sb = pv(1_001_000, 2_000, NOW - 61);
-        let r = checked(aggregate(fresh_pyth(), Some(stale_sb), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(stale_sb), Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
         assert_eq!(r.collateral_price, 1_000_000 - 2_120);
 
         // Pyth stale -> frozen, priced off the fresh Switchboard view.
         let stale_pyth = pv(1_000_000, 1_000, NOW - 61);
-        let r = checked(aggregate(stale_pyth, Some(fresh_sb()), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(stale_pyth, Some(fresh_sb()), Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
         assert_eq!(r.collateral_price, 1_001_000 - 2_000 * 21_200 / BPS);
         assert_eq!(r.debt_price, 1_001_000 + 2_000 * 21_200 / BPS);
@@ -321,41 +353,41 @@ mod tests {
     fn aggregate_both_stale_uses_freshest_never_no_price() {
         let stale_pyth = pv(1_000_000, 1_000, NOW - 200);
         let staler_sb = pv(900_000, 2_000, NOW - 300);
-        let r = checked(aggregate(stale_pyth, Some(staler_sb), None, NOW, &CFG));
+        let r = checked(aggregate(stale_pyth, Some(staler_sb), None, None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
         assert!(!r.fresh, "neither feed fresh ⇒ the served price is a stale fallback");
         assert_eq!(r.collateral_price, 1_000_000 - 2_120); // pyth is fresher
 
         let fresher_sb = pv(900_000, 2_000, NOW - 100);
-        let r = checked(aggregate(stale_pyth, Some(fresher_sb), None, NOW, &CFG));
+        let r = checked(aggregate(stale_pyth, Some(fresher_sb), None, None, NOW, &CFG));
         assert_eq!(r.collateral_price, 900_000 - 2_000 * 21_200 / BPS); // sb is fresher
 
         // Pyth price zero, no switchboard: still a result, conservatively floored.
-        let r = checked(aggregate(pv(0, 1_000, NOW - 200), None, None, NOW, &CFG));
+        let r = checked(aggregate(pv(0, 1_000, NOW - 200), None, None, None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
         assert_eq!(r.collateral_price, 0);
     }
 
     #[test]
     fn aggregate_twap_corridor_breach_freezes() {
-        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_030_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_030_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen); // 300 bps > 200
-        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(0), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(0), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen); // zero TWAP can never agree
     }
 
     #[test]
     fn aggregate_missing_inputs_freeze() {
-        let r = checked(aggregate(fresh_pyth(), None, Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), None, Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen); // no switchboard
-        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), None, NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), None, None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen); // no TWAP
     }
 
     #[test]
     fn aggregate_conf_too_wide_freezes() {
         let wide = pv(1_000_000, 60_000, NOW - 10); // 600 bps > 500
-        let r = checked(aggregate(wide, Some(fresh_sb()), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(wide, Some(fresh_sb()), Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
         // Wide σ widens the conservative spread — exactly the degraded behavior we want.
         assert_eq!(r.collateral_price, 1_000_000 - 60_000 * 21_200 / BPS);
@@ -366,7 +398,7 @@ mod tests {
     fn aggregate_expo_mismatch_freezes() {
         let mut sb = fresh_sb();
         sb.expo = -6; // not comparable to pyth's -8: raw deviation would be garbage
-        let r = checked(aggregate(fresh_pyth(), Some(sb), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(sb), Some(1_005_000), None, NOW, &CFG));
         assert_eq!(r.mode, OracleMode::MintFrozen);
     }
 
@@ -378,7 +410,7 @@ mod tests {
                 for &ts in &[NOW, NOW - 61, -1] {
                     for sb in [None, Some(pv(999_000, 3_000, NOW - 1))] {
                         for twap in [None, Some(1_002_000)] {
-                            checked(aggregate(pv(price, conf, ts), sb, twap, NOW, &CFG));
+                            checked(aggregate(pv(price, conf, ts), sb, twap, None, NOW, &CFG));
                         }
                     }
                 }
@@ -389,11 +421,11 @@ mod tests {
     #[test]
     fn plausibility_band_default_off_is_always_plausible() {
         // (0, 0) band ⇒ plausible regardless of price; pre-C6 behavior is byte-identical.
-        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), NOW, &CFG));
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), None, NOW, &CFG));
         assert!(r.plausible);
         assert_eq!(r.mode, OracleMode::Ok);
         let absurd = pv(100_000_000, 1_000, NOW - 10); // 100× the others
-        assert!(aggregate(absurd, None, None, NOW, &CFG).plausible, "disabled band never trips");
+        assert!(aggregate(absurd, None, None, None, NOW, &CFG).plausible, "disabled band never trips");
     }
 
     #[test]
@@ -401,20 +433,20 @@ mod tests {
         // A coarse rail ~[0.5×, 5×] around the ~1_000_000 fixtures.
         let banded = OracleConfig { band_lower_ray: 500_000, band_upper_ray: 5_000_000, ..CFG };
         // In-band, fresh, agreeing ⇒ Ok + plausible.
-        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), NOW, &banded));
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), None, NOW, &banded));
         assert!(r.plausible);
         assert_eq!(r.mode, OracleMode::Ok);
 
         // A 100× mis-scale (the Sept-2021 Pyth class): fresh + self-consistent across legs, but absurd.
         let hi = pv(100_000_000, 1_000, NOW - 10);
-        let r = aggregate(hi, Some(pv(100_100_000, 2_000, NOW - 5)), Some(100_500_000), NOW, &banded);
+        let r = aggregate(hi, Some(pv(100_100_000, 2_000, NOW - 5)), Some(100_500_000), None, NOW, &banded);
         assert!(!r.plausible, "above the upper band ⇒ implausible");
         assert_eq!(r.mode, OracleMode::MintFrozen, "implausible ⇒ mints freeze (the crank withholds the commit)");
         assert!(r.collateral_price <= r.debt_price, "prices still served");
 
         // A 1/100 mis-scale: below the lower band.
         let lo = pv(10_000, 10, NOW - 10);
-        let r = aggregate(lo, Some(pv(10_010, 20, NOW - 5)), Some(10_050), NOW, &banded);
+        let r = aggregate(lo, Some(pv(10_010, 20, NOW - 5)), Some(10_050), None, NOW, &banded);
         assert!(!r.plausible, "below the lower band ⇒ implausible");
         assert_eq!(r.mode, OracleMode::MintFrozen);
     }
@@ -423,12 +455,12 @@ mod tests {
     fn plausibility_band_is_single_sided_disableable() {
         // Upper-only (lower disabled): tiny price plausible, huge price not.
         let upper_only = OracleConfig { band_lower_ray: 0, band_upper_ray: 5_000_000, ..CFG };
-        assert!(aggregate(pv(1, 0, NOW), None, None, NOW, &upper_only).plausible);
-        assert!(!aggregate(pv(9_000_000, 0, NOW), None, None, NOW, &upper_only).plausible);
+        assert!(aggregate(pv(1, 0, NOW), None, None, None, NOW, &upper_only).plausible);
+        assert!(!aggregate(pv(9_000_000, 0, NOW), None, None, None, NOW, &upper_only).plausible);
         // Lower-only (upper disabled): huge price plausible, tiny price not.
         let lower_only = OracleConfig { band_lower_ray: 500_000, band_upper_ray: 0, ..CFG };
-        assert!(aggregate(pv(9_000_000, 0, NOW), None, None, NOW, &lower_only).plausible);
-        assert!(!aggregate(pv(1, 0, NOW), None, None, NOW, &lower_only).plausible);
+        assert!(aggregate(pv(9_000_000, 0, NOW), None, None, None, NOW, &lower_only).plausible);
+        assert!(!aggregate(pv(1, 0, NOW), None, None, None, NOW, &lower_only).plausible);
     }
 
     #[test]
@@ -437,7 +469,7 @@ mod tests {
         // collateral_price below a lower bound and manufacture a synthetic outage.
         let banded = OracleConfig { band_lower_ray: 500_000, band_upper_ray: 5_000_000, ..CFG };
         let wide = pv(600_000, 590_000, NOW - 10); // conf ~98% of price ⇒ haircut saturates low
-        let r = aggregate(wide, None, None, NOW, &banded);
+        let r = aggregate(wide, None, None, None, NOW, &banded);
         assert!(r.plausible, "mid 600k is in-band even though the haircut price is far below the lower bound");
         assert!(r.collateral_price < 500_000, "haircut price IS below the band — proves we banded the mid, not the haircut");
     }
@@ -446,7 +478,7 @@ mod tests {
     fn liq_divergence_disabled_by_default() {
         // CFG has liq_max_divergence_bps == 0 — even a wild secondary disagreement is not liq-divergent.
         let sb = pv(2_000_000, 2_000, NOW - 5); // 100% off
-        assert!(!aggregate(fresh_pyth(), Some(sb), Some(2_000_000), NOW, &CFG).liq_divergent);
+        assert!(!aggregate(fresh_pyth(), Some(sb), Some(2_000_000), None, NOW, &CFG).liq_divergent);
     }
 
     #[test]
@@ -454,22 +486,22 @@ mod tests {
         let cfg = OracleConfig { liq_max_divergence_bps: 2_000, ..CFG }; // 20%
         // 10% SB disagreement: under the 20% liq threshold ⇒ NOT liq-divergent (mints may still freeze).
         let mild = pv(1_100_000, 2_000, NOW - 5);
-        assert!(!aggregate(fresh_pyth(), Some(mild), Some(1_005_000), NOW, &cfg).liq_divergent);
+        assert!(!aggregate(fresh_pyth(), Some(mild), Some(1_005_000), None, NOW, &cfg).liq_divergent);
         // 30% SB disagreement: over the threshold ⇒ liq-divergent.
         let gross = pv(1_300_000, 2_000, NOW - 5);
-        assert!(aggregate(fresh_pyth(), Some(gross), Some(1_005_000), NOW, &cfg).liq_divergent);
+        assert!(aggregate(fresh_pyth(), Some(gross), Some(1_005_000), None, NOW, &cfg).liq_divergent);
         // The DEX-TWAP can trip it too (SB absent, TWAP 30% off).
-        assert!(aggregate(fresh_pyth(), None, Some(1_300_000), NOW, &cfg).liq_divergent);
+        assert!(aggregate(fresh_pyth(), None, Some(1_300_000), None, NOW, &cfg).liq_divergent);
     }
 
     #[test]
     fn liq_divergence_missing_or_stale_secondary_never_trips() {
         let cfg = OracleConfig { liq_max_divergence_bps: 2_000, ..CFG };
         // No secondary present ⇒ never divergent (an SB/TWAP outage must not freeze liquidations).
-        assert!(!aggregate(fresh_pyth(), None, None, NOW, &cfg).liq_divergent);
+        assert!(!aggregate(fresh_pyth(), None, None, None, NOW, &cfg).liq_divergent);
         // A STALE Switchboard is "not present" for divergence — only a fresh, present feed counts.
         let stale_sb = pv(1_300_000, 2_000, NOW - 61);
-        assert!(!aggregate(fresh_pyth(), Some(stale_sb), None, NOW, &cfg).liq_divergent);
+        assert!(!aggregate(fresh_pyth(), Some(stale_sb), None, None, NOW, &cfg).liq_divergent);
     }
 
     #[test]
@@ -479,7 +511,7 @@ mod tests {
         // liquidations on an absent primary).
         let stale_pyth = pv(1_000_000, 1_000, NOW - 61);
         let fresh_div_sb = pv(1_300_000, 2_000, NOW - 5);
-        assert!(!aggregate(stale_pyth, Some(fresh_div_sb), None, NOW, &cfg).liq_divergent);
+        assert!(!aggregate(stale_pyth, Some(fresh_div_sb), None, None, NOW, &cfg).liq_divergent);
     }
 
     #[test]
@@ -488,8 +520,75 @@ mod tests {
         // liquidations — the whole point of the looser liquidation threshold.
         let cfg = OracleConfig { liq_max_divergence_bps: 2_000, ..CFG }; // mint 1% / liq 20%
         let sb = pv(1_050_000, 2_000, NOW - 5); // 5% off: > 1% (freezes mints), < 20% (no liq pause)
-        let r = aggregate(fresh_pyth(), Some(sb), Some(1_005_000), NOW, &cfg);
+        let r = aggregate(fresh_pyth(), Some(sb), Some(1_005_000), None, NOW, &cfg);
         assert_eq!(r.mode, OracleMode::MintFrozen, "5% disagreement freezes mints");
         assert!(!r.liq_divergent, "but is under the 20% liquidation-divergence threshold");
+    }
+
+    // ---- C1: LST canonical-rate leg ----
+
+    #[test]
+    fn canonical_caps_collateral_but_not_debt() {
+        // LST market: market price 1_000_000, canonical lower at 950_000 (the trustless stake-pool
+        // valuation). Collateral is capped at MIN(market, canonical) − k·σ; debt stays on market.
+        let cfg = OracleConfig { canonical_required: true, ..CFG };
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), Some(950_000), NOW, &cfg));
+        // collateral = 950_000 − (conf 1_000 · 21_200/10_000 = 2_120) = 947_880
+        assert_eq!(r.collateral_price, 950_000 - 2_120, "collateral capped at the canonical mid");
+        // debt = market 1_000_000 + 2_120 (unchanged — redeemers/liquidation price off the market view)
+        assert_eq!(r.debt_price, 1_000_000 + 2_120, "debt is NOT pulled down by the canonical cap");
+        assert!(r.collateral_price < r.debt_price);
+    }
+
+    #[test]
+    fn canonical_above_market_does_not_raise_collateral() {
+        // A canonical ABOVE the market price is the safe direction (market not inflated) — MIN keeps
+        // the market price, so collateral is unchanged. Defends only against upward market manip.
+        let cfg = OracleConfig { canonical_required: true, ..CFG };
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), Some(1_100_000), NOW, &cfg));
+        assert_eq!(r.collateral_price, 1_000_000 - 2_120, "MIN keeps the (lower) market price");
+        assert_eq!(r.mode, OracleMode::Ok, "fresh + agreeing + canonical present ⇒ Ok");
+    }
+
+    #[test]
+    fn lst_market_missing_canonical_freezes_mints() {
+        // canonical_required (LST) + None canonical (stale/zero/absent stake-pool rate) ⇒ freeze
+        // mints (the over-mint defense can't be verified), but prices still serve off the market.
+        let cfg = OracleConfig { canonical_required: true, ..CFG };
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), None, NOW, &cfg));
+        assert_eq!(r.mode, OracleMode::MintFrozen, "no canonical ⇒ no mint");
+        assert!(r.fresh, "the market feed is still fresh");
+        assert_eq!(r.collateral_price, 1_000_000 - 2_120, "fall back to the market price, never 0");
+    }
+
+    #[test]
+    fn lst_market_with_canonical_can_mint() {
+        // The positive control: an LST market mints when everything is fresh/agreeing AND a healthy
+        // canonical is present (here equal to market, so the cap is a no-op).
+        let cfg = OracleConfig { canonical_required: true, ..CFG };
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), Some(1_000_000), NOW, &cfg));
+        assert_eq!(r.mode, OracleMode::Ok);
+    }
+
+    #[test]
+    fn non_lst_market_ignores_canonical_arg() {
+        // canonical_required = false (default): a None canonical does NOT freeze, and a Some canonical
+        // is still honored as a collateral cap (harmless for non-LST since callers pass None).
+        let r = checked(aggregate(fresh_pyth(), Some(fresh_sb()), Some(1_005_000), None, NOW, &CFG));
+        assert_eq!(r.mode, OracleMode::Ok, "non-LST market unaffected by the absent canonical");
+    }
+
+    #[test]
+    fn canonical_invariant_holds_under_sweep() {
+        // collateral_price <= debt_price in EVERY canonical configuration, including a canonical of 0
+        // (which floors collateral to 0 but must never exceed debt or panic).
+        let cfg = OracleConfig { canonical_required: true, ..CFG };
+        for canon in [None, Some(0u128), Some(1), Some(500_000), Some(1_000_000), Some(u128::MAX)] {
+            for sb in [None, Some(fresh_sb())] {
+                for twap in [None, Some(1_005_000u128)] {
+                    checked(aggregate(fresh_pyth(), sb, twap, canon, NOW, &cfg));
+                }
+            }
+        }
     }
 }

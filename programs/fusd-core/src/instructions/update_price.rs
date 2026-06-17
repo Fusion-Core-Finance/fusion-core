@@ -82,6 +82,8 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         band_upper_ray: mo.price_band_upper_ray,
         // Liquidation-divergence threshold (bps). 0 = off.
         liq_max_divergence_bps: mo.liq_max_divergence_bps as u128,
+        // C1 LST canonical-rate leg (wired in a follow-up): non-LST markets pass false + None.
+        canonical_required: false,
     };
     let coll_decimals = ctx.accounts.market.collateral_decimals;
     // The bounded-updatable oracle program IDs (genesis = the compile-time constants; updatable by
@@ -111,7 +113,7 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         .twap(now, twap_window_secs, &twap_cfg);
 
     // --- 4. Aggregate + write spot / mode ---------------------------------------------------
-    let result = aggregate(pyth_pv, sb_pv, twap, now, &cfg);
+    let result = aggregate(pyth_pv, sb_pv, twap, None, now, &cfg);
     let market = &mut ctx.accounts.market;
 
     // The mode always reflects the latest aggregate (mints freeze the instant feeds degrade).
