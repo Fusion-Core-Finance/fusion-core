@@ -11,6 +11,11 @@ test-ledger
 # Certora prover local working/output dir (large; regenerated per run — never commit)
 .certora_internal/
 
+# cargo-mutants working/output dirs (large; regenerated per run — never commit; the reproducible
+# inputs are crates/fusd-math/mutants.toml + scripts/mutants-fusd-math.sh, which ARE committed)
+/mutants.out/
+/mutants.out.old/
+
 # Node / TS
 node_modules
 dist

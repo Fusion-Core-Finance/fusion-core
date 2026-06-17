@@ -1,0 +1,20 @@
+# cargo-mutants config for the fusd-math crown-jewel math crate.
+#
+# Reproducible entry point: scripts/mutants-fusd-math.sh. The proptest-determinism handling (two-stage
+# sweep-then-confirm) lives there — read its header before trusting a survivor list.
+# Run from the workspace root with `cargo mutants --config crates/fusd-math/mutants.toml`.
+
+# Scope to the crate's real source. kani_proofs.rs is `#[cfg(kani)]` (never compiled under `cargo test`),
+# so mutating it only produces unviable mutants — exclude it.
+examine_globs = ["crates/fusd-math/src/**/*.rs"]
+exclude_globs = ["crates/fusd-math/src/kani_proofs.rs"]
+
+# Per-mutant test command = `cargo test -p fusd-math` (the unit + proptest suite; the Kani harnesses are
+# cfg-gated out). fusd-math is a pure leaf crate, so this also keeps the per-mutant build small and fast.
+additional_cargo_test_args = ["--package", "fusd-math"]
+
+# Proptest runs are wide (raised PROPTEST_CASES) and a few unit tests loop 20k deterministic iterations;
+# give a slow-but-correct run generous headroom so it is never mistaken for a hang (false kill). Infinite
+# loops introduced by a mutant are still caught by the timeout.
+timeout_multiplier = 4.0
+minimum_test_timeout = 90

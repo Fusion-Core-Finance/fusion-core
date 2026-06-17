@@ -177,17 +177,52 @@ for any fork with a different precision or supply**. fUSD changed both axes vs L
 Kani + proptest cover the **pure-function** math in `fusd-math`. What neither reaches is the
 **cross-instruction, multi-account** invariants of the live program — properties that hold only across
 *sequences of real transactions over the on-chain accounts*, which is **Certora's** domain (CVLR over the
-`fusd-core` instructions). The properties to verify there next, which map the Phase-1 formal-verification exit:
+`fusd-core` instructions). The four properties that map the Phase-1 formal-verification exit, with their
+**current Certora status** (the harness now exists — see the coverage table below):
 
 1. **Global supply invariant** — `circulating fUSD == agg_recorded_debt − unminted_interest + bad_debt` across
    every `borrow`/`repay`/`liquidate`/`redeem`/`refresh_market` sequence (the per-tx pieces are unit/property
-   tested; the cross-tx ledger identity is Certora's).
+   tested; the cross-tx ledger identity is Certora's). **`borrow` VERIFIED (cloud); the six sibling
+   instructions authored + wired, pending a cloud run.**
 2. **On-chain bitmap concurrent-flip** — the rate-bucket bit math is proptest-proven here, but the program-level
    "no two concurrent redemptions disagree on the lowest non-empty bucket" rests on the per-market `Market`
-   write-lock serialization — a cross-transaction property, not a pure-function one.
+   write-lock serialization — a cross-transaction property, not a pure-function one. **VERIFIED (cloud)** at
+   the `add_member`/`remove_member` coupling level (Sealevel's per-market write-lock supplies the
+   serialization; Certora proves each touch atomically preserves coupling).
 3. **Liquidation always terminates** — every liquidation routes into exactly one of {RP offset, redistribution,
    buffer, shutdown}. The `recovery` waterfall is proven pure here; the *instruction* must always reach it.
+   **VERIFIED (cloud)**: full-debt conservation + strict tier ordering over symbolic `recovery::absorb`.
 4. **RP `P`/`S` consistency** across `provide`/`withdraw`/`offset` instruction interleavings — a depositor can
-   always realize their gain; no silent loss across the real account lifecycle.
+   always realize their gain; no silent loss across the real account lifecycle. **DEFERRED** — the pool's
+   `bnum` U256 division is intractable for the SMT backend (times out); stays covered by Kani + proptest +
+   `integration-tests/litesvm_reactor_realizability`.
 
-B8 (this pass) clears the math layer beneath these; Certora is the next, cross-instruction FV tier.
+B8 (this pass) clears the math layer beneath these; Certora is the cross-instruction FV tier above it.
+
+#### Certora coverage (status of the cross-instruction tier)
+
+Every passing rule drives the **real production code** (or its faithful ghost), has `rule_sanity: "basic"`
+on (in-prover non-vacuity), and flips VERIFIED→VIOLATED under a production-path / in-rule mutation
+(`certora/mutations.md` — the end-to-end non-vacuity check). Specs: `programs/fusd-core/src/certora.rs`;
+configs and the cloud lane: `certora/*.conf` + `.github/workflows/certora.yml`.
+
+| # | Invariant | Rule(s) | Conf | Status |
+|---|-----------|---------|------|--------|
+| 1 | supply (borrow) | `supply_preserved_by_borrow_ghost` | `supply.conf` | **VERIFIED** (cloud) |
+| 1 | supply (repay/refresh/liquidate/redeem/urgent_redeem/settle) | `supply_preserved_by_*_ghost` (6) | `supply.conf` | **authored, pending cloud** |
+| 2a | bitmap coupling | `bitmap_coupling_preserved_by_add_member` / `_remove_member` | `bitmap_helper.conf` | **VERIFIED** (cloud) |
+| 3 | liquidation — debt conserved | `absorb_conserves_debt` | `absorb.conf` | **VERIFIED** (cloud) |
+| 3 | liquidation — tier ordering | `absorb_unhomed_iff_no_tier_covers` (+ `absorb_unhomed_reachable`) | `absorb.conf` | **VERIFIED** (cloud) |
+| 4 | RP P/S realizability | — | — | **deferred** (U256/SMT intractable) |
+
+Two honest limitations on #1, stated rather than papered over:
+
+- **Real `mint_to`/`burn` CPI modeling is blocked.** A true token CPI needs a workspace-global
+  `[patch.crates-io] spl-token` that corrupts the deployable `.so` (`certora/README.md` §"Two prover
+  frontiers"). Both the verified borrow rule and the six siblings model `circulating` as a pure `NativeInt`
+  **ghost** and replay each handler's documented accounting delta. This proves the per-instruction supply
+  *algebra* is consistent; the runnable litesvm `assert_supply_invariant` (`integration-tests/src/lib.rs`)
+  is the oracle that ties that algebra to the real handler bodies.
+- **The six siblings are authored, not yet cloud-verified.** They stay in the identical blocker-free
+  `NativeInt` regime as the verified borrow rule and are wired into `supply.conf`; a cloud run with
+  `CERTORAKEY` is the gating step to flip them (and tick `mutations.md` rows S2–S7).
