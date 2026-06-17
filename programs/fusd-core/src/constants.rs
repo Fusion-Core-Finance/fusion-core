@@ -420,6 +420,10 @@ pub const SWITCHBOARD_ON_DEMAND_PROGRAM_ID: Pubkey =
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
 /// Raydium CLMM program — owner of every Raydium `PoolState` account sampled by `sample_twap`.
 pub const RAYDIUM_CLMM_PROGRAM_ID: Pubkey = pubkey!("CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK");
+/// SPL Stake Pool program — owner of the `StakePool` account read for the C1 LST canonical-rate
+/// leg (`update_price`). The canonical rate (`total_lamports / pool_token_supply`) is read directly
+/// from this trustless on-chain state, never a swap/DEX.
+pub const SPL_STAKE_POOL_PROGRAM_ID: Pubkey = pubkey!("SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy");
 
 // Note: `update_price` defers ALL feed staleness to `fusd_oracle::aggregate` (which uses
 // `MarketOracle.max_age_secs`), so a stale feed yields a conservative price + a frozen mint —

@@ -20,6 +20,7 @@ pub mod cdp;
 pub mod clmm;
 pub mod constants;
 pub mod errors;
+pub mod stake_pool;
 pub mod events;
 pub mod instructions;
 pub mod reconcile;
