@@ -37,11 +37,12 @@ pub struct Shutdown<'info> {
 pub fn handler(ctx: Context<Shutdown>) -> Result<()> {
     require!(!ctx.accounts.market.shutdown, FusdError::MarketShutdown);
     // Fold aggregate interest so the TCR check sees the current present debt.
-    let now = Clock::get()?.unix_timestamp;
+    let clock = Clock::get()?;
+    let now = clock.unix_timestamp;
     accrual::accrue(&mut ctx.accounts.market, now)?;
 
     let m = &ctx.accounts.market;
-    let slot = Clock::get()?.slot;
+    let slot = clock.slot;
     let staleness = slot.saturating_sub(m.spot_updated_slot);
 
     // Oracle failure: a market that WAS priced (`spot > 0`) has gone stale past the outage

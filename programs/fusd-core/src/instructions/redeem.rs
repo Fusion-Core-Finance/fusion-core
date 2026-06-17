@@ -59,13 +59,14 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     );
     // A shut-down market winds down through `urgent_redeem` (unordered, 0-fee) instead.
     require!(!ctx.accounts.market.shutdown, FusdError::MarketShutdown);
-    let now = Clock::get()?.unix_timestamp;
+    let clock = Clock::get()?;
+    let now = clock.unix_timestamp;
     accrual::accrue(&mut ctx.accounts.market, now)?;
     let spot = ctx.accounts.market.spot;
     let fee_bps = ctx.accounts.market.redemption_fee_bps as u128;
 
     // Redemption pays face value against a fresh oracle.
-    let slot = Clock::get()?.slot;
+    let slot = clock.slot;
     require!(spot > 0, FusdError::OracleUnavailable);
     require!(
         slot.saturating_sub(ctx.accounts.market.spot_updated_slot) <= MAX_PRICE_STALENESS_SLOTS,
