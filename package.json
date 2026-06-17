@@ -6,7 +6,8 @@
   "description": "fUSD — Solana-native, futarchy-governed overcollateralized CDP stablecoin",
   "scripts": {
     "lint": "prettier --check \"{tests,sdk,scripts,migrations}/**/*.ts\"",
-    "lint:fix": "prettier --write \"{tests,sdk,scripts,migrations}/**/*.ts\""
+    "lint:fix": "prettier --write \"{tests,sdk,scripts,migrations}/**/*.ts\"",
+    "test:sdk": "ts-mocha -p ./tsconfig.json -t 20000 'sdk/test/**/*.spec.ts' 'keepers/**/*.spec.ts'"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

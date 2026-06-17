@@ -155,9 +155,47 @@ function every(label: string, secs: number, fn: () => Promise<void>) {
   return setInterval(tick, secs * 1000);
 }
 
+// Fail fast on a malformed config.json. A 0/negative/NaN interval would busy-loop setInterval
+// (machine-gunning the RPC + draining the keeper wallet), and a missing/typo'd per-market field
+// would otherwise throw cryptically mid-crank — or, for a pythMode typo, silently mis-route to
+// "persistent" and log a per-tick error forever while the market self-freezes. One clear startup
+// error beats all three.
+export function validateConfig(cfg: KeeperCfg): void {
+  const bail = (m: string): never => {
+    throw new Error(`config: ${m}`);
+  };
+  const pk = (field: string, v: string | undefined) => {
+    if (!v) return bail(`${field} missing`);
+    try {
+      new PublicKey(v);
+    } catch {
+      bail(`${field} is not a valid base58 pubkey: ${v}`);
+    }
+  };
+  for (const k of ["twapIntervalSecs", "priceIntervalSecs", "refreshIntervalSecs"] as const) {
+    const v = cfg[k];
+    if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v <= 0))
+      bail(`${k} must be a positive number (got ${v})`);
+  }
+  if (!Array.isArray(cfg.markets) || cfg.markets.length === 0)
+    bail("markets must be a non-empty array");
+  cfg.markets.forEach((m, i) => {
+    const at = `markets[${i}]`;
+    pk(`${at}.collateralMint`, m.collateralMint);
+    pk(`${at}.clmmPool`, m.clmmPool);
+    if (m.pythMode !== "persistent" && m.pythMode !== "post")
+      bail(`${at}.pythMode must be "persistent" or "post" (got ${m.pythMode})`);
+    if (!/^[0-9a-fA-F]{64}$/.test(m.pythFeedIdHex ?? ""))
+      bail(`${at}.pythFeedIdHex must be 64 hex chars`);
+    if (m.pythMode === "persistent") pk(`${at}.pythAccount`, m.pythAccount);
+    if (m.switchboardFeed) pk(`${at}.switchboardFeed`, m.switchboardFeed);
+  });
+}
+
 async function main() {
   const cfgPath = process.argv[2];
   const cfg: KeeperCfg = cfgPath ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : DEFAULT_CFG;
+  validateConfig(cfg);
   const url = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
   const wallet = loadWallet();
   const provider = new anchor.AnchorProvider(new Connection(url, "confirmed"), wallet, { commitment: "confirmed" });
@@ -184,4 +222,8 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// Guard the entrypoint so the module is importable (e.g. by tests for `validateConfig`) without
+// kicking off the crank loop; only run when invoked directly (`ts-node keepers/keeper.ts`).
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
