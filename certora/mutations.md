@@ -10,6 +10,10 @@ VERIFIED to VIOLATED under the mutation. The **Runnable-verified** column is the
 litesvm layer (apply the mutation to the program, rebuild the `.so`, confirm the named suite FAILs, then
 revert). Rows left ☐ are honestly not-yet-run, not assumed.
 
+The `S*`/`B*`/`L*`/`R*` IDs are stable, **order-independent** labels, not a positional order: the
+`rule` array in each `.conf` is unordered, so an ID's number need not match where its rule is defined
+(e.g. `settle_bad_debt` is `S5` here but is defined last in `supply.conf` / `certora.rs`).
+
 | ID | Rule(s) | Mutation (production path) | Must fail | Runnable-verified | Certora |
 |----|---------|----------------------------|-----------|:---:|:---:|
 | S1 | `supply_preserved_by_borrow_ghost` | In `borrow.rs`, drop `market.agg_recorded_debt = new_agg` (mint without booking the debt). | supply identity: `circulating > agg − unminted + bad` | ✅ `assert_supply_invariant` fired (`circulating 15_000_000_000` vs `0`) | ✅ rule VERIFIED; mutation → VIOLATED |

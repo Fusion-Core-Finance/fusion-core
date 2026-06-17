@@ -18,3 +18,37 @@ additional_cargo_test_args = ["--package", "fusd-math"]
 # loops introduced by a mutant are still caught by the timeout.
 timeout_multiplier = 4.0
 minimum_test_timeout = 90
+
+# Justified EQUIVALENT mutants — behaviourally inert, so no test can (or should) kill them. Each is
+# excluded by its EXACT `--list` description (never a whole line) so a genuinely-caught sibling mutant on
+# the same line is still tested. Rationale per entry; full write-up in PROOF_STRENGTH.md "Mutation coverage".
+exclude_re = [
+  # HALF_WAD / HALF_RAY are unused `pub const`s (no caller anywhere in the workspace), so every mutation
+  # of their initializer is unobservable. (Flagged as dead code — see PROOF_STRENGTH.md.)
+  'lib\.rs:40:32: replace / with %',
+  'lib\.rs:40:32: replace / with \*',
+  'lib\.rs:41:32: replace / with %',
+  'lib\.rs:41:32: replace / with \*',
+  # `Some((q, r != 0))` lives in the `#[cfg(kani)]` arm of wide_mul_div — not compiled under `cargo test`,
+  # so the mutation produces identical test-build behaviour.
+  'lib\.rs:76:20: replace != with == in wide_mul_div',
+  # `(lo_lo & M) | (cross << 64)` ORs DISJOINT bit ranges (low 64 | high), so `|` == `^` == `+` here.
+  'lib\.rs:114:26: replace \| with \^ in wide_mul',
+  # `(rem << 1) | bit`: bit 0 of `rem << 1` is always 0 and `bit` ∈ {0,1}, so `|` == `^` (no overlap).
+  'lib\.rs:142:26: replace \| with \^ in div_256_by_128',
+  # `expo < 0` vs `expo <= 0` differ only at expo==0, where `base * ten_pow(0)` (=base*1) equals
+  # `base / ten_pow(0)` (=base/1): both branches yield `base`. Inert.
+  'oracle_scale\.rs:29:26: replace < with <= in px_to_ray',
+  # `stake == 0 || delta == 0` early-out is an optimisation, not a gate: mul_div_floor(0,·)=mul_div_floor(·,0)=0,
+  # so `&&` returns the same Ok(0) for the single-zero cases.
+  'redistribution\.rs:152:19: replace \|\| with && in pending_one',
+  # `if bumps > 0` vs `>= 0`: when bumps==0 the mutant enters the branch but `scale.checked_add(0)` is a
+  # no-op and the (current) scale cell is already addressable, so the state is unchanged.
+  'reactor_pool\.rs:214:18: replace > with >= in offset',
+  # The `if bumps > 4` rescale cap is UNREACHABLE: p*factor ≤ 1e36 and each ×SCALE_FACTOR step needs
+  # num < 1e27, so the loop terminates in ≤ 2 bumps. `==`/`>=` only differ at bumps≥4, never reached.
+  'reactor_pool\.rs:254:22: replace > with == in update_product',
+  'reactor_pool\.rs:254:22: replace > with >= in update_product',
+  'reactor_pool\.rs:281:18: replace > with == in update_product_u128',
+  'reactor_pool\.rs:281:18: replace > with >= in update_product_u128',
+]

@@ -226,3 +226,47 @@ Two honest limitations on #1, stated rather than papered over:
 - **The six siblings are authored, not yet cloud-verified.** They stay in the identical blocker-free
   `NativeInt` regime as the verified borrow rule and are wired into `supply.conf`; a cloud run with
   `CERTORAKEY` is the gating step to flip them (and tick `mutations.md` rows S2–S7).
+
+### Mutation coverage (cargo-mutants — measuring what the *suite* actually constrains)
+
+Kani and proptest say what the math *proves*; mutation testing says what the *test suite* would *notice*.
+`cargo-mutants` mechanically breaks every line of the crate (operator swaps, comparison flips, return-value
+replacements) and reruns the suite against each — a surviving mutant is a line no test constrains. This is
+the whole-crate, automated form of the four manual mutation checks the B8 review ran by hand.
+
+**Config (committed, reproducible):** `crates/fusd-math/mutants.toml` + `scripts/mutants-fusd-math.sh`. The
+wrapper documents the two-stage proptest-determinism method: a broad sweep at the suite's tuned in-code case
+counts, then high-`PROPTEST_CASES` confirmation of every survivor (cargo-mutants runs each suite once, and
+the B8 proptests use an unpinned seed, so a single low-case run can flag a probabilistic catch as a false
+survivor). `kani_proofs.rs` is excluded (`#[cfg(kani)]`, never built under `cargo test`).
+
+**Result:** 377 mutants generated → **2 unviable** (whole-function `Default::default()` replacements that
+don't compile) · **375 viable**. Of the 375: **361 caught = every non-equivalent mutant (100%)**; the
+remaining **14 are justified equivalent mutants** (behaviourally inert, excluded by exact description in
+`mutants.toml` with a one-line rationale each).
+
+The first sweep left 23 survivors; triage split them into **9 real coverage gaps** (now killed by new
+tests, each shown to flip the mutant from survived→caught — the B8 loop) and **14 equivalent mutants**:
+
+| Real gap (now killed) | New test | Property pinned |
+|---|---|---|
+| `wad_mul_up` fully replaceable (`Some(0)`/`None`/`Some(1)`) — the WAD ceil twin was untested (prod uses `ray_mul_up`) | `wad_ray_ops` (extended) | ceil rounds up by 1 on a remainder |
+| `offset` error-feedback writeback (`- → /`) — `partial_offset_stays_solvent` only bounds `last_loss_error ∈ [1,total]` | `offset_pins_exact_loss_error_feedback` | exact residual `total − (debt·1e18 % total)` |
+| `compounded_deposit` scale-diff (`- → +`, `==1 → !=1`) — offset/Kani suites run only at scale 0 | `compounded_deposit_across_scale_roll` | per-scale `/SCALE_FACTOR`, hard-0 at ≥2 rolls |
+| `compounded_deposit` dust guard (`< → <=`, `< → ==`) | `compounded_deposit_dust_guard_at_threshold` | strict `<`: on-floor deposit kept |
+| `collateral_gain` next-scale portion (`/ → %`) | `collateral_gain_includes_next_scale_portion` | `snap.scale+1` cell folded in, `/SCALE_FACTOR` |
+
+The scale-roll gaps are the notable ones: the RP `P`/`S` scale-bump arithmetic was unexercised by **both**
+proptest **and** Kani (both feed `u8` inputs that never bump `scale`), so the depositor-realizability-across-
+a-scale-roll path was unconstrained by the suite. The code is correct Liquity logic — these are coverage
+gaps now closed, not bugs. (`wad_mul_up`/`HALF_WAD`/`HALF_RAY` surfaced as unused dead `pub` items — flagged,
+not removed.)
+
+The 14 equivalents, by class: unused dead consts (`HALF_WAD`/`HALF_RAY`); a `#[cfg(kani)]`-only line; two
+disjoint-bit `| ≡ ^` ORs; an `expo==0` boundary where `base·1 == base/1`; a `|| ≡ &&` early-out that
+`mul_div_floor(0,·)=0` makes inert; a `bumps>0 ≡ >=0` no-op `+0`; and the unreachable `bumps>4` rescale cap
+(the loop provably terminates in ≤2 bumps). Full per-mutant rationale: `mutants.toml` `exclude_re`.
+
+This completes the four-tier FV-evidence picture for `fusd-math`: **Kani** (exhaustive over tiny inputs) ·
+**proptest** (wide random / stateful) · **cargo-mutants** (suite-strength: 100% of non-equivalent mutants
+killed) · **Certora** (cross-instruction, above the crate).

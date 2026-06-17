@@ -183,7 +183,7 @@ pub fn supply_preserved_by_borrow_ghost() {
 // handler's documented accounting delta, anchored to the real field assignments. This sidesteps the
 // SPL-token CPI mock — a workspace-global `[patch.crates-io] spl-token` would corrupt the deployable `.so`
 // (certora/README.md §"Two prover frontiers"). The runnable litesvm `assert_supply_invariant` is the
-// handler-level oracle for these same deltas (mutations.md rows S2–S5). The rule proves the per-instruction
+// handler-level oracle for these same deltas (mutations.md rows S2–S7). The rule proves the per-instruction
 // supply ALGEBRA is consistent; the litesvm layer ties that algebra to the real handler.
 //
 // STATUS: authored, pending a cloud run. The borrow sibling is cloud-VERIFIED and these stay in its exact

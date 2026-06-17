@@ -446,6 +446,84 @@ mod tests {
         assert!(gain >= 3000 - 2 && gain <= 3000, "no drift: got {} expected ~3000", gain);
     }
 
+    /// The Liquity error-feedback term must be the EXACT floor-division residual carried forward
+    /// (`loss_per_unit * total - loss_numerator`), not merely within `[1, total]`. A fresh partial
+    /// offset of 1 debt against a 7-unit pool: `loss_numerator = 1 * 1e18`, so
+    /// `last_loss_error = total - (1e18 % 7) = 7 - 1 = 6`. (Mutating the `- loss_numerator` writeback —
+    /// e.g. to `/` — collapses this to ~1, still inside `[1, total]`, so the bounds-only check in
+    /// `partial_offset_stays_solvent` misses it; this exact pin catches it.)
+    #[test]
+    fn offset_pins_exact_loss_error_feedback() {
+        let mut st = PoolState::new();
+        st.total_deposits = 7;
+        let mut g = grid();
+        offset(&mut st, &mut g, STRIDE, 1, 10).unwrap();
+        assert_eq!(st.last_loss_error, 6, "exact residual = total - (debt*1e18 % total) = 7 - 1");
+    }
+
+    /// `compounded_deposit`'s scale-diff arithmetic — the scale-roll path that BOTH the offset
+    /// proptests and the Kani harnesses (all run at scale 0, `u8` inputs never bump scale) never reach.
+    /// compounded = `initial * P_now/P_snap`, with one extra `/SCALE_FACTOR` per scale step and a hard 0
+    /// at >= 2 steps (Liquity). Snapshot taken at scale 1 so the `st.scale - snap.scale` subtraction is
+    /// genuinely exercised (a `+` mutation flips diff 0->2 / 1->3, both zeroing the result).
+    #[test]
+    fn compounded_deposit_across_scale_roll() {
+        let initial = 1_000_000_000_000u128; // 1e12, far above the dust floor (initial/1e9 = 1e3)
+        let snap = Snapshot { p: SCALE_FACTOR, s: 0, scale: 1, epoch: 0 };
+        let mut st = PoolState::new();
+
+        // same scale (diff 0), P_now == P_snap: no scale division.
+        st.scale = 1;
+        st.p = SCALE_FACTOR;
+        assert_eq!(compounded_deposit(&st, initial, &snap), initial, "scale_diff 0");
+
+        // one scale roll (diff 1): the extra /SCALE_FACTOR is exactly offset by P_now = P_snap*SCALE_FACTOR.
+        st.scale = 2;
+        st.p = DECIMAL_PRECISION; // == SCALE_FACTOR * SCALE_FACTOR
+        assert_eq!(compounded_deposit(&st, initial, &snap), initial, "scale_diff 1: one /SCALE_FACTOR");
+
+        // two scale rolls (diff >= 2): negligible, zeroed.
+        st.scale = 3;
+        st.p = DECIMAL_PRECISION;
+        assert_eq!(compounded_deposit(&st, initial, &snap), 0, "scale_diff >= 2 zeroed");
+    }
+
+    /// The Liquity dust guard `compounded < initial/1e9 -> 0` is a STRICT `<`: a deposit sitting exactly
+    /// ON the floor is kept, not zeroed (a `<=`/`==` mutation would flip it). P_snap = 1e18, P_now = 1e9
+    /// (a 1e9x product collapse, scale unchanged) makes compounded land exactly on the floor.
+    #[test]
+    fn compounded_deposit_dust_guard_at_threshold() {
+        let initial = DECIMAL_PRECISION; // 1e18; dust floor = initial/1e9 = 1e9
+        let snap = Snapshot { p: DECIMAL_PRECISION, s: 0, scale: 0, epoch: 0 };
+        let mut st = PoolState::new();
+        st.scale = 0;
+
+        // exactly on the floor: kept (strict `<`).
+        st.p = SCALE_FACTOR; // compounded = floor(1e18 * 1e9 / 1e18) = 1e9 == floor
+        assert_eq!(compounded_deposit(&st, initial, &snap), SCALE_FACTOR, "on-floor deposit is kept");
+
+        // just below the floor: zeroed as dust.
+        st.p = SCALE_FACTOR - 1; // compounded = 1e9 - 1 < floor
+        assert_eq!(compounded_deposit(&st, initial, &snap), 0, "sub-floor deposit -> dust 0");
+    }
+
+    /// `collateral_gain` folds in the depositor's gains that landed in the NEXT scale cell
+    /// (`snap.scale + 1`), divided by SCALE_FACTOR — the Liquity scale-correction the scale-0 offset/Kani
+    /// suites never populate. Construct an S-grid with a value only in the (epoch 0, scale 1) cell; the
+    /// `+3e8 < SCALE_FACTOR` tail is dropped by the real floor-division but is the WHOLE result under a
+    /// `%` mutation, so the two diverge.
+    #[test]
+    fn collateral_gain_includes_next_scale_portion() {
+        let mut g = grid();
+        let snap = Snapshot { p: DECIMAL_PRECISION, s: 0, scale: 0, epoch: 0 };
+        let initial = 10_000_000_000_000_000u128; // 1e16 ($10B native)
+        let second_portion = 500_000_000_000_000_000_000u128; // 5e20, the intended next-scale contribution
+        let idx = s_idx(0, 1, STRIDE, g.len()).unwrap();
+        g[idx] = second_portion * SCALE_FACTOR + 300_000_000; // 5e29 + 3e8
+        // gain = initial * (0 + 5e20) / P_snap / 1e18 = 1e16 * 5e20 / 1e18 / 1e18 = 5.
+        assert_eq!(collateral_gain(&g, STRIDE, initial, &snap).unwrap(), 5);
+    }
+
     #[test]
     fn rejects_debt_exceeding_deposits() {
         let mut st = PoolState::new();
