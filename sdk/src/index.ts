@@ -138,6 +138,13 @@ export function currentDebt(
   return recordedDebt + accruedInterest(recordedDebt, rateBps, dt);
 }
 
+/**
+ * Above-MCR at the GIVEN price: `debt <= maxDebt(collateralValue(ink, spot), mcrBps)` (mirrors
+ * `cdp::is_healthy`). The price is the caller's choice and it MATTERS: on-chain the borrow/withdraw
+ * gate prices at the LOW `Market.spot`, while liquidation eligibility prices at the HIGH
+ * `Market.debt_spot` (`debt_spot >= spot`, ARCHITECTURE §7). Pass `spot` for "can I borrow / am I
+ * above MCR"; pass `debt_spot` for "am I liquidatable" (which is strictly more lenient).
+ */
 export const isHealthy = (ink: bigint, debt: bigint, spot: bigint, mcrBps: bigint) =>
   debt <= maxDebt(collateralValue(ink, spot), mcrBps);
 /** Collateral ratio in bps (value/debt), or `null` when there is no debt. */
@@ -160,6 +167,12 @@ export interface HealthView {
   currentDebt: bigint;
   collateralValue: bigint;
   collateralRatioBps: bigint | null;
+  /**
+   * Above-MCR at the LOW `Market.spot` — the BORROW/withdraw view (matches borrow.rs/withdraw.rs),
+   * NOT the liquidation predicate. On-chain liquidation eligibility prices at the HIGH
+   * `Market.debt_spot`, so a position can read `healthy: false` here yet be un-liquidatable on-chain.
+   * To model liquidatability, call `isHealthy(ink, debt, market.debtSpot, mcrBps)` directly.
+   */
   healthy: boolean;
   maxBorrow: bigint;
 }
