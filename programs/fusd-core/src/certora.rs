@@ -391,8 +391,9 @@ pub fn c1_canonical_caps_collateral() {
 /// WITH a canonical leg is `<=` the price WITHOUT it. So enabling the canonical leg can never raise a
 /// borrower's mint power — it is a purely conservative cap, never a price opinion that inflates.
 ///
-/// Mutation C1 (`min` → `max`, or drop the cap): when `c > price` the capped result exceeds the
-/// uncapped one ⇒ VIOLATED.
+/// Mutation C1 (`min` → `max`): when `c > price` the WITH result `max(price,c)` exceeds the uncapped
+/// WITHOUT result `price` ⇒ VIOLATED. (Dropping the cap does NOT break this rule — both legs then
+/// collapse to `price`; drop-cap is caught only by `c1_canonical_caps_collateral` above.)
 #[rule]
 pub fn c1_canonical_never_raises_collateral() {
     let price: u128 = nondet();

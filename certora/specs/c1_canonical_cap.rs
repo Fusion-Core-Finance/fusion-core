@@ -27,9 +27,12 @@
 //! `canonical_invariant_holds_under_sweep`) and the litesvm end-to-end suite
 //! `integration-tests/tests/litesvm_c1_lst_canonical.rs`.
 //!
-//! Mutation that must break BOTH the rules and the runnable layer (see `certora/mutations.md` row C1):
-//! in `aggregate`, drop the cap — `Some(c) => chosen.price.min(c)` → `Some(c) => chosen.price` (or
-//! flip `.min` to `.max`). Then C1-CAP fails when `price > c` and C1-MONOTONE fails when `c > price`.
+//! Non-vacuity (see `certora/mutations.md` row C1) — TWO DISTINCT mutations in `aggregate`, each
+//! killing one rule (one mutation does NOT break both):
+//!   (a) drop the cap (`Some(c) => chosen.price.min(c)` → `Some(c) => chosen.price`) breaks C1-CAP
+//!       when `price > c`. It does NOT break C1-MONOTONE — both legs then collapse to `price`.
+//!   (b) flip `.min` to `.max` breaks C1-MONOTONE when `c > price` (`max(price,c) > price`), and also
+//!       re-breaks C1-CAP when `price > c`.
 //!
 //! ┌─ STATUS ───────────────────────────────────────────────────────────────────────────────────┐
 //! │ Authored to the cloud-verified recipe (pure-arithmetic regime, identical shape to the        │
