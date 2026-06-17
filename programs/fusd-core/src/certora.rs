@@ -19,6 +19,7 @@ use crate::constants::ZOMBIE_BUCKET;
 use crate::state::{Market, Position, RedemptionBitmap};
 use fusd_math::rate_bucket as rb;
 use fusd_math::recovery;
+use fusd_oracle::{aggregate, OracleConfig, PriceView};
 
 /// Round-trip smoke: must VERIFY. Proves the toolchain (cargo certora-sbf), the `.conf`, and the cloud
 /// submission/solve all work before any real rule is ported. Phrased so the SOLVER must actually reason
@@ -341,4 +342,65 @@ pub fn absorb_unhomed_reachable() {
     let avail: u128 = nondet();
     let a = recovery::absorb(debt, cap, false, bal, avail);
     cvlr_satisfy!(a.unhomed > 0);
+}
+
+// ===================== Invariant C1 (LST canonical-rate cap) — oracle aggregate =====================
+//
+// AUTHORED, PENDING CLOUD RUN (no CERTORAKEY locally). These drive the REAL `fusd_oracle::aggregate`
+// over nondet prices, in the SAME blocker-free pure-arithmetic regime as `absorb_conserves_debt`:
+// no Anchor `Context`, no account memory, no CPI, no summaries — `aggregate` is a pure fn over plain
+// structs. `k_bps = 0` makes the −k·σ haircut fold to 0 (it is orthogonal to C1 and would otherwise
+// pull the proof into the u128 mul/div prover frontier the README documents); the C1 MIN-cap line is
+// fully exercised, so mutation C1 stays live. `switchboard`/`dex_twap` are absent, so the chosen mid
+// is the Pyth view — but the cap invariant holds for ANY chosen feed, so this loses no generality.
+
+/// Build the C1-isolating config: every threshold off and `k_bps = 0`, so `aggregate`'s collateral
+/// price reduces to exactly `MIN(market, canonical)` — the C1 cap, with nothing else in the cone.
+fn c1_isolating_cfg() -> OracleConfig {
+    OracleConfig {
+        max_conf_bps: 0,
+        max_deviation_bps: 0,
+        twap_max_divergence_bps: 0,
+        max_age_secs: 0,
+        k_bps: 0, // haircut folds to 0 → pure-min regime
+        band_lower_ray: 0,
+        band_upper_ray: 0,
+        liq_max_divergence_bps: 0,
+        canonical_required: false,
+    }
+}
+
+/// C1 SAFETY (the cap is an UPPER BOUND): with a present canonical valuation `c`, the collateral
+/// (mint/LTV) price `aggregate` returns is always `<= c`. So an upward-manipulated market feed can
+/// never lift borrowing power past the trustless on-chain stake-pool rate (the BOLD-08 over-mint
+/// defense). Drives the real `aggregate`; `c` and the market `price` are full-range symbolic u128.
+///
+/// Mutation C1 (drop the cap in `aggregate` — `Some(c) => chosen.price.min(c)` → `Some(c) =>
+/// chosen.price`): when `price > c` the collateral price becomes `price > c` ⇒ VIOLATED.
+#[rule]
+pub fn c1_canonical_caps_collateral() {
+    let price: u128 = nondet();
+    let c: u128 = nondet(); // the canonical LST valuation (RAY USD per whole token)
+    let pyth = PriceView { price, conf: 0, expo: 0, publish_ts: 0 };
+    let r = aggregate(pyth, None, None, Some(c), 0, &c1_isolating_cfg());
+    clog!(c);
+    cvlr_assert!(r.collateral_price <= c);
+}
+
+/// C1 MONOTONICITY (the leg only ever LOWERS collateral): for identical inputs, the collateral price
+/// WITH a canonical leg is `<=` the price WITHOUT it. So enabling the canonical leg can never raise a
+/// borrower's mint power — it is a purely conservative cap, never a price opinion that inflates.
+///
+/// Mutation C1 (`min` → `max`, or drop the cap): when `c > price` the capped result exceeds the
+/// uncapped one ⇒ VIOLATED.
+#[rule]
+pub fn c1_canonical_never_raises_collateral() {
+    let price: u128 = nondet();
+    let c: u128 = nondet();
+    let cfg = c1_isolating_cfg();
+    let pyth = PriceView { price, conf: 0, expo: 0, publish_ts: 0 };
+    let with_canonical = aggregate(pyth, None, None, Some(c), 0, &cfg);
+    let without = aggregate(pyth, None, None, None, 0, &cfg);
+    clog!(c);
+    cvlr_assert!(with_canonical.collateral_price <= without.collateral_price);
 }

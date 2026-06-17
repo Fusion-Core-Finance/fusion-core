@@ -38,6 +38,14 @@ silently dropped.
 
 The English/pseudocode specifications of all four invariants live in `specs/*.rs`.
 
+### Authored, pending cloud run
+
+| Invariant | Rule(s) | Conf | Mutation → VIOLATED |
+|---|---|---|---|
+| **C1 LST canonical cap** — `collateral_price ≤ canonical`, and the leg never RAISES collateral | `c1_canonical_caps_collateral` / `c1_canonical_never_raises_collateral` | `c1_canonical.conf` | drop the cap in `fusd_oracle::aggregate` (`Some(c) => chosen.price.min(c)` → `chosen.price`) |
+
+C1 drives the real `fusd_oracle::aggregate` over symbolic u128 prices, in the same pure-arithmetic regime as the VERIFIED `absorb_*` rules (`k_bps = 0` folds the orthogonal −k·σ haircut to 0, keeping the proof off the u128 mul/div frontier). It compiles under `cargo check -p fusd-core --features certora`, and its mutation is confirmed at the runnable layer (`mutations.md` row C1 — the host test `canonical_caps_collateral_but_not_debt` FAILs under it), but it has **not** been run on the Certora cloud yet (needs `CERTORAKEY`). Run `certoraSolanaProver certora/c1_canonical.conf` to promote it to the VERIFIED table.
+
 ## The working recipe
 
 - **Toolchain:** `certoraSolanaProver` (from `pip install certora-cli`) + the `cargo certora-sbf` build
@@ -114,7 +122,8 @@ may be an on-chain bug with funds implications. Do not weaken the rule to make i
 - `programs/fusd-core/src/certora.rs` — the CVLR `#[rule]`s (compiled only under `--features certora`).
 - `specs/*.rs` — the English/pseudocode specification of each invariant.
 - `supply.conf` · `bitmap_helper.conf` · `absorb.conf` · `round_trip.conf` — the run configs (build +
-  rules + flags). `bitmap.conf` — the superseded characterized-frontier attempt.
+  rules + flags). `c1_canonical.conf` — the C1 LST-cap rules (authored, pending cloud). `bitmap.conf`
+  — the superseded characterized-frontier attempt.
 - `cvlr_inlining.txt` · `cvlr_summaries.txt` — the Solana memory-model inlining/summary directives.
 - `mutations.md` — the non-vacuity acceptance matrix (the production break each rule must fail on).
 - `../scripts/check-no-certora.sh` — the isolation gate. `../.github/workflows/certora.yml` — the cloud lane.
