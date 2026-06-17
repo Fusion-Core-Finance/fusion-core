@@ -5,7 +5,7 @@ use crate::constants::{
     CONFIG_SEED, DEX_TWAP_SEED, MARKET_ORACLE_SEED, MARKET_SEED, MAX_ORACLE_CONF_BPS,
     MAX_ORACLE_DEVIATION_BPS, MAX_ORACLE_K_BPS, MAX_ORACLE_MAX_AGE_SECS, MAX_TWAP_DIVERGENCE_BPS,
     MAX_LIQ_DIVERGENCE_BPS, MAX_TWAP_STALENESS_SECS, MAX_TWAP_WINDOW_SECS, MIN_ORACLE_K_BPS,
-    MIN_PRICE_BAND_RATIO, MIN_TWAP_MIN_SAMPLES, MIN_TWAP_WINDOW_SECS,
+    MIN_PRICE_BAND_RATIO, MIN_TWAP_MIN_SAMPLES, MIN_TWAP_WINDOW_SECS, TWAP_RING_CAPACITY,
 };
 use crate::errors::FusdError;
 use crate::state::{DexTwap, Market, MarketOracle, ProtocolConfig};
@@ -138,7 +138,15 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
             && args.twap_window_secs <= MAX_TWAP_WINDOW_SECS,
         FusdError::ParamOutOfBounds
     );
-    require!(args.twap_min_samples >= MIN_TWAP_MIN_SAMPLES, FusdError::ParamOutOfBounds);
+    // Upper-bounded by the ring capacity: a `min_samples` the 64-slot ring can never reach
+    // (> capacity) would leave `twap()` permanently None → aggregate stuck `MintFrozen` → this
+    // market's mints frozen forever (fail-closed, no fund loss, but a permanent foot-gun). Capacity
+    // itself is satisfiable — the ring `count` saturates AT capacity.
+    require!(
+        args.twap_min_samples >= MIN_TWAP_MIN_SAMPLES
+            && (args.twap_min_samples as usize) <= TWAP_RING_CAPACITY,
+        FusdError::ParamOutOfBounds
+    );
     require!(
         args.twap_max_staleness_secs > 0
             && args.twap_max_staleness_secs <= MAX_TWAP_STALENESS_SECS,

@@ -661,3 +661,30 @@ fn update_price_arms_on_resume_grace_after_a_stall() {
     let f = liquidate(&mut svm, &gov, &coll, &b.position).expect_err("grace blocks liquidation post-resume");
     assert_eq!(custom_code(&f), E_LIQUIDATION_GRACE_PERIOD);
 }
+
+// ============================ init_market_oracle param bounds ============================
+
+/// `twap_min_samples` must be upper-bounded by the ring capacity. A value the 64-slot ring can never
+/// reach would leave `twap()` permanently None → aggregate stuck `MintFrozen` → that market's mints
+/// frozen forever. `init_market_oracle` rejects it; capacity itself (satisfiable — `count` saturates
+/// AT capacity) is accepted.
+#[test]
+fn init_market_oracle_rejects_unreachable_twap_min_samples() {
+    let (mut svm, gov, cma) = actors();
+    let coll = bootstrap_market(&mut svm, &gov, &cma);
+    let quote = create_quote_mint(&mut svm, &gov, FUSD_DECIMALS);
+    let cap = fusd_core::constants::TWAP_RING_CAPACITY as u32;
+
+    // Above capacity → rejected (the ring can never satisfy it).
+    let mut args = default_oracle_args();
+    args.twap_min_samples = cap + 1;
+    let f = send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .expect_err("min_samples > ring capacity must be rejected");
+    assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
+
+    // Exactly capacity → accepted (a full ring satisfies it).
+    let mut args = default_oracle_args();
+    args.twap_min_samples = cap;
+    send(&mut svm, &[init_market_oracle_ix(&gov.pubkey(), &coll, &quote, args)], &gov, &[])
+        .expect("min_samples == ring capacity is valid");
+}
