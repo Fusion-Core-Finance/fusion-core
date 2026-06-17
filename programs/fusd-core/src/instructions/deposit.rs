@@ -15,7 +15,7 @@ pub struct Deposit<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
 
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
@@ -23,7 +23,7 @@ pub struct Deposit<'info> {
         bump = market.bump,
         has_one = collateral_vault,
     )]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
     #[account(
         mut,
@@ -31,13 +31,13 @@ pub struct Deposit<'info> {
         bump = position.bump,
         has_one = owner,
     )]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
 
     #[account(mut, token::mint = collateral_mint, token::authority = owner)]
-    pub owner_collateral_ata: Account<'info, TokenAccount>,
+    pub owner_collateral_ata: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
-    pub collateral_vault: Account<'info, TokenAccount>,
+    pub collateral_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(mut, seeds = [REDEMPTION_BITMAP_SEED, collateral_mint.key().as_ref()], bump)]
     pub redemption_bitmap: AccountLoader<'info, RedemptionBitmap>,

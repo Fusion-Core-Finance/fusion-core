@@ -28,25 +28,25 @@ pub struct UrgentRedeem<'info> {
     #[account(mut)]
     pub redeemer: Signer<'info>,
 
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
 
     #[account(mut, seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
     #[account(mut, seeds = [REDEMPTION_BITMAP_SEED, collateral_mint.key().as_ref()], bump)]
     pub redemption_bitmap: AccountLoader<'info, RedemptionBitmap>,
 
     #[account(mut, seeds = [FUSD_MINT_SEED], bump)]
-    pub fusd_mint: Account<'info, Mint>,
+    pub fusd_mint: Box<Account<'info, Mint>>,
 
     #[account(mut, address = market.collateral_vault)]
-    pub market_coll_vault: Account<'info, TokenAccount>,
+    pub market_coll_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(mut, token::mint = fusd_mint, token::authority = redeemer)]
-    pub redeemer_fusd_ata: Account<'info, TokenAccount>,
+    pub redeemer_fusd_ata: Box<Account<'info, TokenAccount>>,
 
     #[account(mut, token::mint = collateral_mint, token::authority = redeemer)]
-    pub redeemer_collateral_ata: Account<'info, TokenAccount>,
+    pub redeemer_collateral_ata: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     // remaining_accounts: candidate Position accounts (writable), ANY bucket.

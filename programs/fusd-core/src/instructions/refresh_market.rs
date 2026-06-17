@@ -14,23 +14,23 @@ use crate::state::{InsuranceBuffer, Market};
 #[event_cpi]
 #[derive(Accounts)]
 pub struct RefreshMarket<'info> {
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
 
     #[account(mut, seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
     #[account(mut, seeds = [FUSD_MINT_SEED], bump)]
-    pub fusd_mint: Account<'info, Mint>,
+    pub fusd_mint: Box<Account<'info, Mint>>,
 
     /// CHECK: the fUSD mint-authority PDA; only signs minting from inside the protocol rules.
     #[account(seeds = [MINT_AUTHORITY_SEED], bump)]
     pub mint_authority: UncheckedAccount<'info>,
 
     #[account(mut, seeds = [BUFFER_SEED, collateral_mint.key().as_ref()], bump = insurance_buffer.bump)]
-    pub insurance_buffer: Account<'info, InsuranceBuffer>,
+    pub insurance_buffer: Box<Account<'info, InsuranceBuffer>>,
 
     #[account(mut, address = insurance_buffer.fusd_vault)]
-    pub buffer_fusd_vault: Account<'info, TokenAccount>,
+    pub buffer_fusd_vault: Box<Account<'info, TokenAccount>>,
 
     /// OPTIONAL: an fUSD token account to receive the keeper reward — a cut (`Market.keeper_reward_bps`)
     /// of the interest this crank mints; the cranker directs it to themselves. Constrained
@@ -38,7 +38,7 @@ pub struct RefreshMarket<'info> {
     /// or when `keeper_reward_bps == 0`, the WHOLE interest mints to the buffer (no reward). Permissionless:
     /// whoever does the crank work earns the cut.
     #[account(mut, token::mint = fusd_mint)]
-    pub cranker_fusd_ata: Option<Account<'info, TokenAccount>>,
+    pub cranker_fusd_ata: Option<Box<Account<'info, TokenAccount>>>,
 
     /// OPTIONAL: the Global Backstop Reserve + its vault. When BOTH are supplied (and the reserve's
     /// `cut_bps > 0` and it is below its cap), `backstop_cut_bps` of the post-keeper interest routes
@@ -46,10 +46,10 @@ pub struct RefreshMarket<'info> {
     /// the whole post-keeper interest funds the local buffer (byte-identical to pre-backstop behavior).
     /// The hot user paths never touch these — only this periodic crank.
     #[account(mut, seeds = [crate::constants::BACKSTOP_SEED], bump = backstop.bump)]
-    pub backstop: Option<Account<'info, crate::state::GlobalBackstopReserve>>,
+    pub backstop: Option<Box<Account<'info, crate::state::GlobalBackstopReserve>>>,
 
     #[account(mut)]
-    pub backstop_fusd_vault: Option<Account<'info, TokenAccount>>,
+    pub backstop_fusd_vault: Option<Box<Account<'info, TokenAccount>>>,
 
     pub token_program: Program<'info, Token>,
 }
