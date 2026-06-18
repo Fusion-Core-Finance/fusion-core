@@ -158,22 +158,28 @@ pub fn supply_preserved_by_borrow_ghost() {
     cvlr_assume!(agg0 >= unminted);
     let circ0 = (agg0 - unminted) + bad; // circulating fUSD, pre-borrow
 
-    // borrow's accounting delta (borrow.rs handler):
-    //   * agg_recorded_debt = agg0 + amount          (borrow.rs:135 — the line mutation S1 drops)
-    //   * mint_to(amount): SPL mint supply += amount  (the token CPI, modeled as the ghost `circ`)
-    //   * unminted_interest / bad_debt: UNTOUCHED by borrow
-    // (Production guards `checked_add` for MathOverflow; in the unbounded math-int domain there is no
-    // overflow to model — the proof holds for every reachable on-chain value AND beyond, strictly more
-    // general than the u128-bounded path while being sound for it.)
-    let agg1 = agg0 + amount;
+    // borrow's accounting delta (borrow.rs handler), INCLUDING the C7 upfront fee:
+    //   * agg_recorded_debt = agg0 + amount + fee   (debt grows by amount + fee; the `+amount` is the
+    //                                                line mutation S1 drops)
+    //   * mint_to(amount): SPL mint supply += amount  (ONLY `amount` is minted to the borrower; the
+    //                                                  fee is NOT minted to them — modeled as `circ`)
+    //   * unminted_interest = unminted + fee        (C7: the fee is booked as unminted interest, drained
+    //                                                to the buffer by refresh_market — like accrued interest)
+    //   * bad_debt: UNTOUCHED by borrow
+    // The fee is a full-range symbolic NativeInt (fee == 0 is the disabled case, so this rule covers
+    // BOTH the fee-on and fee-off borrow paths). (Production guards `checked_add` for MathOverflow; the
+    // unbounded math-int domain has no overflow to model — strictly more general AND sound.)
+    let fee = NativeInt::from(nondet::<u128>());
+    let agg1 = agg0 + amount + fee;
+    let unminted1 = unminted + fee;
     let circ1 = circ0 + amount;
 
     clog!(amount);
 
     // POST: the global supply identity still holds. By construction
-    //   (agg1 − unminted) + bad = (agg0 + amount − unminted) + bad = (agg0 − unminted + bad) + amount
-    //                           = circ0 + amount = circ1.
-    cvlr_assert!(circ1 == (agg1 - unminted) + bad);
+    //   (agg1 − unminted1) + bad = (agg0 + amount + fee − unminted − fee) + bad
+    //                            = (agg0 − unminted + bad) + amount = circ0 + amount = circ1.
+    cvlr_assert!(circ1 == (agg1 - unminted1) + bad);
 }
 
 // ===== Invariant #2 (bitmap) — direct add_member / remove_member at a CONCRETE bucket =====

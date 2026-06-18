@@ -74,12 +74,31 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
         FusdError::StalePrice
     );
 
-    // `recorded_debt` is now realized present-value debt; the borrow simply adds `amount` to it.
+    // C7 upfront borrowing fee: a one-time charge ADDED TO THE DEBT (`borrow_fee_bps`; 0 = disabled),
+    // rounded UP against the borrower. The fee is NOT minted to the borrower — debt grows by
+    // `amount + fee`, only `amount` is minted below, and `fee` is booked into `unminted_interest` so
+    // `refresh_market` mints it to the insurance buffer (funds first-loss capital exactly like accrued
+    // interest). The supply identity `circulating == agg_recorded_debt − unminted_interest + bad_debt`
+    // is preserved: circulating += amount, agg += amount + fee, unminted += fee. The MCR / ceiling /
+    // CCR checks below all see the POST-fee debt (the borrower must collateralize what they owe).
+    let fee = if ctx.accounts.market.borrow_fee_bps > 0 {
+        fusd_math::mul_div_ceil(
+            amount as u128,
+            ctx.accounts.market.borrow_fee_bps as u128,
+            fusd_math::BPS_DENOMINATOR,
+        )
+        .ok_or(FusdError::MathOverflow)?
+    } else {
+        0
+    };
+    let debt_delta = (amount as u128).checked_add(fee).ok_or(FusdError::MathOverflow)?;
+
+    // `recorded_debt` is now realized present-value debt; the borrow adds `amount + fee` to it.
     let new_debt = ctx
         .accounts
         .position
         .recorded_debt
-        .checked_add(amount as u128)
+        .checked_add(debt_delta)
         .ok_or(FusdError::MathOverflow)?;
     let ink = ctx.accounts.position.ink;
     require!(cdp::is_healthy(ink, new_debt, spot, mcr), FusdError::BelowMinCollateralRatio);
@@ -93,7 +112,7 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
         .accounts
         .market
         .agg_recorded_debt
-        .checked_add(amount as u128)
+        .checked_add(debt_delta)
         .ok_or(FusdError::MathOverflow)?;
     require!(
         new_agg <= ctx.accounts.market.debt_ceiling as u128,
@@ -132,6 +151,16 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     // recompute the stake (realize may have grown ink via redistribution), then mint.
     ctx.accounts.position.recorded_debt = new_debt;
     ctx.accounts.market.agg_recorded_debt = new_agg;
+    // C7: book the upfront fee as unminted interest — `refresh_market` mints it to the buffer. This
+    // is the +fee half of `agg += amount + fee` that is NOT minted to the borrower (supply identity).
+    if fee > 0 {
+        ctx.accounts.market.unminted_interest = ctx
+            .accounts
+            .market
+            .unminted_interest
+            .checked_add(fee)
+            .ok_or(FusdError::MathOverflow)?;
+    }
     accrual::reweight(&mut ctx.accounts.market, &ctx.accounts.position, old_weighted)?;
     crate::redist::set_stake(&mut ctx.accounts.market, &mut ctx.accounts.position)?;
 

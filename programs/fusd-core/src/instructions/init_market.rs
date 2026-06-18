@@ -187,13 +187,15 @@ pub fn handler(ctx: Context<InitMarket>, args: InitMarketArgs) -> Result<()> {
     m.min_debt = 0;
     m.rate_adjust_cooldown_secs = 0;
     m.keeper_reward_bps = 0;
+    // Upfront borrowing fee starts DISABLED (0); governance enables a calibrated value (C7).
+    m.borrow_fee_bps = 0;
     // Un-homed retained collateral (the `bad_debt` offset) + global-backstop per-market counters
     // all start at 0 (no liquidations/contributions/draws yet). Explicit so every Market field's
     // genesis value is readable from this handler rather than left to Anchor's implicit zero-fill.
     m.protocol_collateral = 0;
     m.global_contributed = 0;
     m.global_drawn = 0;
-    m._reserved = [0u8; 40];
+    m._reserved = [0u8; 38];
 
     emit_cpi!(crate::events::MarketInitialized {
         collateral_mint: m.collateral_mint,

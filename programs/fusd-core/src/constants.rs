@@ -244,6 +244,15 @@ pub const MAX_BUCKET_WIDTH_BPS: u16 = 100; // 1.00%
 pub const DEFAULT_REDEMPTION_FEE_BPS: u16 = 50; // 0.50%
 pub const MAX_REDEMPTION_FEE_BPS: u16 = 500; // 5%
 
+/// Upfront borrowing fee (bps of the borrowed amount; BOLD-sweep C7). A one-time charge added to the
+/// position's debt at `borrow` — the primary redemption-evasion deterrent (a borrower can't dodge a
+/// redemption for free by re-borrowing). Governance-adjustable within this clamp; **0 = disabled**
+/// (default), the same default-off pattern as the rate limiter / CCR / keeper reward. The fee fUSD is
+/// NOT minted to the borrower: the debt grows by `amount + fee` while only `amount` is minted, and the
+/// `fee` is booked into `unminted_interest` so `refresh_market` mints it to the insurance buffer (the
+/// fee funds first-loss capital, exactly like accrued interest — supply identity preserved).
+pub const MAX_BORROW_FEE_BPS: u16 = 500; // 5% — the clamp ceiling; default 0 (off)
+
 /// Max number of candidate `Position` accounts a single `redeem` / `urgent_redeem` may take in
 /// `remaining_accounts` (the Jupiter-Lend >64-account liquidation DoS, fusion-docs.md).
 /// Each candidate costs a realize + reweight + set_stake + an O(n) dup scan, so an unbounded list could
