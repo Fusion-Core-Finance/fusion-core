@@ -102,4 +102,6 @@ pub enum FusdError {
     InsufficientBackstopExcess,
     #[msg("Liquidations are paused: a fresh primary feed grossly disagrees with a present secondary (oracle divergence) — redemptions and repay stay open")]
     OracleDivergent,
+    #[msg("C1 LST canonical-rate leg: the supplied SPL stake-pool account has the wrong owner or key (mis-built crank)")]
+    InvalidStakePool,
 }

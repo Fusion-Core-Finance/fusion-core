@@ -420,6 +420,24 @@ pub const SWITCHBOARD_ON_DEMAND_PROGRAM_ID: Pubkey =
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
 /// Raydium CLMM program — owner of every Raydium `PoolState` account sampled by `sample_twap`.
 pub const RAYDIUM_CLMM_PROGRAM_ID: Pubkey = pubkey!("CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK");
+/// SPL Stake Pool program — owner of the `StakePool` account read for the C1 LST canonical-rate
+/// leg (`update_price`). The canonical rate (`total_lamports / pool_token_supply`) is read directly
+/// from this trustless on-chain state, never a swap/DEX.
+pub const SPL_STAKE_POOL_PROGRAM_ID: Pubkey = pubkey!("SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy");
+/// The shared Pyth SOL/USD feed id — the canonical UNDERLYING for the C1 LST leg
+/// (`canonical_lst_usd = sol_usd · stake_pool_rate`). All SOL-LST markets reference this single
+/// well-known feed (a feed id, NOT an account address — the SOL/USD `PriceUpdateV2` account passed
+/// to `update_price` is bound to it). v1 assumes a SOL underlying for every LST; a non-SOL-backed
+/// LST would need this promoted to per-market config.
+pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
+    0xef, 0x0d, 0x8b, 0x6f, 0xcd, 0x01, 0x04, 0xe3, 0xe7, 0x50, 0x96, 0x91, 0x2f, 0xc8, 0xe1, 0xe4,
+    0x32, 0x89, 0x3d, 0xa4, 0xf1, 0x8f, 0xae, 0xda, 0xac, 0xca, 0x7e, 0x58, 0x75, 0xda, 0x62, 0x0f,
+];
+/// Max epochs the SPL stake-pool balance may lag (`clock.epoch − last_update_epoch`) before the C1
+/// canonical rate is treated as stale → leg unavailable → mints freeze. Pools crank once per epoch
+/// (`UpdateStakePoolBalance`); a 1–2 epoch lag moves the rate negligibly, but a long-dead pool is
+/// rejected. The canonical leg is a manipulation-resistant FLOOR, so mild staleness is conservative.
+pub const MAX_STAKE_POOL_EPOCH_LAG: u64 = 2;
 
 // Note: `update_price` defers ALL feed staleness to `fusd_oracle::aggregate` (which uses
 // `MarketOracle.max_age_secs`), so a stale feed yields a conservative price + a frozen mint —
