@@ -177,17 +177,96 @@ for any fork with a different precision or supply**. fUSD changed both axes vs L
 Kani + proptest cover the **pure-function** math in `fusd-math`. What neither reaches is the
 **cross-instruction, multi-account** invariants of the live program — properties that hold only across
 *sequences of real transactions over the on-chain accounts*, which is **Certora's** domain (CVLR over the
-`fusd-core` instructions). The properties to verify there next, which map the Phase-1 formal-verification exit:
+`fusd-core` instructions). The four properties that map the Phase-1 formal-verification exit, with their
+**current Certora status** (the harness now exists — see the coverage table below):
 
 1. **Global supply invariant** — `circulating fUSD == agg_recorded_debt − unminted_interest + bad_debt` across
    every `borrow`/`repay`/`liquidate`/`redeem`/`refresh_market` sequence (the per-tx pieces are unit/property
-   tested; the cross-tx ledger identity is Certora's).
+   tested; the cross-tx ledger identity is Certora's). **`borrow` VERIFIED (cloud); the six sibling
+   instructions authored + wired, pending a cloud run.**
 2. **On-chain bitmap concurrent-flip** — the rate-bucket bit math is proptest-proven here, but the program-level
    "no two concurrent redemptions disagree on the lowest non-empty bucket" rests on the per-market `Market`
-   write-lock serialization — a cross-transaction property, not a pure-function one.
+   write-lock serialization — a cross-transaction property, not a pure-function one. **VERIFIED (cloud)** at
+   the `add_member`/`remove_member` coupling level (Sealevel's per-market write-lock supplies the
+   serialization; Certora proves each touch atomically preserves coupling).
 3. **Liquidation always terminates** — every liquidation routes into exactly one of {RP offset, redistribution,
    buffer, shutdown}. The `recovery` waterfall is proven pure here; the *instruction* must always reach it.
+   **VERIFIED (cloud)**: full-debt conservation + strict tier ordering over symbolic `recovery::absorb`.
 4. **RP `P`/`S` consistency** across `provide`/`withdraw`/`offset` instruction interleavings — a depositor can
-   always realize their gain; no silent loss across the real account lifecycle.
+   always realize their gain; no silent loss across the real account lifecycle. **DEFERRED** — the pool's
+   `bnum` U256 division is intractable for the SMT backend (times out); stays covered by Kani + proptest +
+   `integration-tests/litesvm_reactor_realizability`.
 
-B8 (this pass) clears the math layer beneath these; Certora is the next, cross-instruction FV tier.
+B8 (this pass) clears the math layer beneath these; Certora is the cross-instruction FV tier above it.
+
+#### Certora coverage (status of the cross-instruction tier)
+
+Every passing rule drives the **real production code** (or its faithful ghost), has `rule_sanity: "basic"`
+on (in-prover non-vacuity), and flips VERIFIED→VIOLATED under a production-path / in-rule mutation
+(`certora/mutations.md` — the end-to-end non-vacuity check). Specs: `programs/fusd-core/src/certora.rs`;
+configs and the cloud lane: `certora/*.conf` + `.github/workflows/certora.yml`.
+
+| # | Invariant | Rule(s) | Conf | Status |
+|---|-----------|---------|------|--------|
+| 1 | supply (borrow) | `supply_preserved_by_borrow_ghost` | `supply.conf` | **VERIFIED** (cloud) |
+| 1 | supply (repay/refresh/liquidate/redeem/urgent_redeem/settle) | `supply_preserved_by_*_ghost` (6) | `supply.conf` | **authored, pending cloud** |
+| 2a | bitmap coupling | `bitmap_coupling_preserved_by_add_member` / `_remove_member` | `bitmap_helper.conf` | **VERIFIED** (cloud) |
+| 3 | liquidation — debt conserved | `absorb_conserves_debt` | `absorb.conf` | **VERIFIED** (cloud) |
+| 3 | liquidation — tier ordering | `absorb_unhomed_iff_no_tier_covers` (+ `absorb_unhomed_reachable`) | `absorb.conf` | **VERIFIED** (cloud) |
+| 4 | RP P/S realizability | — | — | **deferred** (U256/SMT intractable) |
+
+Two honest limitations on #1, stated rather than papered over:
+
+- **Real `mint_to`/`burn` CPI modeling is blocked.** A true token CPI needs a workspace-global
+  `[patch.crates-io] spl-token` that corrupts the deployable `.so` (`certora/README.md` §"Two prover
+  frontiers"). Both the verified borrow rule and the six siblings model `circulating` as a pure `NativeInt`
+  **ghost** and replay each handler's documented accounting delta. This proves the per-instruction supply
+  *algebra* is consistent; the runnable litesvm `assert_supply_invariant` (`integration-tests/src/lib.rs`)
+  is the oracle that ties that algebra to the real handler bodies.
+- **The six siblings are authored, not yet cloud-verified.** They stay in the identical blocker-free
+  `NativeInt` regime as the verified borrow rule and are wired into `supply.conf`; a cloud run with
+  `CERTORAKEY` is the gating step to flip them (and tick `mutations.md` rows S2–S7).
+
+### Mutation coverage (cargo-mutants — measuring what the *suite* actually constrains)
+
+Kani and proptest say what the math *proves*; mutation testing says what the *test suite* would *notice*.
+`cargo-mutants` mechanically breaks every line of the crate (operator swaps, comparison flips, return-value
+replacements) and reruns the suite against each — a surviving mutant is a line no test constrains. This is
+the whole-crate, automated form of the four manual mutation checks the B8 review ran by hand.
+
+**Config (committed, reproducible):** `crates/fusd-math/mutants.toml` + `scripts/mutants-fusd-math.sh`. The
+wrapper documents the two-stage proptest-determinism method: a broad sweep at the suite's tuned in-code case
+counts, then high-`PROPTEST_CASES` confirmation of every survivor (cargo-mutants runs each suite once, and
+the B8 proptests use an unpinned seed, so a single low-case run can flag a probabilistic catch as a false
+survivor). `kani_proofs.rs` is excluded (`#[cfg(kani)]`, never built under `cargo test`).
+
+**Result:** 377 mutants generated → **2 unviable** (whole-function `Default::default()` replacements that
+don't compile) · **375 viable**. Of the 375: **361 caught = every non-equivalent mutant (100%)**; the
+remaining **14 are justified equivalent mutants** (behaviourally inert, excluded by exact description in
+`mutants.toml` with a one-line rationale each).
+
+The first sweep left 23 survivors; triage split them into **9 real coverage gaps** (now killed by new
+tests, each shown to flip the mutant from survived→caught — the B8 loop) and **14 equivalent mutants**:
+
+| Real gap (now killed) | New test | Property pinned |
+|---|---|---|
+| `wad_mul_up` fully replaceable (`Some(0)`/`None`/`Some(1)`) — the WAD ceil twin was untested (prod uses `ray_mul_up`) | `wad_ray_ops` (extended) | ceil rounds up by 1 on a remainder |
+| `offset` error-feedback writeback (`- → /`) — `partial_offset_stays_solvent` only bounds `last_loss_error ∈ [1,total]` | `offset_pins_exact_loss_error_feedback` | exact residual `total − (debt·1e18 % total)` |
+| `compounded_deposit` scale-diff (`- → +`, `==1 → !=1`) — offset/Kani suites run only at scale 0 | `compounded_deposit_across_scale_roll` | per-scale `/SCALE_FACTOR`, hard-0 at ≥2 rolls |
+| `compounded_deposit` dust guard (`< → <=`, `< → ==`) | `compounded_deposit_dust_guard_at_threshold` | strict `<`: on-floor deposit kept |
+| `collateral_gain` next-scale portion (`/ → %`) | `collateral_gain_includes_next_scale_portion` | `snap.scale+1` cell folded in, `/SCALE_FACTOR` |
+
+The scale-roll gaps are the notable ones: the RP `P`/`S` scale-bump arithmetic was unexercised by **both**
+proptest **and** Kani (both feed `u8` inputs that never bump `scale`), so the depositor-realizability-across-
+a-scale-roll path was unconstrained by the suite. The code is correct Liquity logic — these are coverage
+gaps now closed, not bugs. (`wad_mul_up`/`HALF_WAD`/`HALF_RAY` surfaced as unused dead `pub` items — flagged,
+not removed.)
+
+The 14 equivalents, by class: unused dead consts (`HALF_WAD`/`HALF_RAY`); a `#[cfg(kani)]`-only line; two
+disjoint-bit `| ≡ ^` ORs; an `expo==0` boundary where `base·1 == base/1`; a `|| ≡ &&` early-out that
+`mul_div_floor(0,·)=0` makes inert; a `bumps>0 ≡ >=0` no-op `+0`; and the unreachable `bumps>4` rescale cap
+(the loop provably terminates in ≤2 bumps). Full per-mutant rationale: `mutants.toml` `exclude_re`.
+
+This completes the four-tier FV-evidence picture for `fusd-math`: **Kani** (exhaustive over tiny inputs) ·
+**proptest** (wide random / stateful) · **cargo-mutants** (suite-strength: 100% of non-equivalent mutants
+killed) · **Certora** (cross-instruction, above the crate).

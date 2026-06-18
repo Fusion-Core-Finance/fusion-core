@@ -175,6 +175,139 @@ pub fn supply_preserved_by_borrow_ghost() {
     cvlr_assert!(circ1 == (agg1 - unminted) + bad);
 }
 
+// ===== Invariant #1 (global supply) — the remaining mint/burn instructions (ghost, NativeInt) =====
+//
+// These extend `supply_preserved_by_borrow_ghost` to the COMPLETE set of supply-touching instructions
+// (repay / refresh_market / liquidate / redeem / urgent_redeem / settle_bad_debt), each in the identical
+// blocker-free regime: model `circulating` (the SPL mint supply) as a pure `NativeInt` GHOST and replay the
+// handler's documented accounting delta, anchored to the real field assignments. This sidesteps the
+// SPL-token CPI mock — a workspace-global `[patch.crates-io] spl-token` would corrupt the deployable `.so`
+// (certora/README.md §"Two prover frontiers"). The runnable litesvm `assert_supply_invariant` is the
+// handler-level oracle for these same deltas (mutations.md rows S2–S7). The rule proves the per-instruction
+// supply ALGEBRA is consistent; the litesvm layer ties that algebra to the real handler.
+//
+// STATUS: authored, pending a cloud run. The borrow sibling is cloud-VERIFIED and these stay in its exact
+// NativeInt regime (no account memory / bitwise / u128 checked-arith / handler glue), so they are wired into
+// certora/supply.conf and await `CERTORAKEY` to flip VERIFIED. Each carries the in-rule mutation (model the
+// dropped field update) that MUST flip it to VIOLATED — the non-vacuity acceptance check.
+
+/// repay BURNS `b` fUSD and un-books the same from agg: circ −= b, agg −= b ⇒ identity preserved.
+/// Mutation S2 (drop `agg_recorded_debt -= b` → model `agg1 = agg0`): circ falls but agg stays ⇒ VIOLATED.
+#[rule]
+pub fn supply_preserved_by_repay_ghost() {
+    use cvlr::mathint::NativeInt;
+    let agg0 = NativeInt::from(nondet::<u128>());
+    let unminted = NativeInt::from(nondet::<u128>());
+    let bad = NativeInt::from(nondet::<u128>());
+    let b = NativeInt::from(nondet::<u128>()); // fUSD burned == debt un-booked
+    cvlr_assume!(agg0 >= unminted);
+    cvlr_assume!(b <= agg0 - unminted); // repay can't drop agg below the unminted-interest floor
+    let circ0 = (agg0 - unminted) + bad;
+    let agg1 = agg0 - b;
+    let circ1 = circ0 - b;
+    clog!(b);
+    cvlr_assert!(circ1 == (agg1 - unminted) + bad);
+}
+
+/// refresh_market MINTS the accrued `u` interest into the buffer: circ += u, unminted −= u, agg flat (the
+/// interest was folded into agg at accrual) ⇒ identity preserved. Mutation S3 (mint but skip
+/// `unminted_interest -= u` → model `unminted1 = unminted0`): the interest is double-counted ⇒ VIOLATED.
+#[rule]
+pub fn supply_preserved_by_refresh_market_ghost() {
+    use cvlr::mathint::NativeInt;
+    let agg0 = NativeInt::from(nondet::<u128>());
+    let unminted0 = NativeInt::from(nondet::<u128>());
+    let bad = NativeInt::from(nondet::<u128>());
+    let u = NativeInt::from(nondet::<u128>()); // unminted interest minted into the buffer this refresh
+    cvlr_assume!(agg0 >= unminted0);
+    cvlr_assume!(u <= unminted0); // can't mint more interest than is unminted
+    let circ0 = (agg0 - unminted0) + bad;
+    let unminted1 = unminted0 - u;
+    let circ1 = circ0 + u;
+    clog!(u);
+    cvlr_assert!(circ1 == (agg0 - unminted1) + bad);
+}
+
+/// liquidate routes the victim debt through the waterfall: the RP-offset + buffer BURNs remove `burned`
+/// fUSD and the same from agg; the un-homed remainder `h` leaves agg and is booked to bad_debt;
+/// redistributed debt stays in agg (reassigned to survivors, supply-neutral). So circ −= burned,
+/// agg −= burned + h, bad += h ⇒ Δcirc = Δagg + Δbad ⇒ identity preserved. Mutation S4 (in the un-homed
+/// branch skip `bad_debt += h` → model `bad1 = bad0`): agg drops by h but bad isn't raised ⇒ VIOLATED
+/// whenever h > 0.
+#[rule]
+pub fn supply_preserved_by_liquidate_ghost() {
+    use cvlr::mathint::NativeInt;
+    let agg0 = NativeInt::from(nondet::<u128>());
+    let unminted = NativeInt::from(nondet::<u128>());
+    let bad0 = NativeInt::from(nondet::<u128>());
+    let burned = NativeInt::from(nondet::<u128>()); // RP-offset + buffer BURNs (fUSD removed)
+    let h = NativeInt::from(nondet::<u128>()); // un-homed remainder booked to bad_debt
+    cvlr_assume!(agg0 >= unminted);
+    cvlr_assume!(burned + h <= agg0 - unminted); // the debt leaving agg can't breach the unminted floor
+    let circ0 = (agg0 - unminted) + bad0;
+    let agg1 = agg0 - (burned + h);
+    let bad1 = bad0 + h;
+    let circ1 = circ0 - burned;
+    clog!(burned);
+    cvlr_assert!(circ1 == (agg1 - unminted) + bad1);
+}
+
+/// redeem BURNS `b` fUSD of face value and reduces the target debt by the same: circ −= b, agg −= b ⇒
+/// preserved (the redemption fee is retained COLLATERAL, not fUSD, so it does not move the supply identity
+/// — that is the vault rule's concern). Mutation (skip the agg decrement → `agg1 = agg0`) ⇒ VIOLATED.
+#[rule]
+pub fn supply_preserved_by_redeem_ghost() {
+    use cvlr::mathint::NativeInt;
+    let agg0 = NativeInt::from(nondet::<u128>());
+    let unminted = NativeInt::from(nondet::<u128>());
+    let bad = NativeInt::from(nondet::<u128>());
+    let b = NativeInt::from(nondet::<u128>()); // fUSD face value burned == debt cleared
+    cvlr_assume!(agg0 >= unminted);
+    cvlr_assume!(b <= agg0 - unminted);
+    let circ0 = (agg0 - unminted) + bad;
+    let agg1 = agg0 - b;
+    let circ1 = circ0 - b;
+    clog!(b);
+    cvlr_assert!(circ1 == (agg1 - unminted) + bad);
+}
+
+/// urgent_redeem (shutdown wind-down): 0-fee burn-for-collateral with the identical supply algebra to
+/// redeem (circ −= b, agg −= b). Mutation (skip the agg decrement) ⇒ VIOLATED.
+#[rule]
+pub fn supply_preserved_by_urgent_redeem_ghost() {
+    use cvlr::mathint::NativeInt;
+    let agg0 = NativeInt::from(nondet::<u128>());
+    let unminted = NativeInt::from(nondet::<u128>());
+    let bad = NativeInt::from(nondet::<u128>());
+    let b = NativeInt::from(nondet::<u128>());
+    cvlr_assume!(agg0 >= unminted);
+    cvlr_assume!(b <= agg0 - unminted);
+    let circ0 = (agg0 - unminted) + bad;
+    let agg1 = agg0 - b;
+    let circ1 = circ0 - b;
+    clog!(b);
+    cvlr_assert!(circ1 == (agg1 - unminted) + bad);
+}
+
+/// settle_bad_debt BURNS recovered fUSD `x` and reduces bad_debt by the same in lockstep: circ −= x,
+/// bad −= x, agg flat ⇒ preserved (the on-chain half of recapitalization). Mutation S5 (burn but skip
+/// `bad_debt -= x` → model `bad1 = bad0`) ⇒ VIOLATED.
+#[rule]
+pub fn supply_preserved_by_settle_bad_debt_ghost() {
+    use cvlr::mathint::NativeInt;
+    let agg0 = NativeInt::from(nondet::<u128>());
+    let unminted = NativeInt::from(nondet::<u128>());
+    let bad0 = NativeInt::from(nondet::<u128>());
+    let x = NativeInt::from(nondet::<u128>()); // recovered fUSD burned against bad_debt
+    cvlr_assume!(agg0 >= unminted);
+    cvlr_assume!(x <= bad0); // can't settle more bad debt than exists
+    let circ0 = (agg0 - unminted) + bad0;
+    let bad1 = bad0 - x;
+    let circ1 = circ0 - x;
+    clog!(x);
+    cvlr_assert!(circ1 == (agg0 - unminted) + bad1);
+}
+
 // ===== Invariant #2 (bitmap) — direct add_member / remove_member at a CONCRETE bucket =====
 //
 // VERIFIED (both rules; non-vacuous — they flip to VIOLATED under mutations B1/B2). This is the

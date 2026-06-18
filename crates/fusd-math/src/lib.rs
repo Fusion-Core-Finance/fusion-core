@@ -276,6 +276,11 @@ mod tests {
         // up vs floor differ by 1 on a non-zero remainder
         assert_eq!(ray_mul(RAY + 1, RAY + 1), Some(RAY + 2)); // floor((RAY+1)^2/RAY)
         assert_eq!(ray_mul_up(RAY + 1, RAY + 1), Some(RAY + 3));
+        // `wad_mul_up` (the WAD ceil twin): exact multiple has no rounding; a non-zero remainder
+        // rounds up against the debtor, one above the floor.
+        assert_eq!(wad_mul_up(2 * WAD, 3 * WAD), Some(6 * WAD)); // exact
+        assert_eq!(wad_mul(WAD + 1, WAD + 1), Some(WAD + 2)); // floor((WAD+1)^2/WAD)
+        assert_eq!(wad_mul_up(WAD + 1, WAD + 1), Some(WAD + 3));
     }
 
     #[test]
