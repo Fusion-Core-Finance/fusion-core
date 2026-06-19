@@ -495,7 +495,7 @@ The pure bit math lives in `crates/fusd-math/src/rate_bucket.rs`, operating over
 | `set` / `clear` / `is_set` | Flip / test bucket `k`'s bit (`words[k>>6]` ± `1<<(k&63)`) |
 | `first_set` | Lowest non-empty bucket, or `None` — the find-first-set `redeem` starts from |
 | `first_set_from` | Lowest non-empty bucket `>= from` (masks sub-`from` bits in the start word) |
-| `cmp_collateral_ratio(ink_a, art_a, ink_b, art_b)` | Order two positions by CR ascending via a `U256` cross-multiply (`ink_a·art_b` vs `ink_b·art_a`) — no division, `spot`/`rate` cancel as common factors |
+| `cmp_collateral_ratio(ink_a, art_a, ink_b, art_b)` | Order two positions by CR ascending via a `U256` cross-multiply (`ink_a·art_b` vs `ink_b·art_a`) — no division, `spot` cancels as a common factor |
 
 Defaults (from `constants.rs`): `NUM_RATE_BUCKETS = 256` → a `[u64; 4]` (`BITMAP_WORDS = 4`) bitmap; `DEFAULT_BUCKET_WIDTH_BPS = 10` (0.10%), so 256 buckets span 0–25.5%. The width is a governance-clamped param, bounded `MIN_BUCKET_WIDTH_BPS = 1` (0.01%) to `MAX_BUCKET_WIDTH_BPS = 100` (1.00%). The module carries 9 unit tests (quantize/clamp, set/clear roundtrip, word boundaries, find-first-set, the CR cross-multiply, and a full 256-bucket strict-ascending drain).
 

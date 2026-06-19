@@ -89,8 +89,8 @@ pub fn count_set(words: &[u64]) -> u32 {
 }
 
 /// Order two positions by collateral ratio (ascending). Within a redemption bucket the program
-/// redeems **lowest-CR-first** (adversarial fix). CR `= ink·spot / (art·rate)`; `spot`/`rate`
-/// are common across a market, so it compares `ink_a·art_b` vs `ink_b·art_a` (cross-multiplied in
+/// redeems **lowest-CR-first** (adversarial fix). CR `= ink·spot / art` (collateral value / debt);
+/// `spot` is common across the market, so it compares `ink_a·art_b` vs `ink_b·art_a` (cross-multiplied in
 /// 256 bits, no division). Both `art` must be `> 0` (redemption candidates always carry debt).
 #[inline]
 pub fn cmp_collateral_ratio(
