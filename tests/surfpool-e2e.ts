@@ -226,6 +226,11 @@ async function main() {
       // need >=3 samples spanning 5 min of on-chain time) -> aggregate stays frozen, but spot is still
       // set from the fresh Pyth feed (Stage 3). FULL_BORROW spans the window with a clock warp.
       twapWindowSecs: new BN(TWAP_WINDOW), twapMinSamples: 3, twapMaxStalenessSecs: new BN(3600),
+      // Args added to InitMarketOracleArgs after this harness was first written (C6 plausibility band,
+      // B3 liq-divergence, C1 LST canonical leg) — all default-OFF here (WSOL is a non-LST market).
+      // Pass them explicitly rather than relying on Anchor zero-defaulting a missing struct field.
+      priceBandLowerRay: new BN(0), priceBandUpperRay: new BN(0), liqMaxDivergenceBps: 0,
+      lstStakePool: PublicKey.default,
     }).accounts({
       authority: me, config, collateralMint: WSOL, quoteMint: USDC, market, marketOracle, dexTwap,
       systemProgram: SystemProgram.programId,
@@ -341,6 +346,9 @@ async function main() {
     program.methods.updatePrice().accounts({
       cranker: me, collateralMint: WSOL, market, marketOracle,
       pythPriceUpdate: pythAccount, switchboardFeed: sbForUpdate, dexTwap,
+      // C1 LST canonical leg — WSOL is non-LST, so both optional accounts are null (Anchor requires
+      // optional accounts to be passed explicitly since the C1 merge added them to UpdatePrice).
+      solUsdPythUpdate: null, lstStakePool: null,
     }).rpc());
 
   const m: any = await program.account.market.fetch(market);
