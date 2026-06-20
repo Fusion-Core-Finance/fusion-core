@@ -28,6 +28,9 @@ import {
 interface LiqCfg {
   scanIntervalSecs?: number;
   markets: string[]; // collateral mints to watch
+  // Optional explicit position pubkeys to check (from an indexer/monitor). When set, the bot fetches
+  // these directly instead of getProgramAccounts — required on RPCs that throttle/disable gPA.
+  watchPositions?: string[];
 }
 const DEFAULT_CFG: LiqCfg = {
   scanIntervalSecs: 20,
@@ -41,6 +44,10 @@ export function validateConfig(cfg: LiqCfg): void {
     bail(`scanIntervalSecs must be a positive number (got ${v})`);
   if (!Array.isArray(cfg.markets) || cfg.markets.length === 0) bail("markets must be a non-empty array");
   cfg.markets.forEach((m, i) => { try { new PublicKey(m); } catch { bail(`markets[${i}] is not a valid pubkey: ${m}`); } });
+  if (cfg.watchPositions !== undefined) {
+    if (!Array.isArray(cfg.watchPositions)) bail("watchPositions must be an array of position pubkeys");
+    cfg.watchPositions.forEach((p, i) => { try { new PublicKey(p); } catch { bail(`watchPositions[${i}] is not a valid pubkey: ${p}`); } });
+  }
 }
 
 function every(label: string, secs: number, fn: () => Promise<void>) {
@@ -49,7 +56,7 @@ function every(label: string, secs: number, fn: () => Promise<void>) {
   return setInterval(tick, secs * 1000);
 }
 
-async function scanAndLiquidate(program: any, provider: anchor.AnchorProvider, pid: Pk, me: Pk, coll: Pk) {
+async function scanAndLiquidate(program: any, provider: anchor.AnchorProvider, pid: Pk, me: Pk, coll: Pk, watch?: Pk[]) {
   const tag = coll.toBase58().slice(0, 6);
   const p = bundle(pid, coll);
   const m: any = await program.account.market.fetch(p.market);
@@ -66,7 +73,7 @@ async function scanAndLiquidate(program: any, provider: anchor.AnchorProvider, p
 
   const mcrBps = Number(m.mcrBps);
   const now = BigInt(Math.floor(Date.now() / 1000));
-  const positions = await scanPositions(program, coll);
+  const positions = await scanPositions(program, coll, watch);
   const targets = positions.filter(
     (q) => q.recordedDebt > 0n && isLiquidatable(q.ink, currentDebt(q.recordedDebt, q.userRateBps, q.lastDebtUpdate, now), debtSpot, mcrBps),
   );
@@ -97,11 +104,12 @@ async function main() {
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();
   log(`liquidator up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}`);
-  log(`markets: ${cfg.markets.join(", ")}`);
+  const watch = cfg.watchPositions?.map((s) => new PublicKey(s));
+  log(`markets: ${cfg.markets.join(", ")}${watch ? ` (watching ${watch.length} explicit position(s))` : " (getProgramAccounts scan)"}`);
   for (const mint of cfg.markets) {
     const coll = new PublicKey(mint);
     every(`liquidate ${mint.slice(0, 6)}`, cfg.scanIntervalSecs ?? 20, () =>
-      scanAndLiquidate(program, provider, pid, me, coll));
+      scanAndLiquidate(program, provider, pid, me, coll, watch));
   }
 }
 

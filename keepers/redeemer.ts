@@ -30,7 +30,13 @@ import {
 
 const FUSD_DECIMALS = 6;
 interface RedeemMarketCfg { collateralMint: string; redeemAmountFusd?: number; }
-interface RedeemerCfg { scanIntervalSecs?: number; markets: RedeemMarketCfg[]; }
+interface RedeemerCfg {
+  scanIntervalSecs?: number;
+  markets: RedeemMarketCfg[];
+  // Optional explicit position pubkeys (from an indexer/monitor). When set, the bot fetches these
+  // directly instead of getProgramAccounts — required on RPCs that throttle/disable gPA.
+  watchPositions?: string[];
+}
 const DEFAULT_CFG: RedeemerCfg = {
   scanIntervalSecs: 30,
   markets: [{ collateralMint: "So11111111111111111111111111111111111111112", redeemAmountFusd: 0 }],
@@ -47,6 +53,10 @@ export function validateConfig(cfg: RedeemerCfg): void {
     if (m.redeemAmountFusd !== undefined && (typeof m.redeemAmountFusd !== "number" || !Number.isFinite(m.redeemAmountFusd) || m.redeemAmountFusd < 0))
       bail(`markets[${i}].redeemAmountFusd must be a non-negative number`);
   });
+  if (cfg.watchPositions !== undefined) {
+    if (!Array.isArray(cfg.watchPositions)) bail("watchPositions must be an array of position pubkeys");
+    cfg.watchPositions.forEach((p, i) => { try { new PublicKey(p); } catch { bail(`watchPositions[${i}] is not a valid pubkey: ${p}`); } });
+  }
 }
 
 function every(label: string, secs: number, fn: () => Promise<void>) {
@@ -55,7 +65,7 @@ function every(label: string, secs: number, fn: () => Promise<void>) {
   return setInterval(tick, secs * 1000);
 }
 
-async function scanAndRedeem(program: any, provider: anchor.AnchorProvider, pid: Pk, me: Pk, mc: RedeemMarketCfg) {
+async function scanAndRedeem(program: any, provider: anchor.AnchorProvider, pid: Pk, me: Pk, mc: RedeemMarketCfg, watch?: Pk[]) {
   const coll = new PublicKey(mc.collateralMint);
   const tag = mc.collateralMint.slice(0, 6);
   const wantFusd = BigInt(Math.round((mc.redeemAmountFusd ?? 0) * 10 ** FUSD_DECIMALS));
@@ -69,7 +79,7 @@ async function scanAndRedeem(program: any, provider: anchor.AnchorProvider, pid:
   if (slot - BigInt(m.spotUpdatedSlot.toString()) > MAX_PRICE_STALENESS_SLOTS) return log(`· ${tag} skip: stale price`);
 
   // Lowest non-empty NORMAL bucket = the redemption target; candidates must all be in it.
-  const live = (await scanPositions(program, coll)).filter((q) => q.recordedDebt > 0n && q.bucket !== ZOMBIE_BUCKET);
+  const live = (await scanPositions(program, coll, watch)).filter((q) => q.recordedDebt > 0n && q.bucket !== ZOMBIE_BUCKET);
   if (live.length === 0) return log(`· ${tag} skip: nothing to redeem (no live normal-bucket positions)`);
   const lowest = Math.min(...live.map((q) => q.bucket));
   const candidates = live.filter((q) => q.bucket === lowest).slice(0, MAX_REDEMPTION_CANDIDATES);
@@ -100,10 +110,11 @@ async function main() {
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();
   log(`redeemer up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}`);
-  log(`markets: ${cfg.markets.map((m) => `${m.collateralMint.slice(0, 6)}@${m.redeemAmountFusd ?? 0}fUSD`).join(", ")}`);
+  const watch = cfg.watchPositions?.map((s) => new PublicKey(s));
+  log(`markets: ${cfg.markets.map((m) => `${m.collateralMint.slice(0, 6)}@${m.redeemAmountFusd ?? 0}fUSD`).join(", ")}${watch ? ` (watching ${watch.length} explicit position(s))` : " (getProgramAccounts scan)"}`);
   for (const mc of cfg.markets) {
     every(`redeem ${mc.collateralMint.slice(0, 6)}`, cfg.scanIntervalSecs ?? 30, () =>
-      scanAndRedeem(program, provider, pid, me, mc));
+      scanAndRedeem(program, provider, pid, me, mc, watch));
   }
 }
 

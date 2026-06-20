@@ -48,12 +48,21 @@ ok=0; for _ in $(seq 1 60); do prog_ready && { ok=1; break; }; sleep 2; done
 [ "$ok" = 1 ] || { echo "!! program never deployed"; tail -20 /tmp/surfpool-botsmoke.log; exit 1; }
 echo ">> fUSD deployed"
 
+STATE_FILE=/tmp/botsmoke-state.json
 echo ">> setup: SETUP_ONLY lifecycle — leaving the fork bot-actionable"
-SETUP_ONLY=1 npx ts-node tests/surfpool-lifecycle.ts || { echo "!! setup failed"; exit 1; }
+SETUP_STATE_FILE="$STATE_FILE" SETUP_ONLY=1 npx ts-node tests/surfpool-lifecycle.ts || { echo "!! setup failed"; exit 1; }
+[ -f "$STATE_FILE" ] || { echo "!! setup did not write $STATE_FILE"; exit 1; }
 
+# surfpool (and many production RPCs) don't serve getProgramAccounts, so feed the bots the exact
+# position pubkeys to watch (the bots fetch these directly via getAccountInfo).
+POSITIONS="$(node -e "process.stdout.write(JSON.stringify(require('$STATE_FILE').positions))")"
+echo ">> watching positions: $POSITIONS"
+
+LIQ_CFG=/tmp/botsmoke-liq.json
+printf '{"scanIntervalSecs":20,"markets":["%s"],"watchPositions":%s}\n' "$WSOL" "$POSITIONS" > "$LIQ_CFG"
 LIQ_LOG=/tmp/botsmoke-liquidator.log
-echo ">> liquidator: one tick (timeout 40s, default WSOL config)"
-timeout 40 npx ts-node keepers/liquidator.ts > "$LIQ_LOG" 2>&1
+echo ">> liquidator: one tick (timeout 40s)"
+stdbuf -oL -eL timeout 40 npx ts-node keepers/liquidator.ts "$LIQ_CFG" > "$LIQ_LOG" 2>&1
 if grep -q "liquidated" "$LIQ_LOG"; then
   echo ">> PASS — liquidator detected + liquidated the underwater position"
 else
@@ -61,10 +70,10 @@ else
 fi
 
 REDEEM_CFG=/tmp/botsmoke-redeemer.json
-printf '{"scanIntervalSecs":30,"markets":[{"collateralMint":"%s","redeemAmountFusd":5}]}\n' "$WSOL" > "$REDEEM_CFG"
+printf '{"scanIntervalSecs":30,"markets":[{"collateralMint":"%s","redeemAmountFusd":5}],"watchPositions":%s}\n' "$WSOL" "$POSITIONS" > "$REDEEM_CFG"
 RED_LOG=/tmp/botsmoke-redeemer.log
 echo ">> redeemer: one tick (timeout 40s, redeemAmountFusd=5)"
-timeout 40 npx ts-node keepers/redeemer.ts "$REDEEM_CFG" > "$RED_LOG" 2>&1
+stdbuf -oL -eL timeout 40 npx ts-node keepers/redeemer.ts "$REDEEM_CFG" > "$RED_LOG" 2>&1
 if grep -q "redeemed" "$RED_LOG"; then
   echo ">> PASS — redeemer redeemed against the lowest rate bucket"
 else

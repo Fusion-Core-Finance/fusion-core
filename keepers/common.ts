@@ -82,8 +82,20 @@ export interface ScannedPosition {
   lastDebtUpdate: bigint;
   bucket: number;
 }
-export async function scanPositions(program: any, coll: Pk): Promise<ScannedPosition[]> {
-  const accts = await program.account.position.all([{ memcmp: { offset: 40, bytes: coll.toBase58() } }]);
+// Default: getProgramAccounts with a memcmp on collateral_mint (offset 40) — the permissionless
+// discovery path, but it needs a gPA-capable RPC. If `watch` is given, fetch exactly those position
+// accounts directly via getAccountInfo and keep the ones for `coll`: the path for RPCs that throttle
+// or disable gPA (most providers) or don't implement it (surfpool), fed by an indexer/monitor list.
+export async function scanPositions(program: any, coll: Pk, watch?: Pk[]): Promise<ScannedPosition[]> {
+  let accts: any[];
+  if (watch && watch.length) {
+    const fetched = await Promise.all(watch.map((pk) => program.account.position.fetchNullable(pk)));
+    accts = fetched
+      .map((account, i) => (account ? { publicKey: watch[i], account } : null))
+      .filter((a) => a && a.account.collateralMint.equals(coll));
+  } else {
+    accts = await program.account.position.all([{ memcmp: { offset: 40, bytes: coll.toBase58() } }]);
+  }
   return accts.map((a: any) => ({
     pubkey: a.publicKey,
     owner: a.account.owner,

@@ -335,7 +335,16 @@ async function main() {
   // bucket (redeemer target), both at this one post-drop price (no restore needed between the bots).
   if (process.env.SETUP_ONLY) {
     const bHealth = await readPos(B.publicKey);
+    // Surfpool (and many production RPCs) don't serve getProgramAccounts, so the keeper bots can't
+    // discover positions by scanning. Hand the bot-smoke runner the exact position PDAs to watch.
+    const stateFile = process.env.SETUP_STATE_FILE || "/tmp/botsmoke-state.json";
+    fs.writeFileSync(stateFile, JSON.stringify({
+      collateralMint: WSOL.toBase58(),
+      positions: [positionOf(B.publicKey).toBase58(), positionOf(C.publicKey).toBase58()],
+      bOwner: B.publicKey.toBase58(), cOwner: C.publicKey.toBase58(),
+    }, null, 2));
     console.log(`\n✓ SETUP_ONLY: B debt ${BigInt(bHealth.recordedDebt.toString())} on ${BigInt(bHealth.ink.toString())} lamports @ MCR ${MCR_BPS}bps — underwater, ready to liquidate. C left in the lowest bucket. Stopping before liquidate/redeem.`);
+    console.log(`  wrote bot-actionable position list -> ${stateFile}`);
     return;
   }
 
