@@ -22,11 +22,13 @@ PROGRAM_ID="$(grep -oE 'declare_id!\("[^"]+"\)' programs/fusd-core/src/lib.rs | 
 WSOL="So11111111111111111111111111111111111111112"
 export ANCHOR_PROVIDER_URL="http://127.0.0.1:8899"
 export ANCHOR_WALLET="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
-trap 'pkill -9 -f surfpool 2>/dev/null || true' EXIT
+# Match the DAEMON's command line ("surfpool start …"), not the bare word "surfpool" — the latter
+# also matches this script's own path (tests/surfpool/run-bot-smoke.sh), so it would SIGKILL itself.
+trap 'pkill -9 -f "surfpool start" 2>/dev/null || true' EXIT
 
 # Kill ANY prior surfpool and WAIT for port 8899 to free — an orphan holding it makes a fresh boot
 # silently fall back to STALE state (the lesson from the lifecycle harness).
-pkill -9 -f surfpool 2>/dev/null || true
+pkill -9 -f "surfpool start" 2>/dev/null || true
 for _ in $(seq 1 20); do ss -ltn 2>/dev/null | grep -q ":8899" || break; sleep 1; done
 if ss -ltn 2>/dev/null | grep -q ":8899"; then echo "!! port 8899 still busy after kill — aborting" >&2; exit 1; fi
 

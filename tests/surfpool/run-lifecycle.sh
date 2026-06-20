@@ -18,11 +18,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 PROGRAM_ID="$(grep -oE 'declare_id!\("[^"]+"\)' programs/fusd-core/src/lib.rs | sed -E 's/.*"([^"]+)".*/\1/')"
-trap 'pkill -9 -f surfpool 2>/dev/null || true' EXIT
+# Match the DAEMON's command line ("surfpool start …"), not the bare word "surfpool" — the latter
+# also matches this script's own path (tests/surfpool/run-lifecycle.sh), so it would SIGKILL itself.
+trap 'pkill -9 -f "surfpool start" 2>/dev/null || true' EXIT
 
 # Kill ANY prior surfpool and WAIT for port 8899 to actually free. An orphan holding the port makes a
 # fresh boot silently fall back to STALE state — guard against it explicitly.
-pkill -9 -f surfpool 2>/dev/null || true
+pkill -9 -f "surfpool start" 2>/dev/null || true
 for _ in $(seq 1 20); do ss -ltn 2>/dev/null | grep -q ":8899" || break; sleep 1; done
 if ss -ltn 2>/dev/null | grep -q ":8899"; then echo "!! port 8899 still busy after kill — aborting" >&2; exit 1; fi
 
