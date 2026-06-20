@@ -329,6 +329,16 @@ async function main() {
   await crank("update_price (post-drop)", null); // SB now diverges -> mode frozen, but spot/debt_spot recommit off Pyth
   m = await readMarket();
   console.log(`  Market.spot now $${spotToUsd(m.spot).toFixed(2)}/SOL (debt_spot drives liquidation)`);
+
+  // SETUP_ONLY: stop here, leaving the fork bot-actionable for tests/surfpool/run-bot-smoke.sh —
+  // B is underwater + the price is fresh (liquidator target) and C stays healthy in the lowest rate
+  // bucket (redeemer target), both at this one post-drop price (no restore needed between the bots).
+  if (process.env.SETUP_ONLY) {
+    const bHealth = await readPos(B.publicKey);
+    console.log(`\n✓ SETUP_ONLY: B debt ${BigInt(bHealth.recordedDebt.toString())} on ${BigInt(bHealth.ink.toString())} lamports @ MCR ${MCR_BPS}bps — underwater, ready to liquidate. C left in the lowest bucket. Stopping before liquidate/redeem.`);
+    return;
+  }
+
   const rpFusdBefore = await tokenBal(reactorFusdVault);
   const bDebtBefore = BigInt((await readPos(B.publicKey)).recordedDebt.toString());
   await trySend("liquidate(B)", () =>
