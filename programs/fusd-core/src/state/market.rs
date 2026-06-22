@@ -203,6 +203,14 @@ pub struct Market {
     /// (a split of already-minted interest, never a fresh mint) and spam-proof. Carved from `_reserved`.
     pub keeper_reward_bps: u16,
 
+    /// Upfront borrowing fee (bps; BOLD-sweep C7) — a one-time charge added to the position's debt at
+    /// `borrow` (the primary redemption-evasion deterrent). Governable (`MarketParam::BorrowFee`)
+    /// within `[0, MAX_BORROW_FEE_BPS]`; **0 = disabled** (default). The fee is NOT minted to the
+    /// borrower: debt grows by `amount + fee`, only `amount` is minted, and `fee` is booked into
+    /// `unminted_interest` so `refresh_market` mints it to the buffer (funds first-loss capital like
+    /// accrued interest — supply identity preserved). Carved from `_reserved`.
+    pub borrow_fee_bps: u16,
+
     /// Retained PROTOCOL-OWNED collateral (native) — the un-homed liquidation remainder (`coll_r`) that
     /// had no redistribution recipient, so it sits in the collateral vault backing NO position.
     /// Tracked separately from `total_collateral` (which only ever backs live positions + redistribution
@@ -225,7 +233,7 @@ pub struct Market {
     /// post-launch a Borsh account cannot grow without realloc, so headroom is free now and
     /// impossible later. Carve new fields from the HEAD of this reserve; old accounts' zeroed
     /// bytes must decode as the new field's documented `0 = disabled/none` sentinel.
-    pub _reserved: [u8; 40],
+    pub _reserved: [u8; 38],
 }
 
 impl Market {
@@ -280,8 +288,9 @@ impl Market {
         + 16 + 1                    // bad_debt, shutdown_reason
         + 8 + 8                     // min_debt, rate_adjust_cooldown_secs
         + 2                         // keeper_reward_bps (carved from the former 6-byte reserve)
+        + 2                         // borrow_fee_bps (C7 — carved from _reserved)
         + 8                         // protocol_collateral (un-homed retained collateral)
         + 16 + 16                   // global_contributed, global_drawn (global backstop; widen, not carve)
-        + 40; // reserved (base 64 − 24 carved for debt_spot + liq_divergence_until; the +32
-              // global-backstop fields are a widen, so net SPACE = base + 32)
+        + 38; // reserved (base 64 − 24 carved for debt_spot + liq_divergence_until − 2 for borrow_fee_bps;
+              // the +32 global-backstop fields are a widen, so net SPACE = base + 32)
 }

@@ -60,6 +60,9 @@ pub enum MarketParam {
     /// `keeper_reward_bps` — the cut of `refresh_market`'s minted interest paid to the cranker. 0
     /// disables; otherwise clamped to `<= MAX_KEEPER_REWARD_BPS`. The self-funding keeper incentive.
     KeeperReward,
+    /// `borrow_fee_bps` — the upfront borrowing fee (BOLD-sweep C7). 0 disables; otherwise clamped to
+    /// `<= MAX_BORROW_FEE_BPS`. Appended last (the discriminant is serialized — order is frozen).
+    BorrowFee,
 }
 
 /// The bounded governance gate. PDA `[b"gov_gate"]`. The sole authorizer of timelocked param
