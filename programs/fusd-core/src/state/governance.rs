@@ -200,6 +200,7 @@ mod tests {
             (MarketParam::MinDebt, 7),
             (MarketParam::RateAdjustCooldown, 8),
             (MarketParam::KeeperReward, 9),
+            (MarketParam::BorrowFee, 10),
         ];
         for (variant, tag) in pinned {
             let bytes = variant.try_to_vec().unwrap();
