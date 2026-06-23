@@ -3,7 +3,7 @@
  *   queue_param_change(param, value) → (wait gov_gate.timelock_secs) → execute_param_change()
  * with cancel_param_change() to withdraw a queued op, plus the GLOBAL (backstop) twin and the
  * guardian de-risk lever. The valid params + their encoding come from the loaded IDL, so the tool
- * always matches the deployed program (note: target/idl may carry params not yet in committed src).
+ * always matches the deployed program.
  *
  * SAFETY: every mutating action is DRY-RUN by default — it prints the instruction (Squads-proposal
  * ready) and only signs + submits when you pass --send. queue/cancel must be signed by the gov gate's
@@ -21,7 +21,7 @@
  *   cancel-global  --nonce <n> [--send] [--authority <pk>]
  *   guardian-derisk --market <mint> --secs <n> [--send] [--authority <pk>]
  *
- * param names (market): mcr debtCeiling redemptionFee liqGasComp rateLimitCap ccr liqBonus minDebt rateAdjustCooldown keeperReward
+ * param names (market): mcr debtCeiling redemptionFee liqGasComp rateLimitCap ccr liqBonus minDebt rateAdjustCooldown keeperReward borrowFee
  * param names (global):  cut reserveCap drawBase drawK drawCeilingShare drawDebtShare
  */
 import * as fs from "fs";

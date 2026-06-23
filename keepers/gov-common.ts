@@ -57,7 +57,7 @@ export const MARKET_CLAMPS: Record<string, Clamp> = {
   MinDebt: { unit: "fUSD-native", min: 0, max: 10_000_000_000, note: "0 disables" },
   RateAdjustCooldown: { unit: "secs", min: 0, max: 2_592_000, note: "0 disables" },
   KeeperReward: { unit: "bps", min: 0, max: 1000, note: "0 disables" },
-  BorrowFee: { unit: "bps", note: "present in some builds; clamp enforced on-chain" },
+  BorrowFee: { unit: "bps", min: 0, max: 500, note: "0 disables (C7 upfront borrow fee)" },
 };
 export const GLOBAL_CLAMPS: Record<string, Clamp> = {
   Cut: { unit: "bps", min: 0, max: 3000 },

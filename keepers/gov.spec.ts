@@ -30,7 +30,7 @@ describe("gov-common helpers", () => {
     assert.deepEqual(resolveVariant(MKT, "liqbonus"), { name: "LiqBonus", arg: { liqBonus: {} } });
     assert.deepEqual(resolveVariant(MKT, "debtCeiling"), { name: "DebtCeiling", arg: { debtCeiling: {} } });
     assert.deepEqual(resolveVariant(MKT, "MCR"), { name: "Mcr", arg: { mcr: {} } });
-    assert.throws(() => resolveVariant(MKT, "borrowFee"), /unknown param/); // not in this IDL list
+    assert.throws(() => resolveVariant(MKT, "totallyBogus"), /unknown param/); // not a valid variant
   });
 
   it("clampWarning flags out-of-range values, passes in-range and unbounded ones", () => {
