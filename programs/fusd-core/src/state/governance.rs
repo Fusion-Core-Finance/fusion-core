@@ -63,6 +63,9 @@ pub enum MarketParam {
     /// `borrow_fee_bps` — the upfront borrowing fee (BOLD-sweep C7). 0 disables; otherwise clamped to
     /// `<= MAX_BORROW_FEE_BPS`. Appended last (the discriminant is serialized — order is frozen).
     BorrowFee,
+    /// `bad_debt_paydown_bps` — the auto bad-debt paydown rate (BOLD-sweep C16). 0 disables; otherwise
+    /// clamped to `<= MAX_BAD_DEBT_PAYDOWN_BPS`. Appended last (the discriminant is serialized).
+    BadDebtPaydown,
 }
 
 /// The bounded governance gate. PDA `[b"gov_gate"]`. The sole authorizer of timelocked param
@@ -201,6 +204,7 @@ mod tests {
             (MarketParam::RateAdjustCooldown, 8),
             (MarketParam::KeeperReward, 9),
             (MarketParam::BorrowFee, 10),
+            (MarketParam::BadDebtPaydown, 11),
         ];
         for (variant, tag) in pinned {
             let bytes = variant.try_to_vec().unwrap();

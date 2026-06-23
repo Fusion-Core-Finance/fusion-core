@@ -179,6 +179,9 @@ pub struct InterestMinted {
     /// The cut routed to the Global Backstop Reserve (global second-loss capital). 0 when the backstop
     /// accounts aren't supplied / cut disabled / reserve at cap.
     pub to_backstop: u64,
+    /// The slice diverted to retire `bad_debt` (BOLD-sweep C16 auto-paydown). 0 when disabled or no
+    /// bad debt outstanding.
+    pub to_bad_debt_paydown: u64,
     pub keeper_cut: u64,
     /// Backlog left unminted (non-zero only in the absurd >u64 case).
     pub unminted_remaining: u128,

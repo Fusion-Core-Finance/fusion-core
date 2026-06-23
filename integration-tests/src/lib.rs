@@ -492,12 +492,16 @@ pub fn read_position(svm: &LiteSVM, position: &Pubkey) -> fusd_core::state::Posi
 
 /// The per-market supply invariant: circulating fUSD == `agg_recorded_debt − unminted_interest +
 /// bad_debt` (read right after a touch/refresh, so the live aggregate interest is already folded in).
+/// Asserted in the rearranged `circulating + unminted == agg + bad` form so the intermediate never
+/// underflows u128: after a terminal un-homed liquidation `agg_recorded_debt` (the victim's debt
+/// extinguished to `bad_debt`) can drop BELOW the still-pending `unminted_interest` lazy-mint backlog,
+/// so the literal `agg - unminted` would panic even though the identity holds.
 pub fn assert_supply_invariant(svm: &LiteSVM, coll: &Pubkey) {
     let m = read_market(svm, &market_pda(coll));
     let circulating = mint_supply(svm, &fusd_mint_pda()) as u128;
     assert_eq!(
-        circulating,
-        m.agg_recorded_debt - m.unminted_interest + m.bad_debt,
+        circulating + m.unminted_interest,
+        m.agg_recorded_debt + m.bad_debt,
         "supply invariant: circulating == agg_recorded_debt - unminted_interest + bad_debt"
     );
 }

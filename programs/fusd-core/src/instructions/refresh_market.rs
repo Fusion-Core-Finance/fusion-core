@@ -85,6 +85,22 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
     };
     let post_keeper = amount - keeper_cut;
 
+    // C16 auto bad-debt paydown: when the market carries realized un-homed `bad_debt`, divert a
+    // governable fraction of the post-keeper interest to RETIRE it instead of minting it. Loss recovery
+    // takes priority over buffer/backstop growth, so this comes out of `post_keeper` FIRST. Capped at
+    // the outstanding `bad_debt` (never over-pays). Supply-preserving: the diverted slice is simply NOT
+    // minted (so `circulating` rises by `amount − paydown`) while `bad_debt` drops by `paydown` — the
+    // interest, already booked in `agg_recorded_debt` and consumed from `unminted_interest` below,
+    // back-fills previously-unbacked fUSD instead of funding the buffer. `0 = disabled`.
+    let paydown_bps = ctx.accounts.market.bad_debt_paydown_bps as u128;
+    let paydown: u128 = if paydown_bps > 0 && ctx.accounts.market.bad_debt > 0 {
+        let want = post_keeper.checked_mul(paydown_bps).ok_or(FusdError::MathOverflow)? / 10_000;
+        want.min(ctx.accounts.market.bad_debt)
+    } else {
+        0
+    };
+    let post_paydown = post_keeper - paydown;
+
     // Backstop cut (global second-loss capital): when the reserve +
     // its vault are supplied AND the reserve's `cut_bps > 0` AND it is below its cap, route a MINORITY
     // of the post-keeper interest there; the LOCAL buffer keeps the rest (majority + the floor
@@ -101,14 +117,14 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
                 if cut_bps == 0 {
                     0
                 } else {
-                    let want = post_keeper.checked_mul(cut_bps).ok_or(FusdError::MathOverflow)? / 10_000;
+                    let want = post_paydown.checked_mul(cut_bps).ok_or(FusdError::MathOverflow)? / 10_000;
                     let headroom = (bs.reserve_cap as u128).saturating_sub(vault.amount as u128);
                     want.min(headroom)
                 }
             }
             _ => 0,
         };
-    let buffer_amount = post_keeper - backstop_cut;
+    let buffer_amount = post_paydown - backstop_cut;
 
     let bump = ctx.bumps.mint_authority;
     let signer: &[&[&[u8]]] = &[&[MINT_AUTHORITY_SEED, &[bump]]];
@@ -170,11 +186,20 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
             bs.total_contributed.checked_add(backstop_cut).ok_or(FusdError::MathOverflow)?;
     }
 
-    // Subtract what was minted (drains a hypothetical >u64 backlog over multiple cranks; the common
-    // case mints the whole `pending` and leaves 0).
+    // C16: retire the diverted slice of `bad_debt`. The `paydown` interest was consumed from
+    // `unminted_interest` (below) and NOT minted, so dropping `bad_debt` by the same amount keeps
+    // `circulating == agg_recorded_debt − unminted_interest + bad_debt` exact. `paydown <= bad_debt`
+    // by construction (the cap above), so this never underflows.
+    if paydown > 0 {
+        ctx.accounts.market.bad_debt -= paydown;
+    }
+
+    // Subtract what was minted OR diverted to paydown (drains a hypothetical >u64 backlog over multiple
+    // cranks; the common case consumes the whole `pending` and leaves 0). Both the minted `amount −
+    // paydown` and the diverted `paydown` are interest realized out of `unminted_interest` this crank.
     ctx.accounts.market.unminted_interest = pending - amount;
-    // `total_funded` tracks the fUSD that entered the BUFFER (organic interest minus the keeper cut +
-    // external top-ups) for proof-of-reserves.
+    // `total_funded` tracks the fUSD that entered the BUFFER (organic interest minus the keeper cut, the
+    // backstop cut, and the C16 paydown diversion + external top-ups) for proof-of-reserves.
     ctx.accounts.insurance_buffer.total_funded = ctx
         .accounts
         .insurance_buffer
@@ -187,6 +212,7 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
         amount: amount as u64,
         to_buffer: buffer_amount as u64,
         to_backstop: backstop_cut as u64,
+        to_bad_debt_paydown: paydown as u64,
         keeper_cut: keeper_cut as u64,
         unminted_remaining: ctx.accounts.market.unminted_interest,
     });

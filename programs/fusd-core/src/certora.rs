@@ -216,23 +216,31 @@ pub fn supply_preserved_by_repay_ghost() {
     cvlr_assert!(circ1 == (agg1 - unminted) + bad);
 }
 
-/// refresh_market MINTS the accrued `u` interest into the buffer: circ += u, unminted −= u, agg flat (the
-/// interest was folded into agg at accrual) ⇒ identity preserved. Mutation S3 (mint but skip
-/// `unminted_interest -= u` → model `unminted1 = unminted0`): the interest is double-counted ⇒ VIOLATED.
+/// refresh_market consumes the accrued `u` interest: it MINTS `u − p` into the buffer/keeper/backstop
+/// and (C16) DIVERTS `p` to retire `bad_debt` instead of minting it. So circ += u − p, unminted −= u,
+/// bad −= p, agg flat (the interest was folded into agg at accrual) ⇒ identity preserved. `p`
+/// (`0 ≤ p ≤ min(u, bad0)`) is full-range symbolic, so this covers BOTH the C16-off (`p = 0`, the
+/// original mint-all-to-buffer path) and C16-on paths. Mutation S3 (mint but skip `unminted -= u`):
+/// interest double-counted ⇒ VIOLATED. Mutation C16 (divert `p` but skip `bad_debt -= p` → model
+/// `bad1 = bad0`): circ rose by only `u − p` while bad stayed flat ⇒ VIOLATED whenever `p > 0`.
 #[rule]
 pub fn supply_preserved_by_refresh_market_ghost() {
     use cvlr::mathint::NativeInt;
     let agg0 = NativeInt::from(nondet::<u128>());
     let unminted0 = NativeInt::from(nondet::<u128>());
-    let bad = NativeInt::from(nondet::<u128>());
-    let u = NativeInt::from(nondet::<u128>()); // unminted interest minted into the buffer this refresh
+    let bad0 = NativeInt::from(nondet::<u128>());
+    let u = NativeInt::from(nondet::<u128>()); // unminted interest consumed this refresh
+    let p = NativeInt::from(nondet::<u128>()); // C16: the slice diverted to bad-debt paydown (not minted)
     cvlr_assume!(agg0 >= unminted0);
-    cvlr_assume!(u <= unminted0); // can't mint more interest than is unminted
-    let circ0 = (agg0 - unminted0) + bad;
+    cvlr_assume!(u <= unminted0); // can't consume more interest than is unminted
+    cvlr_assume!(p <= u); // paydown is a fraction of the interest
+    cvlr_assume!(p <= bad0); // capped at the outstanding bad debt (never over-pays)
+    let circ0 = (agg0 - unminted0) + bad0;
     let unminted1 = unminted0 - u;
-    let circ1 = circ0 + u;
+    let bad1 = bad0 - p;
+    let circ1 = circ0 + (u - p);
     clog!(u);
-    cvlr_assert!(circ1 == (agg0 - unminted1) + bad);
+    cvlr_assert!(circ1 == (agg0 - unminted1) + bad1);
 }
 
 /// liquidate routes the victim debt through the waterfall: the RP-offset + buffer BURNs remove `burned`

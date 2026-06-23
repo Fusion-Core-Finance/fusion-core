@@ -253,6 +253,17 @@ pub const MAX_REDEMPTION_FEE_BPS: u16 = 500; // 5%
 /// fee funds first-loss capital, exactly like accrued interest — supply identity preserved).
 pub const MAX_BORROW_FEE_BPS: u16 = 500; // 5% — the clamp ceiling; default 0 (off)
 
+/// Auto bad-debt paydown rate (bps of the post-keeper interest; BOLD-sweep C16). When a market carries
+/// realized un-homed `bad_debt`, `refresh_market` diverts this fraction of the interest it would
+/// otherwise mint to the buffer and uses it to RETIRE `bad_debt` instead — an automatic, self-limiting
+/// recapitalization-from-revenue (the loss amortizes out of ongoing interest rather than waiting on a
+/// governance `settle_bad_debt`). Supply-preserving by construction: the diverted slice is simply NOT
+/// minted (`circulating` rises by less) while `bad_debt` drops by the same amount, so
+/// `circulating == agg_recorded_debt − unminted_interest + bad_debt` still holds. Governance-adjustable;
+/// **0 = disabled** (default). Clamp is the full `BPS_DENOMINATOR` (100%): when bad debt exists,
+/// governance may route ALL post-keeper interest to recovery, starving buffer growth until it clears.
+pub const MAX_BAD_DEBT_PAYDOWN_BPS: u16 = 10_000; // 100% — loss recovery may take the whole interest cut
+
 /// Max number of candidate `Position` accounts a single `redeem` / `urgent_redeem` may take in
 /// `remaining_accounts` (the Jupiter-Lend >64-account liquidation DoS, fusion-docs.md).
 /// Each candidate costs a realize + reweight + set_stake + an O(n) dup scan, so an unbounded list could
