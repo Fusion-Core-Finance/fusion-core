@@ -1,12 +1,13 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 use fusd_math::rate_bucket as rb;
+use fusd_math::redemption as rdm;
 use fusd_math::{mul_div_floor, ray_mul, RAY};
 
 use crate::accrual;
 use crate::constants::{
     FUSD_MINT_SEED, MARKET_SEED, MAX_PRICE_STALENESS_SLOTS, MAX_REDEMPTION_CANDIDATES,
-    REDEMPTION_BITMAP_SEED, ZOMBIE_BUCKET,
+    MAX_REDEMPTION_FEE_BPS, REDEMPTION_BITMAP_SEED, ZOMBIE_BUCKET,
 };
 use crate::errors::FusdError;
 use crate::state::{Market, Position, RedemptionBitmap};
@@ -63,7 +64,29 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     let now = clock.unix_timestamp;
     accrual::accrue(&mut ctx.accounts.market, now)?;
     let spot = ctx.accounts.market.spot;
-    let fee_bps = ctx.accounts.market.redemption_fee_bps as u128;
+
+    // C9 dynamic redemption base-rate: when enabled (`redemption_base_rate_max_bps > 0`), the fee is
+    // the flat `redemption_fee_bps` FLOOR plus a decaying volume-spike base-rate, clamped to
+    // `MAX_REDEMPTION_FEE_BPS`. Decay the stored base-rate to `now` ONCE (the rate is fixed across
+    // this redemption, like Liquity); the post-redemption bump is applied below. When disabled
+    // (`max_bps == 0`) the base-rate stays inert at 0 and the fee is exactly the flat floor
+    // (byte-identical to pre-C9). `total_debt_before` (post-accrue, pre-redeem) is the bump denominator.
+    let base_rate_max_bps = ctx.accounts.market.redemption_base_rate_max_bps;
+    let total_debt_before = ctx.accounts.market.agg_recorded_debt;
+    let decayed_base_rate = if base_rate_max_bps > 0 {
+        rdm::decay_base_rate(
+            ctx.accounts.market.redemption_base_rate,
+            now.saturating_sub(ctx.accounts.market.redemption_base_rate_ts),
+        )
+    } else {
+        0
+    };
+    let fee_bps = rdm::effective_fee_bps(
+        decayed_base_rate,
+        ctx.accounts.market.redemption_fee_bps,
+        base_rate_max_bps,
+        MAX_REDEMPTION_FEE_BPS,
+    ) as u128;
 
     // Redemption pays face value against a fresh oracle.
     let slot = clock.slot;
@@ -224,6 +247,15 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
 
     let redeemed_fusd = (amount as u128) - remaining;
     require!(redeemed_fusd > 0, FusdError::NothingToRedeem);
+
+    // C9: commit the dynamic base-rate — decayed value PLUS this redemption's volume bump
+    // (`+= (redeemed / pre-redemption debt) / BETA`), anchored at `now`. Only when enabled; disabled
+    // markets leave the base-rate inert at 0 (no state churn, byte-identical pre-C9 behavior).
+    if base_rate_max_bps > 0 {
+        ctx.accounts.market.redemption_base_rate =
+            rdm::bump_base_rate(decayed_base_rate, redeemed_fusd, total_debt_before);
+        ctx.accounts.market.redemption_base_rate_ts = now;
+    }
 
     // Burn the redeemed fUSD from the redeemer.
     token::burn(

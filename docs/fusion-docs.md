@@ -53,7 +53,7 @@ FUSD's $1 peg is held by four overlapping economic loops rather than any single 
 | 1 | **Permissionless redemption floor** | Burn FUSD for $1 of collateral at face value (minus a flat fee). Sets a hard price floor: FUSD below $1 is a profitable arbitrage to redeem. Drains the lowest-rate debt first via the on-chain rate-bucket bitmap. | [Built] |
 | 2 | **Repay arbitrage** | Buy sub-$1 FUSD, `repay` $1 of debt with it. Any holder of debt can profit, contracting supply when FUSD is weak. | [Built] |
 | 3 | **Reactor Pool (RP)** | A standing pool of FUSD that buys liquidated collateral at a discount, burning FUSD as it absorbs bad positions — a buyer of last resort that contracts supply during stress. | [Built] |
-| 4 | **User-set borrow rates** | Each borrower picks their own rate (Liquity v2 / BOLD); higher-rate debt is redeemed first ("debt-in-front"). Supply self-clears: rates rise until borrowers willing to bear redemption risk fill demand. | [Built] (rate field + bucketing + `adjust_rate` wired; the dynamic base-rate fee that discourages rate-gaming is [Planned]) |
+| 4 | **User-set borrow rates** | Each borrower picks their own rate (Liquity v2 / BOLD); higher-rate debt is redeemed first ("debt-in-front"). Supply self-clears: rates rise until borrowers willing to bear redemption risk fill demand. | [Built] (rate field + bucketing + `adjust_rate` wired; the dynamic base-rate fee that discourages rate-gaming is also [Built], C9) |
 
 Solvency (distinct from the peg) rests on overcollateralization + fast permissionless liquidation + a pre-funded surplus/insurance buffer — never on reflexive dilution of a governance or sister token.
 
@@ -539,7 +539,7 @@ This reconciliation is wired into `borrow`, `repay`, `deposit`, `withdraw`, `liq
 3. **Validate candidates.** The redeemer passes candidate `Position` accounts as `remaining_accounts` (capped at `MAX_REDEMPTION_CANDIDATES = 20`, the >64-account DoS guard). For each: it must carry the right `collateral_mint`, have `recorded_debt > 0`, and be in the lowest normal bucket (or the zombie pen); duplicates are rejected (`DuplicateRedemptionTarget`). A candidate **closed mid-flight** (repaid + `close_position` between tx build and execution) is **skipped, not a whole-batch revert** — but a present-but-wrong account (wrong market, or a non-Position) still hard-reverts.
 4. **Realize each candidate (mandatory).** `redist::realize` folds any pending tier-2 redistribution into each candidate *before* anything else. This is critical: a candidate carrying pending redistributed debt, if redeemed-to-zero on its *stale recorded* `art`, would resurrect that debt on its next touch — out of its bucket, untargetable, with `agg_art` carrying debt for which no FUSD was burned. The adversarial review flagged the original omission of this step as a **CRITICAL** bug (fixed and regression-tested). Redeem is a position touch like any other and must realize first.
 5. **Sort lowest-CR-first among the submitted.** The candidates are sorted by `cmp_collateral_ratio` ascending; the program ignores the submitted order.
-6. **Redeem each.** For each candidate until `amount` is exhausted: present `debt = recorded_debt` (post-realize) and `coll_value = ray_mul(ink, spot)`, then `redeem_amt = min(remaining, debt, coll_value)`. The `coll_value` cap means redemption **never creates bad debt** on an underwater position. Collateral removed at face value is `mul_div_floor(redeem_amt, RAY, spot)` (floored against the redeemer), capped at `ink`. The flat fee `fee_coll = coll_total · redemption_fee_bps / 10_000` is retained in `Market.surplus_collateral`; the redeemer receives `coll_total − fee_coll`. `recorded_debt`/`ink`, `agg_recorded_debt`/`total_collateral`, and the stake are updated; a position drained to `ink == 0` with residual debt moves to the zombie pen.
+6. **Redeem each.** For each candidate until `amount` is exhausted: present `debt = recorded_debt` (post-realize) and `coll_value = ray_mul(ink, spot)`, then `redeem_amt = min(remaining, debt, coll_value)`. The `coll_value` cap means redemption **never creates bad debt** on an underwater position. Collateral removed at face value is `mul_div_floor(redeem_amt, RAY, spot)` (floored against the redeemer), capped at `ink`. The fee `fee_coll = coll_total · fee_bps / 10_000` is retained in `Market.surplus_collateral`; the redeemer receives `coll_total − fee_coll`. `fee_bps` is the flat `redemption_fee_bps` UNLESS the C9 dynamic base-rate is enabled (`redemption_base_rate_max_bps > 0`), in which case it is `clamp(redemption_fee_bps + min(base_rate_bps, redemption_base_rate_max_bps), floor, MAX_REDEMPTION_FEE_BPS)` — the decaying `Market.redemption_base_rate` (computed once per redemption via `fusd_math::redemption`: decayed to now at a 6h half-life, then bumped post-redemption by `(redeemed / market debt) / BETA`) layered on top of the flat floor. `urgent_redeem` is always 0-fee and never touches the base-rate. `recorded_debt`/`ink`, `agg_recorded_debt`/`total_collateral`, and the stake are updated; a position drained to `ink == 0` with residual debt moves to the zombie pen.
 7. **Burn and pay.** Burn exactly the redeemed FUSD from the redeemer, then transfer the net collateral out of the vault (signed by the `Market` PDA). The 4-term vault invariant `vault == total_collateral + surplus_collateral + total_coll_surplus + protocol_collateral` holds exactly across the operation (and is asserted as `==` by the litesvm suite) — while the on-chain handler's last step asserts the load-bearing **sufficiency** bound `vault >= Σ tracked` (a permissionless donation is tolerated; the dangerous under-funded direction hard-reverts) via `reconcile::assert_collateral_vault_sufficiency`.
 
 ### 5.7 In-bucket fairness: the disclosed compromise
@@ -556,14 +556,14 @@ litesvm integration tests across `litesvm_buckets.rs` (count bookkeeping, width-
 
 ### 5.10 Deferred refinements
 
-One genuinely deferred follow-on remains; the rest of the original deferral list has since shipped (see the rows below):
+The original deferral list has now fully shipped (see the rows below):
 
 | Refinement | What it adds |
 |---|---|
 | `MIN_DEBT` + zombie bucket | An always-drained-first bucket (Liquity `lastZombie` analog) so sub-minimum dust positions can't clog the lowest bucket |
 | `adjust_rate` anti-gaming | Upfront fee + cooldown on a rate decrease, to stop gaming the redemption queue |
 | `MAX_REDEMPTION_CANDIDATES` **[Built]** | An account-count cap (20) on `remaining_accounts` (the >64-account DoS) |
-| Dynamic base-rate | Liquity's decaying base-rate fee replacing today's flat clamped `redemption_fee_bps` |
+| Dynamic base-rate **[Built]** (C9) | Liquity's decaying volume-spike base-rate (6h half-life) ADDED on top of the flat `redemption_fee_bps` floor, clamped to `MAX_REDEMPTION_FEE_BPS`; governable `redemption_base_rate_max_bps` caps/enables it (0 = flat-fee-only, the default) |
 | Fuzz + Certora **[Built]** | B8 proptest (bitmap `BTreeSet` model + `cmp_collateral_ratio` order laws) plus the Certora #2a bitmap-coupling invariant (`words ⟺ counts`), VERIFIED on the cloud and mutation-checked |
 
 (Shutdown urgent redemption — 0-fee, unordered, last-price — is now **[Built]** as `urgent_redeem`; see §8.)
@@ -709,7 +709,7 @@ Tested by 5 host CLMM-parse unit tests + 29 litesvm crank tests (Orca/Raydium sa
 
 FUSD's governance design is the load-bearing realization of the project's founding rule: *credible neutrality through code, not policy*. Governance does not custody, freeze, seize, or mint — not because operators promise not to, but because the program offers no instruction that can. What governance *can* do is narrow by construction: write a small set of risk-parameter fields, only within hard-coded bounds, never retroactively. Everything in this section is downstream of that constraint.
 
-A crucial accuracy note up front: **the bounded `GovernanceGate` + FUSD-owned timelock are now [Built]** and govern market-parameter changes through a two-speed flow (`queue_param_change` → delay → permissionless `execute_param_change`), with compile-time clamps enforced at both queue and execute. The decision-#2 localnet PoC that gated this work is **done and passing** (a Squads vault PDA can queue a change through the gate; see §9.3). The de-risk **`guardian_derisk` + `set_guardian`** and the terminal **`shutdown` + `urgent_redeem`** are now [Built] (§7.2, §8). The inbound-authority handoff is **two-step** (propose → the successor signs to accept), and every executed change re-checks the per-field clamps **plus** the relational `validate_market_config` bounds (collar fundability, RP-solvency, `mcr ≥ scr`) and emits a forensic `prev_value`→`value` trail; an MCR raise additionally arms the liquidation grace window. What remains **[Planned]**: the broader `RiskParamRegistry` (the gate today applies the **twelve `MarketParam`s** — `Mcr`, `DebtCeiling`, `RedemptionFee`, `LiqGasComp`, `RateLimitCap`, `Ccr`, `LiqBonus`, `MinDebt`, `RateAdjustCooldown`, `KeeperReward`, `BorrowFee`, `BadDebtPaydown` — directly to the `Market`; oracle thresholds + `scr_bps` are still init-time-only). `config.gov_authority` is the bootstrap/admin authority (creates markets, oracles, SPs, and the gate; itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`); the gate's own **migratable `inbound_authority`** is the param-tuning authority that queues timelocked changes.
+A crucial accuracy note up front: **the bounded `GovernanceGate` + FUSD-owned timelock are now [Built]** and govern market-parameter changes through a two-speed flow (`queue_param_change` → delay → permissionless `execute_param_change`), with compile-time clamps enforced at both queue and execute. The decision-#2 localnet PoC that gated this work is **done and passing** (a Squads vault PDA can queue a change through the gate; see §9.3). The de-risk **`guardian_derisk` + `set_guardian`** and the terminal **`shutdown` + `urgent_redeem`** are now [Built] (§7.2, §8). The inbound-authority handoff is **two-step** (propose → the successor signs to accept), and every executed change re-checks the per-field clamps **plus** the relational `validate_market_config` bounds (collar fundability, RP-solvency, `mcr ≥ scr`) and emits a forensic `prev_value`→`value` trail; an MCR raise additionally arms the liquidation grace window. What remains **[Planned]**: the broader `RiskParamRegistry` (the gate today applies the **thirteen `MarketParam`s** — `Mcr`, `DebtCeiling`, `RedemptionFee`, `LiqGasComp`, `RateLimitCap`, `Ccr`, `LiqBonus`, `MinDebt`, `RateAdjustCooldown`, `KeeperReward`, `BorrowFee`, `BadDebtPaydown`, `RedemptionBaseRateMax` — directly to the `Market`; oracle thresholds + `scr_bps` are still init-time-only). `config.gov_authority` is the bootstrap/admin authority (creates markets, oracles, SPs, and the gate; itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`); the gate's own **migratable `inbound_authority`** is the param-tuning authority that queues timelocked changes.
 
 ### 7.1 The futarchy authority model (MetaDAO) [Planned]
 
@@ -772,7 +772,7 @@ All defaults and clamps below are the literal constants in `programs/fusd-core/s
 
 #### Market parameters [Built]
 
-**Twelve `MarketParam`s are gate-tunable** (timelocked `queue_param_change` → `execute_param_change`, clamps re-checked at both, plus the relational `validate_market_config` bounds): `Mcr`, `DebtCeiling`, `RedemptionFee`, `LiqGasComp`, `RateLimitCap`, `Ccr`, `LiqBonus`, `MinDebt`, `RateAdjustCooldown`, `KeeperReward`, `BorrowFee`, `BadDebtPaydown`. The reserve bond, rate-bucket width, and `scr_bps` stay **init-time-only** (deliberately non-retroactive — the bond is fixed per-position at open and `Position.bucket` is stored).
+**Thirteen `MarketParam`s are gate-tunable** (timelocked `queue_param_change` → `execute_param_change`, clamps re-checked at both, plus the relational `validate_market_config` bounds): `Mcr`, `DebtCeiling`, `RedemptionFee`, `LiqGasComp`, `RateLimitCap`, `Ccr`, `LiqBonus`, `MinDebt`, `RateAdjustCooldown`, `KeeperReward`, `BorrowFee`, `BadDebtPaydown`, `RedemptionBaseRateMax`. The reserve bond, rate-bucket width, and `scr_bps` stay **init-time-only** (deliberately non-retroactive — the bond is fixed per-position at open and `Position.bucket` is stored).
 
 | Parameter | Field / `MarketParam` | Default const | Clamp | Tunable |
 |---|---|---|---|---|
@@ -788,6 +788,7 @@ All defaults and clamps below are the literal constants in `programs/fusd-core/s
 | Rate-adjust cooldown/fee | `rate_adjust_cooldown_secs` / `RateAdjustCooldown` | 0 (disabled) | `<= MAX_RATE_ADJUST_COOLDOWN_SECS` | gate |
 | Keeper reward (refresh crank) | `keeper_reward_bps` / `KeeperReward` | 0 (disabled) | `<= MAX_KEEPER_REWARD_BPS` | gate |
 | Auto bad-debt paydown (C16) | `bad_debt_paydown_bps` / `BadDebtPaydown` | 0 (disabled) | `<= MAX_BAD_DEBT_PAYDOWN_BPS` = 10_000 (100%) | gate |
+| Dynamic redemption base-rate cap (C9) | `redemption_base_rate_max_bps` / `RedemptionBaseRateMax` | 0 (disabled) | `<= MAX_REDEMPTION_BASE_RATE_BPS` = 500 (5%) | gate |
 
 `NUM_RATE_BUCKETS` = 256 and `BITMAP_WORDS` = 4 are **fixed structural constants** (the bitmap is `[u64; 4]`), not governable: width × 256 sets the addressable rate range (default 0–25.5%).
 
@@ -813,7 +814,7 @@ Related structural constants (not governable): `TWAP_RING_CAPACITY` = 64 (must b
 | SCR (shutdown ratio) | per-market `Market.scr_bps` | [Built] — stored (default 110%, init-time-only), drives the `shutdown` TCR-breach trigger. |
 | CCR (borrow-restriction band) | `Market.ccr_bps` (`MarketParam`) | [Built] — governable, default 0 = disabled, clamped 100%–300%; blocks risk-increasing ops when TCR < CCR. Likely ~150–160% once calibrated. |
 | Interest-rate min/max bounds | per-market | [Planned] — bounds on user-set `user_rate`; no clamp constants yet. The `// TODO(params milestone)` block in `constants.rs` reserves these. |
-| Redemption dynamic base-rate + decay | per-market | [Planned] — the Liquity base-rate (with ~35-day decay) replaces today's flat `redemption_fee_bps`. Constants to pin remain open. |
+| Redemption dynamic base-rate + decay | `Market.redemption_base_rate` (+ `RedemptionBaseRateMax`) | [Built] (C9) — the Liquity decaying volume-spike base-rate ADDED on top of the flat `redemption_fee_bps` floor (6h half-life, BETA=2 — both placeholder constants pending calibration), clamped to `MAX_REDEMPTION_FEE_BPS`; governable cap/enable defaults 0 (flat-fee-only). |
 | Liquidation penalty (RP / redistribution) | per-market | [Planned] — pinned constants pending BOLD-audit port (~5% RP, ~10–20% redistribution). |
 | Net-outflow rate-limit cap | `Market.rl_cap` (`MarketParam`) | [Built] — leaky bucket on net FUSD issuance; cap default 0 (disabled); liquidation/redemption/urgent_redeem hard-exempt. Window is the 24h constant `RATELIMIT_WINDOW_SECS`. |
 | Debt-ceiling auto-line (`gap`/`ttl`) | per-market `RateLimiter` account | [Planned] — Maker DC-IAM auto-line with a fast loosen-path. |
@@ -1127,7 +1128,7 @@ The owner-claimable liquidation surplus is **not** a separate account — it is 
 
 | Account | PDA seeds | Purpose | Status |
 |---|---|---|---|
-| `RiskParamRegistry` | `[b"registry"]` | The broader clamped param set beyond the twelve `MarketParam`s (oracle thresholds, `scr_bps`, etc.); written only via the gate. | [Planned] |
+| `RiskParamRegistry` | `[b"registry"]` | The broader clamped param set beyond the thirteen `MarketParam`s (oracle thresholds, `scr_bps`, etc.); written only via the gate. | [Planned] |
 | `RateLimiter` (auto-line) | `[b"ratelimit", collateral_mint]` | The Maker DC-IAM debt-ceiling auto-line account (`gap`/`ttl`) — distinct from the [Built] net-outflow limiter on `Market`. | [Planned] |
 
 ### 11.3 Build, test & deployment
@@ -1181,7 +1182,7 @@ The phased decentralization plan gates each step on hard exit criteria; the tabl
 **Explicitly deferred / planned, by subsystem:**
 
 - **Oracle (the remaining launch-gating window):** the live `update_price` + `sample_twap` cranks are **[Built]** (the borrow blocker is cleared). The delegated oracle window has now landed: the **oracle-divergence gate** (B3), the asymmetric **`debt_price`** for liquidation (B5, `Market.debt_spot`), the absolute **plausibility band** on the spot commit (C6), and the **bounded-updatable oracle program IDs in `ProtocolConfig`** ahead of Pyth's ~2026-07-31 core migration (D3) are all **[Built]**.
-- **Governance:** the `GovernanceGate` + FUSD-owned timelock and their setters are **[Built]** — the **twelve `MarketParam`s** are governance-tunable behind the clamped delay (with the relational `validate_market_config` bounds + the forensic `prev_value` trail; two-step authority handoffs; decision-#2 PoC passing). The independent **`guardian_derisk` + `set_guardian` are [Built]** (§7.2). Still **[Planned]:** the `RiskParamRegistry` for the broader param set and oracle-threshold setters (oracle thresholds + `scr_bps` + `reserve_lamports` + `bucket_width_bps` remain init-time-only).
+- **Governance:** the `GovernanceGate` + FUSD-owned timelock and their setters are **[Built]** — the **thirteen `MarketParam`s** are governance-tunable behind the clamped delay (with the relational `validate_market_config` bounds + the forensic `prev_value` trail; two-step authority handoffs; decision-#2 PoC passing). The independent **`guardian_derisk` + `set_guardian` are [Built]** (§7.2). Still **[Planned]:** the `RiskParamRegistry` for the broader param set and oracle-threshold setters (oracle thresholds + `scr_bps` + `reserve_lamports` + `bucket_width_bps` remain init-time-only).
 - **Liquidation/redemption polish:** per-position gas-comp cap; surplus-buffer absorption of un-homed bad debt (currently `NoRedistributionRecipients` reverts); `MIN_DEBT` + the always-drained-first zombie bucket for dust; an `adjust_rate` anti-gaming fee + cooldown; a `MAX_REDEMPTION_CANDIDATES` account cap (the >64 DoS); the dynamic Liquity base-rate (vs the current flat clamped fee).
 - **Circuit breakers:** the debt-ceiling auto-line (`RateLimiter` account). (Per-market `shutdown`/`urgent_redeem`, the net-outflow rate limiter, the CCR borrow-restriction band, the slot-staleness halt, the on-resume liquidation grace window, and the oracle-divergence gate are [Built].)
 - **Other:** `CollSurplus` + `claim_coll_surplus`; the surplus/insurance buffer; the global supply-invariant reconciliation crank; deferred CDP litesvm cases (debt-ceiling 6006). Before launch, the **novel-on-Solana** redemption bitmap still owes bespoke fuzz + Certora — especially the concurrent "last member leaves a bucket" flip, currently serialized only by the per-market `Market` write-lock.
@@ -1196,7 +1197,7 @@ Every component from each section's per-section status table, grouped by area.
 |---|---|---|---|
 | Single-program design (`fusd-core`) | Architecture | [Built] | One program; isolation from the account/write-lock layout |
 | Isolated per-collateral markets | Architecture | [Built] | `Market` per collateral mint; Sealevel-parallel hot path |
-| Four peg loops (redeem floor / repay-arb / RP / user-set rates) | Architecture | [Built] | All four wired & litesvm-tested; dynamic base-rate fee [Planned] |
+| Four peg loops (redeem floor / repay-arb / RP / user-set rates) | Architecture | [Built] | All four wired & litesvm-tested; dynamic base-rate fee also [Built] (C9) |
 | `fusd-math` (WAD/RAY, U256, ray_pow, P/S, redist, rate-bucket) | Architecture | [Built] | Compiled-in crate; **113 host tests** + 25 Kani harnesses, SBF-clean |
 | `fusd-oracle` (validation + TWAP ring) | Architecture | [Built] | Aggregation/TWAP logic + the live `update_price`/`sample_twap` cranks wired to `spot` |
 | WAD/RAY fixed-point discipline | Architecture | [Built] | U256 intermediates, multiply-before-divide, round-against-protocol, checked release math |
@@ -1248,7 +1249,7 @@ Every component from each section's per-section status table, grouped by area.
 | `min_debt` dust floor + zombie pen | Redemption | [Built] | drained/dust positions parked out of ordering, can't wedge the floor |
 | `MAX_REDEMPTION_CANDIDATES` cap + closed-candidate skip | Redemption | [Built] | =20, the >64-account DoS guard; closed candidates skipped not reverted |
 | Concurrent bitmap-flip safety | Redemption | [Partial] | serialized by the `Market` write-lock; B8 proptest model built; concurrent-flip Certora pending |
-| Dynamic base-rate fee | Redemption | [Planned] | would replace the flat clamped fee |
+| Dynamic base-rate fee | Redemption | [Built] (C9) | decaying volume-spike base-rate added on top of the flat fee floor; governable cap/enable, default off |
 | Shutdown 0-fee urgent redemption | Redemption | [Built] | `urgent_redeem`, unordered per-market wind-down |
 | `PriceView` / `conf_ratio_bps` / `is_stale` | Oracle | [Built] | Oracle-agnostic normalized view; host-tested |
 | `collateral_price` / `debt_price` (asymmetric `price ∓ k·σ`) | Oracle | [Built] | `collateral ≤ debt` invariant grid-tested |
@@ -1270,7 +1271,7 @@ Every component from each section's per-section status table, grouped by area.
 | On-resume liquidation grace window | Oracle | [Built] | Solana-halt breaker — `liq_grace_until` armed on stall→resume by `Market::commit_fresh_spot`; `liquidate` requires `slot >= liq_grace_until` (`LIQ_RESUME_GRACE_SLOTS` ≈ 5 min) |
 | Oracle program IDs as bounded-updatable in `ProtocolConfig` | Oracle | [Planned] | hardcoded for v1; eases Pyth's ~2026-07-31 core migration |
 | Compile-time parameter clamps (`constants.rs`) | Governance | [Built] | enforced at init by `init_market` / `init_market_oracle`; reject with `ParamOutOfBounds` |
-| Market params (the twelve `MarketParam`s) | Governance | [Built] | `Mcr`/`DebtCeiling`/`RedemptionFee`/`LiqGasComp`/`RateLimitCap`/`Ccr`/`LiqBonus`/`MinDebt`/`RateAdjustCooldown`/`KeeperReward`/`BorrowFee`/`BadDebtPaydown` gate-tunable via timelock; reserve/bucket-width/scr init-time-only (non-retroactive) |
+| Market params (the thirteen `MarketParam`s) | Governance | [Built] | `Mcr`/`DebtCeiling`/`RedemptionFee`/`LiqGasComp`/`RateLimitCap`/`Ccr`/`LiqBonus`/`MinDebt`/`RateAdjustCooldown`/`KeeperReward`/`BorrowFee`/`BadDebtPaydown`/`RedemptionBaseRateMax` gate-tunable via timelock; reserve/bucket-width/scr init-time-only (non-retroactive) |
 | Config relational bounds + forensic trail (klend C2/C5/C8) | Governance | [Built] | `validate_market_config` (collar/RP-solvency/`mcr≥scr`) at init+queue+execute; `prev_value` event; MarketParam append-only tombstone |
 | Two-step authority handoffs (gate inbound + `gov_authority`) | Governance | [Built] | propose → successor signs to accept; a typo'd key can't strand the role |
 | MCR-raise liquidation grace (klend C7) | Governance | [Built] | an executed MCR raise arms `liq_grace_until`, machine-enforcing the exit window even at timelock 0 |
@@ -1279,7 +1280,7 @@ Every component from each section's per-section status table, grouped by area.
 | `GovernanceGate` PDA + migratable inbound authority | Governance | [Built] | sole market-param setter authority; `migrate_inbound_authority` repoints it; 7 litesvm tests |
 | Bounded param setters (`queue_param_change` / `execute_param_change` / `cancel_param_change`) | Governance | [Built] | queue (clamped) → delay → permissionless execute; replaces the immediate setter |
 | FUSD-owned timelock (`TimelockedParam`) | Governance | [Built] | Squads is threshold-1/`time_lock=0`; FUSD enforces its own delay (queue→eta→execute) |
-| `RiskParamRegistry` (broader param set) | Governance | [Planned] | gate applies the twelve `MarketParam`s directly; oracle thresholds + `scr_bps` still init-time-only |
+| `RiskParamRegistry` (broader param set) | Governance | [Planned] | gate applies the thirteen `MarketParam`s directly; oracle thresholds + `scr_bps` still init-time-only |
 | De-risk-only guardian (`guardian_derisk` / `set_guardian`) | Governance | [Built] | per-market auto-expiring pause of NEW debt only; gov-gated rotation; never seize/freeze/mint; 9 litesvm tests |
 | MetaDAO futarchy wiring (Branch a, localnet PoC) | Governance | [Planned] | direct external CPI confirmed; PoC gates the gate code |
 | SCR (shutdown ratio) | Governance | [Built] | `Market.scr_bps` (default 110%, clamp constants exist; init-time-only) |

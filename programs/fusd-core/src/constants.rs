@@ -240,9 +240,17 @@ pub const MIN_BUCKET_WIDTH_BPS: u16 = 1; // 0.01%
 pub const MAX_BUCKET_WIDTH_BPS: u16 = 100; // 1.00%
 
 /// Flat redemption fee (bps of the redeemed amount), governance-adjustable within this clamp.
-/// 0 disables the fee. The dynamic Liquity base-rate is a deferred follow-on.
+/// 0 disables the fee. With C9 enabled this is the FLOOR; the dynamic base-rate adds on top.
 pub const DEFAULT_REDEMPTION_FEE_BPS: u16 = 50; // 0.50%
 pub const MAX_REDEMPTION_FEE_BPS: u16 = 500; // 5%
+
+/// Dynamic redemption base-rate cap (bps; BOLD-sweep C9). The governable `redemption_base_rate_max_bps`
+/// caps how much the decaying volume-spike base-rate may ADD on top of the flat `redemption_fee_bps`
+/// floor; **0 = the dynamic component is DISABLED** (redemptions price off the flat fee alone,
+/// byte-identical to pre-C9). Clamped `<= MAX_REDEMPTION_FEE_BPS` so the dynamic add can never push the
+/// effective fee past the overall redemption-fee ceiling. Decay half-life + BETA are the compile-time
+/// `fusd_math::redemption` constants (placeholders pending calibration).
+pub const MAX_REDEMPTION_BASE_RATE_BPS: u16 = 500; // 5% — same ceiling as the flat fee
 
 /// Upfront borrowing fee (bps of the borrowed amount; BOLD-sweep C7). A one-time charge added to the
 /// position's debt at `borrow` — the primary redemption-evasion deterrent (a borrower can't dodge a

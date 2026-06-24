@@ -13,8 +13,8 @@ use crate::constants::{
     CONFIG_SEED, GOV_GATE_SEED, MAX_BAD_DEBT_PAYDOWN_BPS, MAX_BORROW_FEE_BPS, MAX_CCR_BPS,
     MAX_GOV_TIMELOCK_SECS, MAX_LIQ_BONUS_BPS, MAX_KEEPER_REWARD_BPS, MAX_LIQ_GAS_COMP_BPS,
     MAX_MCR_BPS, MAX_MIN_DEBT,
-    MAX_RATE_ADJUST_COOLDOWN_SECS, MAX_REDEMPTION_FEE_BPS, MIN_CCR_BPS, MIN_GOV_TIMELOCK_SECS,
-    MIN_MCR_BPS, TIMELOCK_SEED,
+    MAX_RATE_ADJUST_COOLDOWN_SECS, MAX_REDEMPTION_BASE_RATE_BPS, MAX_REDEMPTION_FEE_BPS, MIN_CCR_BPS,
+    MIN_GOV_TIMELOCK_SECS, MIN_MCR_BPS, TIMELOCK_SEED,
 };
 use crate::errors::FusdError;
 use crate::state::{GovernanceGate, Market, ProtocolConfig, TimelockedParam};
@@ -75,6 +75,10 @@ fn validate_param(param: MarketParam, value: u64) -> Result<()> {
         // 0 disables the auto bad-debt paydown; otherwise clamped to `<= MAX_BAD_DEBT_PAYDOWN_BPS` (C16).
         MarketParam::BadDebtPaydown => {
             require!(value <= MAX_BAD_DEBT_PAYDOWN_BPS as u64, FusdError::ParamOutOfBounds);
+        }
+        // 0 disables the dynamic redemption base-rate; otherwise clamped to the redemption-fee ceiling (C9).
+        MarketParam::RedemptionBaseRateMax => {
+            require!(value <= MAX_REDEMPTION_BASE_RATE_BPS as u64, FusdError::ParamOutOfBounds);
         }
     }
     Ok(())
@@ -144,6 +148,7 @@ fn current_param(market: &Market, param: MarketParam) -> u64 {
         MarketParam::KeeperReward => market.keeper_reward_bps as u64,
         MarketParam::BorrowFee => market.borrow_fee_bps as u64,
         MarketParam::BadDebtPaydown => market.bad_debt_paydown_bps as u64,
+        MarketParam::RedemptionBaseRateMax => market.redemption_base_rate_max_bps as u64,
     }
 }
 
@@ -191,6 +196,7 @@ fn apply_param(market: &mut Market, param: MarketParam, value: u64) {
         MarketParam::KeeperReward => market.keeper_reward_bps = value as u16,
         MarketParam::BorrowFee => market.borrow_fee_bps = value as u16,
         MarketParam::BadDebtPaydown => market.bad_debt_paydown_bps = value as u16,
+        MarketParam::RedemptionBaseRateMax => market.redemption_base_rate_max_bps = value as u16,
     }
 }
 

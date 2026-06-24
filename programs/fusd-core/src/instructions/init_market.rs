@@ -191,13 +191,18 @@ pub fn handler(ctx: Context<InitMarket>, args: InitMarketArgs) -> Result<()> {
     m.borrow_fee_bps = 0;
     // Auto bad-debt paydown starts DISABLED (0); governance enables it (C16).
     m.bad_debt_paydown_bps = 0;
+    // Dynamic redemption base-rate starts at 0 and DISABLED (max_bps 0 ⇒ flat-fee-only); governance
+    // enables the decaying volume-spike via `RedemptionBaseRateMax` (C9). The decay anchor is genesis.
+    m.redemption_base_rate = 0;
+    m.redemption_base_rate_ts = m.last_update_ts;
+    m.redemption_base_rate_max_bps = 0;
     // Un-homed retained collateral (the `bad_debt` offset) + global-backstop per-market counters
     // all start at 0 (no liquidations/contributions/draws yet). Explicit so every Market field's
     // genesis value is readable from this handler rather than left to Anchor's implicit zero-fill.
     m.protocol_collateral = 0;
     m.global_contributed = 0;
     m.global_drawn = 0;
-    m._reserved = [0u8; 36];
+    m._reserved = [0u8; 10];
 
     emit_cpi!(crate::events::MarketInitialized {
         collateral_mint: m.collateral_mint,

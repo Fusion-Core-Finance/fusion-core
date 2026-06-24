@@ -66,6 +66,10 @@ pub enum MarketParam {
     /// `bad_debt_paydown_bps` — the auto bad-debt paydown rate (BOLD-sweep C16). 0 disables; otherwise
     /// clamped to `<= MAX_BAD_DEBT_PAYDOWN_BPS`. Appended last (the discriminant is serialized).
     BadDebtPaydown,
+    /// `redemption_base_rate_max_bps` — the dynamic redemption base-rate cap/enable (BOLD-sweep C9). 0
+    /// DISABLES the dynamic component (flat-fee-only); otherwise clamped to
+    /// `<= MAX_REDEMPTION_BASE_RATE_BPS`. Appended last (the discriminant is serialized).
+    RedemptionBaseRateMax,
 }
 
 /// The bounded governance gate. PDA `[b"gov_gate"]`. The sole authorizer of timelocked param
@@ -205,6 +209,7 @@ mod tests {
             (MarketParam::KeeperReward, 9),
             (MarketParam::BorrowFee, 10),
             (MarketParam::BadDebtPaydown, 11),
+            (MarketParam::RedemptionBaseRateMax, 12),
         ];
         for (variant, tag) in pinned {
             let bytes = variant.try_to_vec().unwrap();

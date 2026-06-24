@@ -219,6 +219,21 @@ pub struct Market {
     /// (default). Carved from `_reserved`.
     pub bad_debt_paydown_bps: u16,
 
+    /// Dynamic redemption base-rate (RAY-scaled fraction; BOLD-sweep C9). The decaying volume-spike
+    /// component of the redemption fee: each `redeem` decays it toward 0 (6h half-life) then bumps it
+    /// by `(redeemed / market debt) / BETA`, and the effective fee is
+    /// `clamp(redemption_fee_bps + min(base_rate_bps, redemption_base_rate_max_bps), floor, MAX)`.
+    /// Only `redeem` reads/writes it (never `urgent_redeem`, which is 0-fee). `0` when quiet/disabled.
+    /// Carved from `_reserved`.
+    pub redemption_base_rate: u128,
+    /// Unix-ts of the last `redemption_base_rate` update (the decay anchor). Distinct from
+    /// `last_update_ts` (interest accrual), which moves on every touch. Carved from `_reserved`.
+    pub redemption_base_rate_ts: i64,
+    /// Governable cap (bps) on the dynamic base-rate's ADD over the flat fee floor (C9);
+    /// **0 = the dynamic component is DISABLED** (flat-fee-only, pre-C9 behavior). Clamped
+    /// (`MarketParam::RedemptionBaseRateMax`) to `<= MAX_REDEMPTION_BASE_RATE_BPS`. Carved from `_reserved`.
+    pub redemption_base_rate_max_bps: u16,
+
     /// Retained PROTOCOL-OWNED collateral (native) — the un-homed liquidation remainder (`coll_r`) that
     /// had no redistribution recipient, so it sits in the collateral vault backing NO position.
     /// Tracked separately from `total_collateral` (which only ever backs live positions + redistribution
@@ -241,7 +256,7 @@ pub struct Market {
     /// post-launch a Borsh account cannot grow without realloc, so headroom is free now and
     /// impossible later. Carve new fields from the HEAD of this reserve; old accounts' zeroed
     /// bytes must decode as the new field's documented `0 = disabled/none` sentinel.
-    pub _reserved: [u8; 36],
+    pub _reserved: [u8; 10],
 }
 
 impl Market {
@@ -298,8 +313,9 @@ impl Market {
         + 2                         // keeper_reward_bps (carved from the former 6-byte reserve)
         + 2                         // borrow_fee_bps (C7 — carved from _reserved)
         + 2                         // bad_debt_paydown_bps (C16 — carved from _reserved)
+        + 16 + 8 + 2                // redemption_base_rate, _ts, _max_bps (C9 — carved from _reserved)
         + 8                         // protocol_collateral (un-homed retained collateral)
         + 16 + 16                   // global_contributed, global_drawn (global backstop; widen, not carve)
-        + 36; // reserved (base 64 − 24 carved for debt_spot + liq_divergence_until − 2 borrow_fee_bps
-              // − 2 bad_debt_paydown_bps; the +32 global-backstop fields are a widen, so net SPACE = base + 32)
+        + 10; // reserved (base 64 − 24 debt_spot+liq_divergence_until − 2 borrow_fee − 2 bad_debt_paydown
+              // − 26 C9 base-rate fields; the +32 global-backstop fields are a widen, so net SPACE = base + 32)
 }
