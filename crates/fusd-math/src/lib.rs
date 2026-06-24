@@ -25,6 +25,7 @@ pub mod interest;
 pub mod oracle_scale;
 pub mod rate_bucket;
 pub mod recovery;
+pub mod redemption;
 pub mod redistribution;
 pub mod reactor_pool;
 
