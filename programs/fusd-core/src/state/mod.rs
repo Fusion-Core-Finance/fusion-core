@@ -14,6 +14,7 @@ pub mod position;
 pub mod protocol_config;
 pub mod redemption_bitmap;
 pub mod reactor_pool;
+pub mod supply_reconciliation;
 
 pub use debt_ceiling_line::*;
 pub use dex_twap::*;
@@ -26,6 +27,7 @@ pub use position::*;
 pub use protocol_config::*;
 pub use redemption_bitmap::*;
 pub use reactor_pool::*;
+pub use supply_reconciliation::*;
 
 /// Borsh SPACE pins. The zero-copy accounts get compile-time `const _`
 /// asserts in their own files; Borsh accounts can't (serialized size isn't a const), so this

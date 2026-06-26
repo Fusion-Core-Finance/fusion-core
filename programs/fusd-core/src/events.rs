@@ -407,6 +407,16 @@ pub struct BadDebtSettled {
     pub bad_debt_remaining: u128,
 }
 
+/// A supply-reconciliation (proof-of-reserves) run (`reconcile_supply`). `residual == 0` ⇒ the summed
+/// markets exactly back the live mint supply; non-zero ⇒ off-chain alarm (drift or a missing market).
+#[event]
+pub struct SupplyReconciled {
+    pub market_count: u32,
+    pub mint_supply: u128,
+    pub backing: u128,
+    pub residual: i128,
+}
+
 /// The debt-ceiling auto-line moved `Market.debt_ceiling` (`init`/`set`/permissionless `bump`).
 #[event]
 pub struct DebtCeilingLineBumped {

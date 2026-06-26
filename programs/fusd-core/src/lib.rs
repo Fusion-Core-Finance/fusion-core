@@ -193,6 +193,21 @@ pub mod fusd_core {
         instructions::debt_ceiling_line::bump(ctx)
     }
 
+    // --- Supply reconciliation (proof-of-reserves; auditability, not a solvency gate) ---
+
+    /// Governance: one-time create the global supply-reconciliation singleton.
+    pub fn init_supply_reconciliation(ctx: Context<InitSupplyReconciliation>) -> Result<()> {
+        instructions::supply_reconciliation::init(ctx)
+    }
+
+    /// Permissionless: re-derive `Σ_market (agg − unminted + bad)` over the submitted markets, compare
+    /// to the live mint supply, and stamp the residual. Auditability only; gates nothing.
+    pub fn reconcile_supply<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ReconcileSupply<'info>>,
+    ) -> Result<()> {
+        instructions::supply_reconciliation::reconcile(ctx)
+    }
+
     /// Permissionless: top up the global backstop reserve with protocol-strengthening fUSD.
     pub fn fund_backstop(ctx: Context<FundBackstop>, amount: u64) -> Result<()> {
         instructions::global_backstop::fund(ctx, amount)

@@ -53,6 +53,13 @@ pub const BACKSTOP_FUSD_VAULT_SEED: &[u8] = b"backstop_fusd";
 pub const MINT_AUTHORITY_SEED: &[u8] = b"mint_authority";
 /// `[b"fusd_mint"]` — the fUSD mint PDA (freeze authority None).
 pub const FUSD_MINT_SEED: &[u8] = b"fusd_mint";
+/// `[b"supply_recon"]` — the global supply-reconciliation (proof-of-reserves) singleton.
+pub const SUPPLY_RECON_SEED: &[u8] = b"supply_recon";
+
+/// Max `Market` accounts a single `reconcile_supply` call may sum (the per-tx account budget; one
+/// pass covers every live market at launch — SOL + a couple LSTs). A sharded multi-tx accumulation
+/// is the documented extension if the collateral set ever exceeds this.
+pub const MAX_RECONCILE_MARKETS: usize = 24;
 
 /// Max age (slots) of the cached collateral price accepted when taking on / holding debt.
 /// Placeholder until the real oracle defines per-collateral staleness; ~100s at 400ms.

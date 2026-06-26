@@ -1467,6 +1467,49 @@ pub fn init_global_backstop_ix(authority: &Pubkey) -> Instruction {
     }
 }
 
+// ---- supply reconciliation (proof-of-reserves) ----
+
+pub fn supply_recon_pda() -> Pubkey {
+    pda(&[b"supply_recon"])
+}
+
+pub fn read_supply_recon(svm: &LiteSVM) -> fusd_core::state::SupplyReconciliation {
+    let acct = svm.get_account(&supply_recon_pda()).unwrap();
+    fusd_core::state::SupplyReconciliation::try_deserialize(&mut acct.data.as_slice()).unwrap()
+}
+
+pub fn init_supply_reconciliation_ix(authority: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::InitSupplyReconciliation {
+            authority: *authority,
+            config: config_pda(),
+            supply_recon: supply_recon_pda(),
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::InitSupplyReconciliation {}.data(),
+    }
+}
+
+/// `reconcile_supply` over the given market PDAs (passed as remaining_accounts, all writable=false).
+pub fn reconcile_supply_ix(cranker: &Pubkey, markets: &[Pubkey]) -> Instruction {
+    let mut metas = fusd_core::accounts::ReconcileSupply {
+        cranker: *cranker,
+        fusd_mint: fusd_mint_pda(),
+        supply_recon: supply_recon_pda(),
+    }
+    .to_account_metas(None);
+    for m in markets {
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(*m, false));
+    }
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: metas,
+        data: fusd_core::instruction::ReconcileSupply {}.data(),
+    }
+}
+
 // ---- debt-ceiling auto-line (Maker DC-IAM) ----
 
 pub fn debt_ceiling_line_pda(coll: &Pubkey) -> Pubkey {
@@ -2330,6 +2373,24 @@ pub fn bootstrap_market_full(
         .expect("init_reactor_pool failed");
     send(svm, &[init_insurance_buffer_ix(&gov.pubkey(), &coll)], gov, &[])
         .expect("init_insurance_buffer failed");
+    coll
+}
+
+/// Add a SECOND (or Nth) market reusing the already-initialized protocol + singleton fUSD mint (does
+/// NOT call `init_protocol`). For multi-market tests (e.g. supply reconciliation across markets).
+pub fn bootstrap_extra_market(svm: &mut LiteSVM, gov: &Keypair, coll_mint_auth: &Keypair) -> Pubkey {
+    let coll_mint = Keypair::new();
+    create_mint(svm, gov, &coll_mint, COLL_DECIMALS, &coll_mint_auth.pubkey(), /*freeze=*/ false);
+    let coll = coll_mint.pubkey();
+    send(
+        svm,
+        &[init_market_ix(&gov.pubkey(), &coll, MCR_BPS, DEBT_CEILING, 0, 0, BUCKET_WIDTH_BPS, 0)],
+        gov,
+        &[],
+    )
+    .expect("init_market (extra) failed");
+    send(svm, &[init_reactor_pool_ix(&gov.pubkey(), &coll)], gov, &[]).expect("init_reactor_pool (extra)");
+    send(svm, &[init_insurance_buffer_ix(&gov.pubkey(), &coll)], gov, &[]).expect("init_insurance_buffer (extra)");
     coll
 }
 
