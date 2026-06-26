@@ -70,6 +70,29 @@ pub enum MarketParam {
     /// DISABLES the dynamic component (flat-fee-only); otherwise clamped to
     /// `<= MAX_REDEMPTION_BASE_RATE_BPS`. Appended last (the discriminant is serialized).
     RedemptionBaseRateMax,
+
+    // --- RiskParamRegistry: the broader tunable set on `MarketOracle` + `Market.scr_bps`. These
+    //     REQUIRE the optional `market_oracle` account in the queue/execute context (Scr writes the
+    //     Market). All bounded by the same compile-time clamps `init_market_oracle` enforces. ---
+    /// `MarketOracle.max_conf_bps` — Pyth conf/price freeze band. `(0, MAX_ORACLE_CONF_BPS]`.
+    OracleMaxConf,
+    /// `MarketOracle.max_deviation_bps` — Pyth↔Switchboard agreement band. `(0, MAX_ORACLE_DEVIATION_BPS]`.
+    OracleMaxDeviation,
+    /// `MarketOracle.twap_max_divergence_bps` — DEX-TWAP mint corridor. `(0, MAX_TWAP_DIVERGENCE_BPS]`;
+    /// must stay `<= liq_max_divergence_bps` (relational).
+    OracleTwapDivergence,
+    /// `MarketOracle.liq_max_divergence_bps` — liquidation-pause divergence gate. `[0, MAX_LIQ_DIVERGENCE_BPS]`;
+    /// must stay `>= twap_max_divergence_bps` (relational).
+    OracleLiqDivergence,
+    /// `MarketOracle.max_age_secs` — feed staleness cutoff. `(0, MAX_ORACLE_MAX_AGE_SECS]`.
+    OracleMaxAge,
+    /// `MarketOracle.k_bps` — asymmetric `price ∓ k·σ`. `[MIN_ORACLE_K_BPS, MAX_ORACLE_K_BPS]`.
+    OracleK,
+    /// `MarketOracle.twap_max_staleness_secs` — TWAP sample staleness. `(0, MAX_TWAP_STALENESS_SECS]`.
+    OracleTwapStaleness,
+    /// `Market.scr_bps` — shutdown collateral ratio. `[MIN_SCR_BPS, MAX_SCR_BPS]`; must stay `<= mcr_bps`
+    /// (relational, via `validate_market_config`).
+    Scr,
 }
 
 /// The bounded governance gate. PDA `[b"gov_gate"]`. The sole authorizer of timelocked param
@@ -210,6 +233,14 @@ mod tests {
             (MarketParam::BorrowFee, 10),
             (MarketParam::BadDebtPaydown, 11),
             (MarketParam::RedemptionBaseRateMax, 12),
+            (MarketParam::OracleMaxConf, 13),
+            (MarketParam::OracleMaxDeviation, 14),
+            (MarketParam::OracleTwapDivergence, 15),
+            (MarketParam::OracleLiqDivergence, 16),
+            (MarketParam::OracleMaxAge, 17),
+            (MarketParam::OracleK, 18),
+            (MarketParam::OracleTwapStaleness, 19),
+            (MarketParam::Scr, 20),
         ];
         for (variant, tag) in pinned {
             let bytes = variant.try_to_vec().unwrap();

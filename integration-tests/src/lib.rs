@@ -1402,6 +1402,7 @@ pub fn queue_param_change_ix(
             authority: *authority,
             gov_gate: gov_gate_pda(),
             market: market_pda(coll),
+            market_oracle: None,
             timelocked_param: timelock_pda(nonce),
             system_program: system_program::ID,
             event_authority: event_authority_pda(),
@@ -1419,6 +1420,43 @@ pub fn execute_param_change_ix(executor: &Pubkey, coll: &Pubkey, nonce: u64) -> 
         accounts: fusd_core::accounts::ExecuteParamChange {
             executor: *executor,
             market: market_pda(coll),
+            market_oracle: None,
+            timelocked_param: timelock_pda(nonce),
+            event_authority: event_authority_pda(),
+            program: fusd_core::ID,
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::ExecuteParamChange {}.data(),
+    }
+}
+
+/// QUEUE an oracle-targeting (RiskParamRegistry) param change — includes the `MarketOracle` account.
+pub fn queue_param_change_oracle_ix(authority: &Pubkey, coll: &Pubkey, nonce: u64, param: MarketParam, value: u64) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::QueueParamChange {
+            authority: *authority,
+            gov_gate: gov_gate_pda(),
+            market: market_pda(coll),
+            market_oracle: Some(market_oracle_pda(coll)),
+            timelocked_param: timelock_pda(nonce),
+            system_program: system_program::ID,
+            event_authority: event_authority_pda(),
+            program: fusd_core::ID,
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::QueueParamChange { param, value }.data(),
+    }
+}
+
+/// EXECUTE an oracle-targeting param change — includes the `MarketOracle` account.
+pub fn execute_param_change_oracle_ix(executor: &Pubkey, coll: &Pubkey, nonce: u64) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::ExecuteParamChange {
+            executor: *executor,
+            market: market_pda(coll),
+            market_oracle: Some(market_oracle_pda(coll)),
             timelocked_param: timelock_pda(nonce),
             event_authority: event_authority_pda(),
             program: fusd_core::ID,

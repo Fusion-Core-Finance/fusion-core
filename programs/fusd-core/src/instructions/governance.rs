@@ -10,14 +10,16 @@
 use anchor_lang::prelude::*;
 
 use crate::constants::{
-    CONFIG_SEED, GOV_GATE_SEED, MAX_BAD_DEBT_PAYDOWN_BPS, MAX_BORROW_FEE_BPS, MAX_CCR_BPS,
-    MAX_GOV_TIMELOCK_SECS, MAX_LIQ_BONUS_BPS, MAX_KEEPER_REWARD_BPS, MAX_LIQ_GAS_COMP_BPS,
-    MAX_MCR_BPS, MAX_MIN_DEBT,
-    MAX_RATE_ADJUST_COOLDOWN_SECS, MAX_REDEMPTION_BASE_RATE_BPS, MAX_REDEMPTION_FEE_BPS, MIN_CCR_BPS,
-    MIN_GOV_TIMELOCK_SECS, MIN_MCR_BPS, TIMELOCK_SEED,
+    CONFIG_SEED, GOV_GATE_SEED, MARKET_ORACLE_SEED, MAX_BAD_DEBT_PAYDOWN_BPS, MAX_BORROW_FEE_BPS,
+    MAX_CCR_BPS, MAX_GOV_TIMELOCK_SECS, MAX_LIQ_BONUS_BPS, MAX_KEEPER_REWARD_BPS, MAX_LIQ_GAS_COMP_BPS,
+    MAX_LIQ_DIVERGENCE_BPS, MAX_MCR_BPS, MAX_MIN_DEBT, MAX_ORACLE_CONF_BPS, MAX_ORACLE_DEVIATION_BPS,
+    MAX_ORACLE_K_BPS, MAX_ORACLE_MAX_AGE_SECS, MAX_RATE_ADJUST_COOLDOWN_SECS,
+    MAX_REDEMPTION_BASE_RATE_BPS, MAX_REDEMPTION_FEE_BPS, MAX_SCR_BPS, MAX_TWAP_DIVERGENCE_BPS,
+    MAX_TWAP_STALENESS_SECS, MIN_CCR_BPS, MIN_GOV_TIMELOCK_SECS, MIN_MCR_BPS, MIN_ORACLE_K_BPS,
+    MIN_SCR_BPS, TIMELOCK_SEED,
 };
 use crate::errors::FusdError;
-use crate::state::{GovernanceGate, Market, ProtocolConfig, TimelockedParam};
+use crate::state::{GovernanceGate, Market, MarketOracle, ProtocolConfig, TimelockedParam};
 
 // Re-exported so `lib.rs` (`use instructions::*`) sees `MarketParam` for the program signatures.
 pub use crate::state::MarketParam;
@@ -80,8 +82,56 @@ fn validate_param(param: MarketParam, value: u64) -> Result<()> {
         MarketParam::RedemptionBaseRateMax => {
             require!(value <= MAX_REDEMPTION_BASE_RATE_BPS as u64, FusdError::ParamOutOfBounds);
         }
+        // --- RiskParamRegistry oracle thresholds: same compile-time clamps as `init_market_oracle`. ---
+        MarketParam::OracleMaxConf => {
+            require!(value > 0 && value <= MAX_ORACLE_CONF_BPS as u64, FusdError::ParamOutOfBounds);
+        }
+        MarketParam::OracleMaxDeviation => {
+            require!(value > 0 && value <= MAX_ORACLE_DEVIATION_BPS as u64, FusdError::ParamOutOfBounds);
+        }
+        MarketParam::OracleTwapDivergence => {
+            require!(value > 0 && value <= MAX_TWAP_DIVERGENCE_BPS as u64, FusdError::ParamOutOfBounds);
+        }
+        // 0 disables the liquidation-divergence gate; otherwise clamped (relational `>= twap` below).
+        MarketParam::OracleLiqDivergence => {
+            require!(value <= MAX_LIQ_DIVERGENCE_BPS as u64, FusdError::ParamOutOfBounds);
+        }
+        MarketParam::OracleMaxAge => {
+            require!(value > 0 && value <= MAX_ORACLE_MAX_AGE_SECS as u64, FusdError::ParamOutOfBounds);
+        }
+        MarketParam::OracleK => {
+            require!(
+                value >= MIN_ORACLE_K_BPS as u64 && value <= MAX_ORACLE_K_BPS as u64,
+                FusdError::ParamOutOfBounds
+            );
+        }
+        MarketParam::OracleTwapStaleness => {
+            require!(value > 0 && value <= MAX_TWAP_STALENESS_SECS as u64, FusdError::ParamOutOfBounds);
+        }
+        // SCR is clamped to a sane range AND (relationally, below) must stay `<= mcr`.
+        MarketParam::Scr => {
+            require!(
+                value >= MIN_SCR_BPS as u64 && value <= MAX_SCR_BPS as u64,
+                FusdError::ParamOutOfBounds
+            );
+        }
     }
     Ok(())
+}
+
+/// Whether a `MarketParam` targets the `MarketOracle` account (vs the `Market`). The queue/execute
+/// context must carry the optional `market_oracle` account for these.
+fn param_targets_oracle(param: MarketParam) -> bool {
+    matches!(
+        param,
+        MarketParam::OracleMaxConf
+            | MarketParam::OracleMaxDeviation
+            | MarketParam::OracleTwapDivergence
+            | MarketParam::OracleLiqDivergence
+            | MarketParam::OracleMaxAge
+            | MarketParam::OracleK
+            | MarketParam::OracleTwapStaleness
+    )
 }
 
 /// Relational (cross-parameter) config validation — the klend-style "config integrity gauntlet".
@@ -134,7 +184,7 @@ pub fn validate_market_config(
 /// wildcard-free on purpose: adding a `MarketParam` variant without deciding its clamp
 /// (`validate_param`), its setter (`apply_param`), AND its reader (here) is a compile error —
 /// the klend triple-coverage property.
-fn current_param(market: &Market, param: MarketParam) -> u64 {
+fn current_param(market: &Market, oracle: Option<&MarketOracle>, param: MarketParam) -> u64 {
     match param {
         MarketParam::Mcr => market.mcr_bps as u64,
         MarketParam::DebtCeiling => market.debt_ceiling,
@@ -149,33 +199,70 @@ fn current_param(market: &Market, param: MarketParam) -> u64 {
         MarketParam::BorrowFee => market.borrow_fee_bps as u64,
         MarketParam::BadDebtPaydown => market.bad_debt_paydown_bps as u64,
         MarketParam::RedemptionBaseRateMax => market.redemption_base_rate_max_bps as u64,
+        MarketParam::Scr => market.scr_bps as u64,
+        // Oracle params: `oracle` is `Some` here (the handlers require it for oracle-targeting params);
+        // `unwrap_or` reads 0 only on the unreachable None (the param→account check fails first).
+        MarketParam::OracleMaxConf => oracle.map_or(0, |o| o.max_conf_bps as u64),
+        MarketParam::OracleMaxDeviation => oracle.map_or(0, |o| o.max_deviation_bps as u64),
+        MarketParam::OracleTwapDivergence => oracle.map_or(0, |o| o.twap_max_divergence_bps as u64),
+        MarketParam::OracleLiqDivergence => oracle.map_or(0, |o| o.liq_max_divergence_bps as u64),
+        MarketParam::OracleMaxAge => oracle.map_or(0, |o| o.max_age_secs as u64),
+        MarketParam::OracleK => oracle.map_or(0, |o| o.k_bps as u64),
+        MarketParam::OracleTwapStaleness => oracle.map_or(0, |o| o.twap_max_staleness_secs as u64),
     }
 }
 
-/// Per-field + relational validation for a (param, value) against a live market. The relational
-/// predicates run only when the change touches the liquidation-economics tuple.
-fn validate_param_for_market(market: &Market, param: MarketParam, value: u64) -> Result<()> {
+/// Per-field + relational validation for a (param, value) against a live market (+ its oracle for
+/// oracle-targeting params). The relational predicates run only when the change touches a coupled set.
+fn validate_param_for_market(
+    market: &Market,
+    oracle: Option<&MarketOracle>,
+    param: MarketParam,
+    value: u64,
+) -> Result<()> {
     validate_param(param, value)?;
+    // An oracle-targeting param REQUIRES the oracle account in scope — both to read the sibling for the
+    // relational check and to apply the write at execute. (Scr is on the Market, not the oracle.)
+    if param_targets_oracle(param) {
+        require!(oracle.is_some(), FusdError::ParamCombinationInvalid);
+    }
     match param {
-        MarketParam::Mcr | MarketParam::LiqBonus | MarketParam::LiqGasComp => {
-            // Overlay the candidate value on the live tuple and re-assert joint validity.
+        MarketParam::Mcr | MarketParam::LiqBonus | MarketParam::LiqGasComp | MarketParam::Scr => {
+            // Overlay the candidate value on the live liquidation-economics tuple + scr; re-assert.
             let mut mcr = market.mcr_bps as u64;
+            let mut scr = market.scr_bps as u64;
             let mut bonus = market.liq_bonus_bps as u64;
             let mut gas = market.liq_gas_comp_bps as u64;
             match param {
                 MarketParam::Mcr => mcr = value,
+                MarketParam::Scr => scr = value,
                 MarketParam::LiqBonus => bonus = value,
                 MarketParam::LiqGasComp => gas = value,
                 _ => unreachable!(),
             }
-            validate_market_config(mcr, market.scr_bps as u64, bonus, gas)
+            validate_market_config(mcr, scr, bonus, gas)
+        }
+        // Oracle relational: the liquidation-pause divergence gate must stay `>= ` the mint corridor
+        // (mints freeze early on mild disagreement; liquidations pause only on a LARGER one — §8). Re-
+        // checked against the LIVE sibling so two queued changes are order-independent.
+        MarketParam::OracleTwapDivergence => {
+            let liq = oracle.map_or(u64::MAX, |o| o.liq_max_divergence_bps as u64);
+            // liq == 0 means the gate is disabled — no relational floor then.
+            require!(liq == 0 || liq >= value, FusdError::ParamCombinationInvalid);
+            Ok(())
+        }
+        MarketParam::OracleLiqDivergence => {
+            let twap = oracle.map_or(0, |o| o.twap_max_divergence_bps as u64);
+            require!(value == 0 || value >= twap, FusdError::ParamCombinationInvalid);
+            Ok(())
         }
         _ => Ok(()),
     }
 }
 
-/// Apply a validated (param, value) to a market. Caller MUST have run [`validate_param`] first.
-fn apply_param(market: &mut Market, param: MarketParam, value: u64) {
+/// Apply a validated (param, value). Caller MUST have run [`validate_param_for_market`] first.
+/// `oracle` is `Some` (and writable) iff `param_targets_oracle(param)` — the handlers enforce it.
+fn apply_param(market: &mut Market, oracle: Option<&mut MarketOracle>, param: MarketParam, value: u64) {
     match param {
         MarketParam::Mcr => market.mcr_bps = value as u16,
         MarketParam::DebtCeiling => market.debt_ceiling = value,
@@ -197,6 +284,29 @@ fn apply_param(market: &mut Market, param: MarketParam, value: u64) {
         MarketParam::BorrowFee => market.borrow_fee_bps = value as u16,
         MarketParam::BadDebtPaydown => market.bad_debt_paydown_bps = value as u16,
         MarketParam::RedemptionBaseRateMax => market.redemption_base_rate_max_bps = value as u16,
+        MarketParam::Scr => market.scr_bps = value as u16,
+        // Oracle thresholds: `oracle` is Some here (handlers require it for oracle-targeting params).
+        MarketParam::OracleMaxConf => {
+            if let Some(o) = oracle { o.max_conf_bps = value as u16; }
+        }
+        MarketParam::OracleMaxDeviation => {
+            if let Some(o) = oracle { o.max_deviation_bps = value as u16; }
+        }
+        MarketParam::OracleTwapDivergence => {
+            if let Some(o) = oracle { o.twap_max_divergence_bps = value as u16; }
+        }
+        MarketParam::OracleLiqDivergence => {
+            if let Some(o) = oracle { o.liq_max_divergence_bps = value as u16; }
+        }
+        MarketParam::OracleMaxAge => {
+            if let Some(o) = oracle { o.max_age_secs = value as i64; }
+        }
+        MarketParam::OracleK => {
+            if let Some(o) = oracle { o.k_bps = value as u16; }
+        }
+        MarketParam::OracleTwapStaleness => {
+            if let Some(o) = oracle { o.twap_max_staleness_secs = value as i64; }
+        }
     }
 }
 
@@ -334,6 +444,14 @@ pub struct QueueParamChange<'info> {
     /// The target market (real, program-owned `Market`); recorded into the op and re-checked at execute.
     pub market: Box<Account<'info, Market>>,
 
+    /// OPTIONAL: the market's `MarketOracle`, REQUIRED only for an oracle-targeting param (so its
+    /// sibling can be read for the relational check). PDA-bound to `market.collateral_mint`.
+    #[account(
+        seeds = [MARKET_ORACLE_SEED, market.collateral_mint.as_ref()],
+        bump = market_oracle.bump,
+    )]
+    pub market_oracle: Option<Box<Account<'info, MarketOracle>>>,
+
     #[account(
         init,
         payer = authority,
@@ -354,7 +472,8 @@ pub fn queue(ctx: Context<QueueParamChange>, param: MarketParam, value: u64) -> 
     );
     // Fail fast — never queue an out-of-bounds value OR a combination jointly invalid against the
     // CURRENT config (the execute-time re-check below remains the load-bearing one).
-    validate_param_for_market(&ctx.accounts.market, param, value)?;
+    let oracle: Option<&MarketOracle> = ctx.accounts.market_oracle.as_deref().map(|o| &**o);
+    validate_param_for_market(&ctx.accounts.market, oracle, param, value)?;
 
     let now = Clock::get()?.unix_timestamp;
     let nonce = ctx.accounts.gov_gate.queue_nonce;
@@ -395,6 +514,15 @@ pub struct ExecuteParamChange<'info> {
     #[account(mut)]
     pub market: Box<Account<'info, Market>>,
 
+    /// OPTIONAL: the market's `MarketOracle`, REQUIRED (and written) only for an oracle-targeting
+    /// param. PDA-bound to `market.collateral_mint`.
+    #[account(
+        mut,
+        seeds = [MARKET_ORACLE_SEED, market.collateral_mint.as_ref()],
+        bump = market_oracle.bump,
+    )]
+    pub market_oracle: Option<Box<Account<'info, MarketOracle>>>,
+
     #[account(
         mut,
         close = executor,
@@ -410,10 +538,13 @@ pub fn execute(ctx: Context<ExecuteParamChange>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     require!(now >= op.eta, FusdError::TimelockNotElapsed);
     // Re-validate before applying a stored value — per-field (the clamps can't have moved, but a
-    // stored op must never apply out-of-bounds) AND relational against the LIVE market (the
+    // stored op must never apply out-of-bounds) AND relational against the LIVE market/oracle (the
     // sibling param may have changed since queue; rejecting here makes jointly-conflicting queued
     // ops order-independent — governance cancels and re-queues in the safe order).
-    validate_param_for_market(&ctx.accounts.market, op.param, op.value)?;
+    {
+        let oracle: Option<&MarketOracle> = ctx.accounts.market_oracle.as_deref().map(|o| &**o);
+        validate_param_for_market(&ctx.accounts.market, oracle, op.param, op.value)?;
+    }
     let (param, value, nonce) = (op.param, op.value, op.nonce);
 
     // An MCR RAISE instantly expands the liquidatable set over live positions — the retroactive-
@@ -443,8 +574,11 @@ pub fn execute(ctx: Context<ExecuteParamChange>) -> Result<()> {
     }
 
     // Capture the pre-change value for the forensic Prv/New trail, immediately before apply.
-    let prev_value = current_param(&ctx.accounts.market, param);
-    apply_param(&mut ctx.accounts.market, param, value);
+    let oracle_ref: Option<&MarketOracle> = ctx.accounts.market_oracle.as_deref().map(|o| &**o);
+    let prev_value = current_param(&ctx.accounts.market, oracle_ref, param);
+    let oracle_mut: Option<&mut MarketOracle> =
+        ctx.accounts.market_oracle.as_deref_mut().map(|o| &mut **o);
+    apply_param(&mut ctx.accounts.market, oracle_mut, param, value);
     // `timelocked_param` is closed to `executor` by the `close` constraint.
 
     emit_cpi!(crate::events::ParamChangeExecuted {
