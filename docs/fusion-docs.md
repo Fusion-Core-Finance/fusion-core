@@ -457,7 +457,7 @@ FUSD has **no Recovery Mode**, global or per-market. Any liquidation-*expanding*
 
 #### The BOLD minimal-plus breaker set
 
-In place of RM, the design specifies milder, non-reflexive, per-market, permissionless controls. The terminal **`shutdown` breaker, the net-outflow rate limiter, the CCR borrow-restriction band, and the on-resume liquidation grace window are now wired**; the debt-ceiling auto-line and oracle-divergence gate are still [Planned]:
+In place of RM, the design specifies milder, non-reflexive, per-market, permissionless controls. The terminal **`shutdown` breaker, the net-outflow rate limiter, the CCR borrow-restriction band, the on-resume liquidation grace window, the oracle-divergence gate (B3), and the debt-ceiling auto-line (Maker DC-IAM) are now wired**:
 
 | Breaker | What it does | Status |
 |---|---|---|
@@ -817,7 +817,7 @@ Related structural constants (not governable): `TWAP_RING_CAPACITY` = 64 (must b
 | Redemption dynamic base-rate + decay | `Market.redemption_base_rate` (+ `RedemptionBaseRateMax`) | [Built] (C9) — the Liquity decaying volume-spike base-rate ADDED on top of the flat `redemption_fee_bps` floor (6h half-life, BETA=2 — both placeholder constants pending calibration), clamped to `MAX_REDEMPTION_FEE_BPS`; governable cap/enable defaults 0 (flat-fee-only). |
 | Liquidation penalty (RP / redistribution) | per-market | [Planned] — pinned constants pending BOLD-audit port (~5% RP, ~10–20% redistribution). |
 | Net-outflow rate-limit cap | `Market.rl_cap` (`MarketParam`) | [Built] — leaky bucket on net FUSD issuance; cap default 0 (disabled); liquidation/redemption/urgent_redeem hard-exempt. Window is the 24h constant `RATELIMIT_WINDOW_SECS`. |
-| Debt-ceiling auto-line (`gap`/`ttl`) | per-market `RateLimiter` account | [Planned] — Maker DC-IAM auto-line with a fast loosen-path. |
+| Debt-ceiling auto-line (`line`/`gap`/`ttl`) | per-market `DebtCeilingLine` account (`[b"ratelimit", mint]`) | [Built] (Maker DC-IAM) — opt-in, default-absent; a permissionless `bump_debt_ceiling` raises `Market.debt_ceiling` toward `min(line, debt + gap)` in `gap` steps, throttled to once per `ttl`, never above the gov-set `line`; `init`/`set` are gov_authority-gated. The hot `borrow` path is unchanged. |
 | Oracle program IDs | global `ProtocolConfig` | [Built] — bounded-updatable via `set_oracle_program_ids` so Pyth's ~2026-07-31 core migration needs no core redeploy; `ProtocolConfig` carries `pyth_receiver_program_id` (+ `_alt` for the dual-running window) and `switchboard_program_id`, and `update_price` accepts an update owned by EITHER receiver. |
 | Oracle-divergence gate / asymmetric `debt_price` / plausibility band | per-market `MarketOracle` | [Built] — `liquidate` pauses on gross feed divergence (`liq_max_divergence_bps`, 0 = off; never redemption); a stored `Market.debt_spot` (price + kσ) prices liquidation eligibility; an absolute price band (`price_band_lower/upper_ray`, ≥ `MIN_PRICE_BAND_RATIO` wide) is enforced on the spot commit. |
 | Surplus/insurance allocation | per-market `Surplus` | [Planned] — rides the slow lane with a per-epoch hard cap. |
@@ -1063,7 +1063,7 @@ This section is the cross-check between the design and the bytecode: the exact i
 
 ### 11.1 Instruction reference
 
-The `#[program]` block in `fusd-core` exports **46 production instructions** plus one dev/test-only instruction (`dev_set_price`, compiled only under `#[cfg(feature = "dev-oracle")]` and **excluded from every production build and from the IDL**, enforced by a release gate). Init-time setup instructions and the admin `set_guardian` authorize via `require_keys_eq!` against `ProtocolConfig.gov_authority` (itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`). **Market-parameter changes flow through the bounded `GovernanceGate` + FUSD-owned timelock [Built]:** `queue_param_change` (gated on the gate's migratable inbound authority, clamped + relationally validated) → after the delay → permissionless `execute_param_change` (with the two-step `migrate_inbound_authority`/`accept_inbound_authority` and `cancel_param_change`). The independent **`guardian_derisk`** (gated on `config.guardian`) is [Built]; the broader `RiskParamRegistry` remains **[Planned]**. All events ride the Anchor `#[event_cpi]` self-CPI transport (immune to RPC log truncation).
+The `#[program]` block in `fusd-core` exports **49 production instructions** plus one dev/test-only instruction (`dev_set_price`, compiled only under `#[cfg(feature = "dev-oracle")]` and **excluded from every production build and from the IDL**, enforced by a release gate). Init-time setup instructions and the admin `set_guardian` authorize via `require_keys_eq!` against `ProtocolConfig.gov_authority` (itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`). **Market-parameter changes flow through the bounded `GovernanceGate` + FUSD-owned timelock [Built]:** `queue_param_change` (gated on the gate's migratable inbound authority, clamped + relationally validated) → after the delay → permissionless `execute_param_change` (with the two-step `migrate_inbound_authority`/`accept_inbound_authority` and `cancel_param_change`). The independent **`guardian_derisk`** (gated on `config.guardian`) is [Built]; the broader `RiskParamRegistry` remains **[Planned]**. All events ride the Anchor `#[event_cpi]` self-CPI transport (immune to RPC log truncation).
 
 | Instruction | Caller | Effect (one line) | Status |
 |---|---|---|---|
@@ -1129,7 +1129,7 @@ The owner-claimable liquidation surplus is **not** a separate account — it is 
 | Account | PDA seeds | Purpose | Status |
 |---|---|---|---|
 | `RiskParamRegistry` | `[b"registry"]` | The broader clamped param set beyond the thirteen `MarketParam`s (oracle thresholds, `scr_bps`, etc.); written only via the gate. | [Planned] |
-| `RateLimiter` (auto-line) | `[b"ratelimit", collateral_mint]` | The Maker DC-IAM debt-ceiling auto-line account (`gap`/`ttl`) — distinct from the [Built] net-outflow limiter on `Market`. | [Planned] |
+| `DebtCeilingLine` (auto-line) | `[b"ratelimit", collateral_mint]` | The Maker DC-IAM debt-ceiling auto-line account (`line`/`gap`/`ttl`/`last_bump_ts`) — distinct from the net-outflow limiter on `Market`. Opt-in; permissionless `bump_debt_ceiling` moves `Market.debt_ceiling` within `[debt, line]`. | [Built] |
 
 ### 11.3 Build, test & deployment
 
@@ -1175,7 +1175,7 @@ The phased decentralization plan gates each step on hard exit criteria; the tabl
 | Phase | Scope | Status |
 |---|---|---|
 | **Phase 1 — Guarded launch / core** | CDP flow + per-position BOLD interest + Reactor Pool + the 5-tier liquidation waterfall with SOL-bond + gas-comp incentives + the rate-bucket redemption floor, on 1–2 collaterals; authority = Squads multisig + timelock via the gate. | **Core mechanisms [Built]** and litesvm-tested + adversarially reviewed; the **`GovernanceGate` + timelock**, the **live oracle cranks**, the **de-risk guardian**, the terminal **`shutdown`/`urgent_redeem`** breaker, the net-outflow **rate limiter**, the **CCR band**, the **on-resume grace**, the **insurance buffer + value-recovery**, per-position interest, the klend-review hardening (vault assert, config bounds, MCR-grace, event-CPI, two-step authorities), and the **B8 fuzz pass** are all **[Built]**. The oracle layout-freeze window (B3 divergence gate, B5 `debt_price`, C6 plausibility band, D3 Pyth-migration-updatable IDs) and the **Certora cross-instruction core-invariant pass** have since landed; the remaining launch-gating work is external **audits** (≥2), the **bitmap concurrent-flip Certora** pass, a **verified build**, and parameter calibration — so the milestone is **functionally complete, not launch-complete**. |
-| **Phase 2 — Permissionless & hardened** | Maker auto-line + oracle-divergence gate as bounded params; more collaterals; competing keepers; bitmap concurrent-flip fuzzed + Certora-clean. (The CCR borrow-restriction band landed early in Phase 1, [Built].) | [Planned] |
+| **Phase 2 — Permissionless & hardened** | More collaterals; competing keepers; bitmap concurrent-flip fuzzed + Certora-clean. (The CCR borrow-restriction band, the oracle-divergence gate, and the Maker debt-ceiling auto-line all landed early, in Phase 1, [Built].) | [Planned] |
 | **Phase 3 — Governance-minimized** | Point the gate's inbound authority at the MetaDAO futarchy authority behind FUSD's timelock; every param has enforced compile-time clamps. | [Planned] |
 | **Phase 4 — Credible neutrality** | Renounce or permanently governance-lock core upgrade authority; multiple frontends/oracles; optional opt-in sFUSD/bounded AMO. | [Planned] |
 
@@ -1285,7 +1285,7 @@ Every component from each section's per-section status table, grouped by area.
 | MetaDAO futarchy wiring (Branch a, localnet PoC) | Governance | [Planned] | direct external CPI confirmed; PoC gates the gate code |
 | SCR (shutdown ratio) | Governance | [Built] | `Market.scr_bps` (default 110%, clamp constants exist; init-time-only) |
 | CCR (band threshold) | Governance | [Built] | `Market.ccr_bps` (`MarketParam`, default 0; clamp 100%–300%) |
-| Rate min/max, redemption base-rate, auto-line | Governance | [Planned] | no clamp constants yet; pending simulation + BOLD-audit pin |
+| Rate min/max (`MIN/MAX_USER_RATE_BPS`), redemption base-rate (C9), debt-ceiling auto-line (DC-IAM) | Governance | [Built] | all wired; the C9 half-life/BETA + auto-line line/gap/ttl calibration constants are placeholders pending simulation + BOLD-audit pin |
 | FUSD mint: freeze=None, PDA mint authority, 6 decimals, legacy SPL | Security | [Built] | `init_protocol`; freeze authority irreversibly absent |
 | No admin freeze/seize/pause-of-user-funds instruction | Security | [Built] | Absence is the guarantee; `guardian_derisk` pauses only NEW borrowing and `shutdown` only opens `urgent_redeem` — neither touches user funds |
 | Permissionless `liquidate` / `redeem` (no whitelist) | Security | [Built] | Any sub-MCR position liquidatable; redeem callable by any FUSD holder |
@@ -1316,7 +1316,7 @@ Every component from each section's per-section status table, grouped by area.
 | `DexTwap` ring | Reference/Build | [Built] | Written by `sample_twap` |
 | `GovernanceGate`, `TimelockedParam`, `InsuranceBuffer` | Reference/Build | [Built] | Gate + per-op timelock + per-market buffer |
 | `GlobalBackstopReserve` + `init_global_backstop`/`fund_backstop`/`withdraw_backstop_excess` + global timelock (`queue/execute/cancel_global_param_change`, `GlobalParam`/`TimelockedGlobalParam`) | Reference/Build | [Built] | Bounded shared second-loss fUSD reserve drawn as liquidation tier-3.5 (after the local buffer, before un-homed bad debt); ships inert (every param 0/off); litesvm-tested |
-| `RiskParamRegistry`, `RateLimiter` (auto-line account) | Reference/Build | [Planned] | Seeds reserved in `constants.rs` (the net-outflow limiter itself is [Built] on `Market`) |
+| `RiskParamRegistry` | Reference/Build | [Planned] | Seed reserved in `constants.rs`. (The net-outflow limiter is [Built] on `Market`; the `DebtCeilingLine` auto-line account at `[b"ratelimit"]` is now [Built].) |
 | Account layout discipline (klend C10) | Reference/Build | [Built] | const-assert size pins + Borsh SPACE-pin test; pre-launch reserve widening |
 | Toolchain + SBF pins | Reference/Build | [Built] | Anchor 0.32.1 / Solana 2.3 / platform-tools 1.84.1 |
 | Test architecture (litesvm + crate units) | Reference/Build | [Built] | ~400 tests (~230 litesvm + ~165 host incl. 113 `fusd-math`); isolated `integration-tests` crate |

@@ -174,6 +174,25 @@ pub mod fusd_core {
         instructions::global_backstop::init(ctx)
     }
 
+    // --- Debt-ceiling auto-line (Maker DC-IAM analog; opt-in, default-absent) ---
+
+    /// Governance: create a market's debt-ceiling auto-line (`line`/`gap`/`ttl`) and apply its
+    /// initial ceiling. Gated on `config.gov_authority`.
+    pub fn init_debt_ceiling_line(ctx: Context<InitDebtCeilingLine>, line: u64, gap: u64, ttl: i64) -> Result<()> {
+        instructions::debt_ceiling_line::init(ctx, line, gap, ttl)
+    }
+
+    /// Governance: update the auto-line's `line`/`gap`/`ttl` and apply the new ceiling immediately.
+    pub fn set_debt_ceiling_line(ctx: Context<SetDebtCeilingLine>, line: u64, gap: u64, ttl: i64) -> Result<()> {
+        instructions::debt_ceiling_line::set(ctx, line, gap, ttl)
+    }
+
+    /// Permissionless: bump the market's `debt_ceiling` toward `min(line, debt + gap)`, throttled to
+    /// once per `ttl`. Never exceeds the gov-set `line`.
+    pub fn bump_debt_ceiling(ctx: Context<BumpDebtCeiling>) -> Result<()> {
+        instructions::debt_ceiling_line::bump(ctx)
+    }
+
     /// Permissionless: top up the global backstop reserve with protocol-strengthening fUSD.
     pub fn fund_backstop(ctx: Context<FundBackstop>, amount: u64) -> Result<()> {
         instructions::global_backstop::fund(ctx, amount)

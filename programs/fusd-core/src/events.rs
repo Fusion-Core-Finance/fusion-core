@@ -406,3 +406,14 @@ pub struct BadDebtSettled {
     pub amount: u64,
     pub bad_debt_remaining: u128,
 }
+
+/// The debt-ceiling auto-line moved `Market.debt_ceiling` (`init`/`set`/permissionless `bump`).
+#[event]
+pub struct DebtCeilingLineBumped {
+    pub collateral_mint: Pubkey,
+    pub debt_ceiling: u64,
+    pub line: u64,
+    pub gap: u64,
+    pub ttl: i64,
+    pub agg_recorded_debt: u128,
+}

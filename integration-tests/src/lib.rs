@@ -1467,6 +1467,62 @@ pub fn init_global_backstop_ix(authority: &Pubkey) -> Instruction {
     }
 }
 
+// ---- debt-ceiling auto-line (Maker DC-IAM) ----
+
+pub fn debt_ceiling_line_pda(coll: &Pubkey) -> Pubkey {
+    pda(&[b"ratelimit", coll.as_ref()])
+}
+
+pub fn read_debt_ceiling_line(svm: &LiteSVM, coll: &Pubkey) -> fusd_core::state::DebtCeilingLine {
+    let acct = svm.get_account(&debt_ceiling_line_pda(coll)).unwrap();
+    fusd_core::state::DebtCeilingLine::try_deserialize(&mut acct.data.as_slice()).unwrap()
+}
+
+pub fn init_debt_ceiling_line_ix(authority: &Pubkey, coll: &Pubkey, line: u64, gap: u64, ttl: i64) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::InitDebtCeilingLine {
+            authority: *authority,
+            config: config_pda(),
+            collateral_mint: *coll,
+            market: market_pda(coll),
+            debt_ceiling_line: debt_ceiling_line_pda(coll),
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::InitDebtCeilingLine { line, gap, ttl }.data(),
+    }
+}
+
+pub fn set_debt_ceiling_line_ix(authority: &Pubkey, coll: &Pubkey, line: u64, gap: u64, ttl: i64) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::SetDebtCeilingLine {
+            authority: *authority,
+            config: config_pda(),
+            collateral_mint: *coll,
+            market: market_pda(coll),
+            debt_ceiling_line: debt_ceiling_line_pda(coll),
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::SetDebtCeilingLine { line, gap, ttl }.data(),
+    }
+}
+
+pub fn bump_debt_ceiling_ix(cranker: &Pubkey, coll: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusd_core::ID,
+        accounts: fusd_core::accounts::BumpDebtCeiling {
+            cranker: *cranker,
+            collateral_mint: *coll,
+            market: market_pda(coll),
+            debt_ceiling_line: debt_ceiling_line_pda(coll),
+        }
+        .to_account_metas(None),
+        data: fusd_core::instruction::BumpDebtCeiling {}.data(),
+    }
+}
+
 /// Permissionless top-up of the reserve from `funder_fusd_ata`.
 pub fn fund_backstop_ix(funder: &Pubkey, funder_fusd_ata: &Pubkey, amount: u64) -> Instruction {
     Instruction {

@@ -3,6 +3,7 @@
 //! parallelism). Hot/large accounts (`Market`, `ReactorPool`) migrate to
 //! `#[account(zero_copy)]` as their flows are implemented.
 
+pub mod debt_ceiling_line;
 pub mod dex_twap;
 pub mod global_backstop;
 pub mod governance;
@@ -14,6 +15,7 @@ pub mod protocol_config;
 pub mod redemption_bitmap;
 pub mod reactor_pool;
 
+pub use debt_ceiling_line::*;
 pub use dex_twap::*;
 pub use global_backstop::*;
 pub use governance::*;
