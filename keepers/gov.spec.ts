@@ -2,7 +2,7 @@
 // guardrails, and PDA seed wiring. Run via `npm run test:sdk` (ts-mocha globs keepers/**/*.spec.ts).
 import assert from "node:assert";
 import {
-  flags, camel, resolveVariant, clampWarning, u64le, timelockPda, gtimelockPda, marketPda,
+  flags, camel, resolveVariant, clampWarning, authorityOf, timelockPda, gtimelockPda, marketPda,
   MARKET_CLAMPS, GLOBAL_CLAMPS, PublicKey,
 } from "./gov-common";
 
@@ -42,10 +42,13 @@ describe("gov-common helpers", () => {
     assert.match(clampWarning("Cut", 5000n, GLOBAL_CLAMPS)!, /> documented max/); // backstop cut max 3000
   });
 
-  it("u64le encodes little-endian", () => {
-    assert.deepEqual([...u64le(0n)], [0, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual([...u64le(1n)], [1, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual([...u64le(258n)], [2, 1, 0, 0, 0, 0, 0, 0]);
+  it("authorityOf returns the wallet, honors --authority in dry-run, and rejects a foreign override in --send", () => {
+    const me = PublicKey.default;
+    const other = PID; // any pubkey ≠ me
+    assert.ok(authorityOf(flags([]), me, false).equals(me));
+    assert.ok(authorityOf(flags(["--authority", other.toBase58()]), me, false).equals(other)); // Squads dry-run
+    assert.ok(authorityOf(flags(["--authority", me.toBase58()]), me, true).equals(me)); // matching override + --send ok
+    assert.throws(() => authorityOf(flags(["--authority", other.toBase58()]), me, true), /dry-run proposals only/);
   });
 
   it("timelock PDAs are deterministic, nonce-distinct, and prefix-distinct from the global twin", () => {

@@ -29,14 +29,17 @@ import * as anchor from "@coral-xyz/anchor";
 import { BN, makeProgram, PublicKey, Pk } from "./common";
 import {
   flags, govPdas, timelockPda, gtimelockPda, marketPda, resolveVariant, clampWarning,
-  MARKET_CLAMPS, GLOBAL_CLAMPS, sendOrPrint, log,
+  MARKET_CLAMPS, GLOBAL_CLAMPS, sendOrPrint, authorityOf, printUsage, log,
 } from "./gov-common";
 
 const SYS = anchor.web3.SystemProgram.programId;
 // Read variant names from the IDL FILE — the anchor Program object processes/strips idl.types.
-const IDL: any = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
-const idlVariants = (typeName: string): string[] =>
-  (IDL.types ?? []).find((t: any) => t.name === typeName)?.type.variants.map((v: any) => v.name) ?? [];
+// Lazy + memoized: only queue/queue-global need it, and `help` must work on a build-less clone.
+let IDL: any;
+const idlVariants = (typeName: string): string[] => {
+  if (!IDL) IDL = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
+  return (IDL.types ?? []).find((t: any) => t.name === typeName)?.type.variants.map((v: any) => v.name) ?? [];
+};
 const paramName = (decoded: any): string => Object.keys(decoded)[0]; // Anchor decodes an enum to { camelName: {} }
 
 const reqMint = (f: any, name = "market"): Pk => {
@@ -51,12 +54,6 @@ const reqValue = (f: any): bigint => {
   const v = f.get("value"); if (v === undefined) throw new Error("--value <n> is required");
   const n = BigInt(v); if (n < 0n) throw new Error("value must be non-negative"); return n;
 };
-function authorityOf(f: any, me: Pk, send: boolean): Pk {
-  const o = f.get("authority"); if (!o) return me;
-  const pk = new PublicKey(o);
-  if (send && !pk.equals(me)) throw new Error("--authority override is for dry-run proposals only; in --send the loaded wallet must be the signer");
-  return pk;
-}
 
 async function status(program: any, pid: Pk, f: any) {
   const g = govPdas(pid);
@@ -73,12 +70,20 @@ async function status(program: any, pid: Pk, f: any) {
   log(`queued ops (nonce ${start}..${Math.max(start, total - 1)}):`);
   let found = 0;
   const eta = (e: any) => `eta ${e} (${now >= Number(e) ? "READY" : (Number(e) - now) + "s left"})`;
-  for (let n = start; n < total; n++) {
-    const mk = await program.account.timelockedParam.fetchNullable(timelockPda(pid, BigInt(n))).catch(() => null);
+  const nonces = Array.from({ length: total - start }, (_, i) => BigInt(start + i));
+  // Two batched getMultipleAccounts calls instead of 2×64 sequential round trips.
+  const [mks, gls] = nonces.length
+    ? await Promise.all([
+        program.account.timelockedParam.fetchMultiple(nonces.map((n) => timelockPda(pid, n))),
+        program.account.timelockedGlobalParam.fetchMultiple(nonces.map((n) => gtimelockPda(pid, n))),
+      ])
+    : [[], []];
+  nonces.forEach((nonce, i) => {
+    const n = Number(nonce);
+    const mk = mks[i], gl = gls[i];
     if (mk) { found++; log(`  #${n} MARKET ${paramName(mk.param)}=${mk.value} ${eta(mk.eta)} market ${mk.market.toBase58().slice(0, 8)}…`); }
-    const gl = await program.account.timelockedGlobalParam.fetchNullable(gtimelockPda(pid, BigInt(n))).catch(() => null);
     if (gl) { found++; log(`  #${n} GLOBAL ${paramName(gl.param)}=${gl.value} ${eta(gl.eta)}`); }
-  }
+  });
   if (!found) log("  (none)");
 
   const mintArg = f.get("market");
@@ -87,7 +92,7 @@ async function status(program: any, pid: Pk, f: any) {
     log(`market ${mintArg.slice(0, 8)}… live values:`);
     log(`  mcr_bps ${m.mcrBps}  ccr_bps ${m.ccrBps}  debt_ceiling ${m.debtCeiling}  redemption_fee_bps ${m.redemptionFeeBps}`);
     log(`  liq_gas_comp_bps ${m.liqGasCompBps}  liq_bonus_bps ${m.liqBonusBps}  min_debt ${m.minDebt}  keeper_reward_bps ${m.keeperRewardBps}`);
-    log(`  rate_adjust_cooldown_secs ${m.rateAdjustCooldownSecs}  rl_cap ${m.rlCap}`);
+    log(`  rate_adjust_cooldown_secs ${m.rateAdjustCooldownSecs}  rl_cap ${m.rlCap}  borrow_fee_bps ${m.borrowFeeBps}`);
   }
 }
 
@@ -95,7 +100,7 @@ async function main() {
   const cmd = process.argv[2];
   const f = flags(process.argv.slice(3));
   const send = f.has("send");
-  if (!cmd || cmd === "help" || cmd === "--help") { console.log(fs.readFileSync(__filename, "utf8").split("*/")[0].replace("/**", "")); return; }
+  if (!cmd || cmd === "help" || cmd === "--help") { printUsage(__filename); return; }
 
   const { program, pid, me } = makeProgram();
   const g = govPdas(pid);

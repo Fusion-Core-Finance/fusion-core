@@ -4,8 +4,12 @@
  * --send" submitter. These scripts MUTATE protocol params + authority, so the default is to PRINT the
  * instruction (Squads-proposal-ready) and only sign+submit on an explicit --send.
  */
+import * as fs from "fs";
 import * as anchor from "@coral-xyz/anchor";
-import { PublicKey, Pk, pda, seed, log } from "./common";
+import { PublicKey, Pk, log } from "./common";
+import {
+  deriveConfig, deriveGovGate, deriveBackstop, deriveTimelock, deriveGlobalTimelock, deriveMarket,
+} from "../sdk/src";
 
 export { PublicKey, log };
 export type { Pk };
@@ -25,15 +29,28 @@ export function flags(argv: string[]): Flags {
   return { _: pos, get: (k) => map[k], has: (k) => k in map };
 }
 
-export function u64le(n: bigint): Buffer { const b = Buffer.alloc(8); b.writeBigUInt64LE(n); return b; }
+// PDA derivation lives in the SDK (sdk/src/index.ts, seeds pinned by sdk/test/health.spec.ts) —
+// these are thin arg-order adapters so the gov scripts read `xPda(pid, ...)` uniformly.
 export const govPdas = (pid: Pk) => ({
-  config: pda([seed("config")], pid),
-  govGate: pda([seed("gov_gate")], pid),
-  backstop: pda([seed("backstop")], pid),
+  config: deriveConfig(pid),
+  govGate: deriveGovGate(pid),
+  backstop: deriveBackstop(pid),
 });
-export const timelockPda = (pid: Pk, nonce: bigint): Pk => pda([seed("timelock"), u64le(nonce)], pid);
-export const gtimelockPda = (pid: Pk, nonce: bigint): Pk => pda([seed("gtimelock"), u64le(nonce)], pid);
-export const marketPda = (pid: Pk, coll: Pk): Pk => pda([seed("market"), coll], pid);
+export const timelockPda = (pid: Pk, nonce: bigint): Pk => deriveTimelock(nonce, pid);
+export const gtimelockPda = (pid: Pk, nonce: bigint): Pk => deriveGlobalTimelock(nonce, pid);
+export const marketPda = (pid: Pk, coll: Pk): Pk => deriveMarket(coll, pid);
+
+/** Print the script's doc-comment header as CLI usage. */
+export const printUsage = (file: string) => console.log(fs.readFileSync(file, "utf8").split("*/")[0].replace("/**", ""));
+
+/** The signer for a mutating instruction: the loaded wallet, or a --authority override (dry-run
+ * proposals only — in --send the loaded wallet must actually sign, so an override must match it). */
+export function authorityOf(f: Flags, me: Pk, send: boolean): Pk {
+  const o = f.get("authority"); if (!o) return me;
+  const pk = new PublicKey(o);
+  if (send && !pk.equals(me)) throw new Error("--authority override is for dry-run proposals only; in --send the loaded wallet must be the signer");
+  return pk;
+}
 
 /** PascalCase IDL variant → the camelCase key Anchor expects as the enum arg, e.g. "LiqBonus" → {liqBonus:{}}. */
 export const camel = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);

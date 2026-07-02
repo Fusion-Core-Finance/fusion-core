@@ -16,23 +16,15 @@
  *   show                                                  print all on-chain authority + oracle keys
  *   set-oracle-ids [--pyth <pk>] [--pyth-alt <pk>|clear] [--switchboard <pk>] [--send] [--authority <pk>]
  *   migrate-gov     --to <pk> [--send] [--authority <pk>]   propose a new gov_authority
- *   accept-gov                 [--send]                     the pending gov_authority accepts (signs)
+ *   accept-gov                 [--send] [--authority <pk>]  the pending gov_authority accepts (signs)
  *   migrate-inbound --to <pk> [--send] [--authority <pk>]   propose a new gov-gate inbound authority
- *   accept-inbound             [--send]                     the pending inbound authority accepts (signs)
+ *   accept-inbound             [--send] [--authority <pk>]  the pending inbound authority accepts (signs)
  */
-import * as fs from "fs";
 import { makeProgram, PublicKey, Pk } from "./common";
-import { flags, govPdas, sendOrPrint, log } from "./gov-common";
+import { flags, govPdas, sendOrPrint, authorityOf, printUsage, log } from "./gov-common";
 
 const ZERO = PublicKey.default;
 const fmtKey = (k: any): string => { const s = k.toBase58(); return s === ZERO.toBase58() ? `${s}  (unset/disabled)` : s; };
-
-function authorityOf(f: any, me: Pk, send: boolean): Pk {
-  const o = f.get("authority"); if (!o) return me;
-  const pk = new PublicKey(o);
-  if (send && !pk.equals(me)) throw new Error("--authority override is for dry-run proposals only; in --send the loaded wallet must be the signer");
-  return pk;
-}
 
 async function show(program: any, pid: Pk) {
   const g = govPdas(pid);
@@ -60,7 +52,7 @@ async function main() {
   const cmd = process.argv[2];
   const f = flags(process.argv.slice(3));
   const send = f.has("send");
-  if (!cmd || cmd === "help" || cmd === "--help") { console.log(fs.readFileSync(__filename, "utf8").split("*/")[0].replace("/**", "")); return; }
+  if (!cmd || cmd === "help" || cmd === "--help") { printUsage(__filename); return; }
 
   const { program, pid, me } = makeProgram();
   const g = govPdas(pid);
@@ -89,8 +81,9 @@ async function main() {
       return sendOrPrint(b, `migrate-gov → ${to.toBase58()}`, send);
     }
     case "accept-gov": {
-      const b = program.methods.acceptGovAuthority().accounts({ newAuthority: me, config: g.config });
-      return sendOrPrint(b, `accept-gov as ${me.toBase58()}`, send);
+      const who = authorityOf(f, me, send); // --authority: dry-run the accept for a Squads vault PDA
+      const b = program.methods.acceptGovAuthority().accounts({ newAuthority: who, config: g.config });
+      return sendOrPrint(b, `accept-gov as ${who.toBase58()}`, send);
     }
     case "migrate-inbound": {
       const to = new PublicKey(f.get("to") ?? (() => { throw new Error("--to <new inbound authority pubkey> is required"); })());
@@ -98,8 +91,9 @@ async function main() {
       return sendOrPrint(b, `migrate-inbound → ${to.toBase58()}`, send);
     }
     case "accept-inbound": {
-      const b = program.methods.acceptInboundAuthority().accounts({ newAuthority: me, govGate: g.govGate });
-      return sendOrPrint(b, `accept-inbound as ${me.toBase58()}`, send);
+      const who = authorityOf(f, me, send); // --authority: dry-run the accept for a Squads vault PDA
+      const b = program.methods.acceptInboundAuthority().accounts({ newAuthority: who, govGate: g.govGate });
+      return sendOrPrint(b, `accept-inbound as ${who.toBase58()}`, send);
     }
 
     default: throw new Error(`unknown command "${cmd}" — run: npx ts-node keepers/keys-sync.ts help`);
