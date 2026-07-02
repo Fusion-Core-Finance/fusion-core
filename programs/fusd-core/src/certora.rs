@@ -122,7 +122,8 @@ pub fn bitmap_coherence_preserved_by_reconcile() {
 /// Instead we model `circulating` fUSD as a pure `u128` GHOST and replay borrow's accounting delta,
 /// anchored to the REAL field assignment in `borrow.rs`:
 ///   * `borrow` MINTS `amount` fUSD            → ghost `circulating += amount`  (the `mint_to` CPI)
-///   * `borrow` writes `agg_recorded_debt += amount` (borrow.rs:135, the `S1` mutation target)
+///   * `borrow` writes `agg_recorded_debt += amount` (the `agg_recorded_debt = new_agg` assignment
+///     in borrow.rs — the `S1` mutation target)
 ///   * `borrow` leaves `unminted_interest` / `bad_debt` untouched
 /// so the identity is preserved by construction — provable as pure u128 arithmetic over nondet `Market`
 /// fields (the same blocker-free regime as the bitmap/absorb rules; this is the spec's "Option 2").
