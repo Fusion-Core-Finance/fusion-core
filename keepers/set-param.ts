@@ -21,15 +21,19 @@
  *   cancel-global  --nonce <n> [--send] [--authority <pk>]
  *   guardian-derisk --market <mint> --secs <n> [--send] [--authority <pk>]
  *
- * param names (market): mcr debtCeiling redemptionFee liqGasComp rateLimitCap ccr liqBonus minDebt rateAdjustCooldown keeperReward borrowFee
+ * param names (market): mcr debtCeiling redemptionFee liqGasComp rateLimitCap ccr liqBonus minDebt
+ *                       rateAdjustCooldown keeperReward borrowFee badDebtPaydown redemptionBaseRateMax
+ *                       oracleMaxConf oracleMaxDeviation oracleTwapDivergence oracleLiqDivergence
+ *                       oracleMaxAge oracleK oracleTwapStaleness scr
  * param names (global):  cut reserveCap drawBase drawK drawCeilingShare drawDebtShare
+ * (the oracle* params live on MarketOracle — queue/execute auto-include the market_oracle account)
  */
 import * as fs from "fs";
 import * as anchor from "@coral-xyz/anchor";
 import { BN, makeProgram, PublicKey, Pk } from "./common";
 import {
-  flags, govPdas, timelockPda, gtimelockPda, marketPda, resolveVariant, clampWarning,
-  MARKET_CLAMPS, GLOBAL_CLAMPS, sendOrPrint, authorityOf, printUsage, log,
+  flags, govPdas, timelockPda, gtimelockPda, marketPda, marketOraclePda, resolveVariant, clampWarning,
+  MARKET_CLAMPS, GLOBAL_CLAMPS, isOracleParam, sendOrPrint, authorityOf, printUsage, log,
 } from "./gov-common";
 
 const SYS = anchor.web3.SystemProgram.programId;
@@ -88,11 +92,19 @@ async function status(program: any, pid: Pk, f: any) {
 
   const mintArg = f.get("market");
   if (mintArg) {
-    const m: any = await program.account.market.fetch(marketPda(pid, new PublicKey(mintArg)));
+    const coll = new PublicKey(mintArg);
+    const m: any = await program.account.market.fetch(marketPda(pid, coll));
     log(`market ${mintArg.slice(0, 8)}… live values:`);
-    log(`  mcr_bps ${m.mcrBps}  ccr_bps ${m.ccrBps}  debt_ceiling ${m.debtCeiling}  redemption_fee_bps ${m.redemptionFeeBps}`);
+    log(`  mcr_bps ${m.mcrBps}  ccr_bps ${m.ccrBps}  scr_bps ${m.scrBps}  debt_ceiling ${m.debtCeiling}  redemption_fee_bps ${m.redemptionFeeBps}`);
     log(`  liq_gas_comp_bps ${m.liqGasCompBps}  liq_bonus_bps ${m.liqBonusBps}  min_debt ${m.minDebt}  keeper_reward_bps ${m.keeperRewardBps}`);
     log(`  rate_adjust_cooldown_secs ${m.rateAdjustCooldownSecs}  rl_cap ${m.rlCap}  borrow_fee_bps ${m.borrowFeeBps}`);
+    log(`  bad_debt_paydown_bps ${m.badDebtPaydownBps}  redemption_base_rate_max_bps ${m.redemptionBaseRateMaxBps}`);
+    const o: any = await program.account.marketOracle.fetchNullable(marketOraclePda(pid, coll));
+    if (o) {
+      log(`market oracle live values:`);
+      log(`  max_conf_bps ${o.maxConfBps}  max_deviation_bps ${o.maxDeviationBps}  twap_max_divergence_bps ${o.twapMaxDivergenceBps}  liq_max_divergence_bps ${o.liqMaxDivergenceBps}`);
+      log(`  max_age_secs ${o.maxAgeSecs}  k_bps ${o.kBps}  twap_max_staleness_secs ${o.twapMaxStalenessSecs}`);
+    }
   }
 }
 
@@ -110,13 +122,15 @@ async function main() {
 
     case "queue": {
       const { name, arg } = resolveVariant(idlVariants("MarketParam"), f.get("param") ?? "");
-      const value = reqValue(f); const market = marketPda(pid, reqMint(f));
+      const value = reqValue(f); const coll = reqMint(f); const market = marketPda(pid, coll);
       const w = clampWarning(name, value, MARKET_CLAMPS); if (w) log(`⚠ ${name}: ${w}`);
       const gate: any = await program.account.governanceGate.fetch(g.govGate);
       const nonce = BigInt(gate.queueNonce.toString());
       log(`queue MARKET ${name}=${value} → nonce ${nonce}, executable ~+${gate.timelockSecs}s after submit`);
       const b = program.methods.queueParamChange(arg, new BN(value.toString())).accounts({
         authority: authorityOf(f, me, send), govGate: g.govGate, market,
+        // oracle-targeting params validate/write MarketOracle — the optional account is required then
+        marketOracle: isOracleParam(name) ? marketOraclePda(pid, coll) : null,
         timelockedParam: timelockPda(pid, nonce), systemProgram: SYS,
       });
       return sendOrPrint(b, `queue ${name}=${value} (nonce ${nonce})`, send);
@@ -127,7 +141,13 @@ async function main() {
       const op: any = await program.account.timelockedParam.fetch(tp);
       const now = Math.floor(Date.now() / 1000);
       if (now < Number(op.eta)) log(`⚠ timelock not elapsed — ${Number(op.eta) - now}s remain (tx reverts until then)`);
-      const b = program.methods.executeParamChange().accounts({ executor: me, market: op.market, timelockedParam: tp });
+      const oracleNeeded = isOracleParam(paramName(op.param));
+      const m: any = oracleNeeded ? await program.account.market.fetch(op.market) : null;
+      const b = program.methods.executeParamChange().accounts({
+        executor: me, market: op.market,
+        marketOracle: oracleNeeded ? marketOraclePda(pid, m.collateralMint) : null,
+        timelockedParam: tp,
+      });
       return sendOrPrint(b, `execute nonce ${nonce} (${paramName(op.param)}=${op.value})`, send);
     }
 

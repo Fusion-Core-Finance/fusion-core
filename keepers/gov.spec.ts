@@ -2,8 +2,8 @@
 // guardrails, and PDA seed wiring. Run via `npm run test:sdk` (ts-mocha globs keepers/**/*.spec.ts).
 import assert from "node:assert";
 import {
-  flags, camel, resolveVariant, clampWarning, authorityOf, timelockPda, gtimelockPda, marketPda,
-  MARKET_CLAMPS, GLOBAL_CLAMPS, PublicKey,
+  flags, camel, resolveVariant, clampWarning, authorityOf, isOracleParam,
+  timelockPda, gtimelockPda, marketPda, MARKET_CLAMPS, GLOBAL_CLAMPS, PublicKey,
 } from "./gov-common";
 
 const PID = new PublicKey("FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud");
@@ -40,6 +40,17 @@ describe("gov-common helpers", () => {
     assert.equal(clampWarning("DebtCeiling", 999999n, MARKET_CLAMPS), null); // no upper clamp
     assert.equal(clampWarning("Unknown", 1n, MARKET_CLAMPS), null);
     assert.match(clampWarning("Cut", 5000n, GLOBAL_CLAMPS)!, /> documented max/); // backstop cut max 3000
+    // RiskParamRegistry additions
+    assert.match(clampWarning("Scr", 10000n, MARKET_CLAMPS)!, /< documented min/); // scr min 10500
+    assert.match(clampWarning("OracleMaxAge", 301n, MARKET_CLAMPS)!, /> documented max/);
+    assert.equal(clampWarning("OracleK", 15000n, MARKET_CLAMPS), null);
+  });
+
+  it("isOracleParam matches oracle-registry params in either case, never market ones", () => {
+    assert.equal(isOracleParam("OracleMaxConf"), true);
+    assert.equal(isOracleParam("oracleTwapStaleness"), true); // camelCase decoded key
+    assert.equal(isOracleParam("scr"), false); // Scr writes the Market, not the oracle
+    assert.equal(isOracleParam("mcr"), false);
   });
 
   it("authorityOf returns the wallet, honors --authority in dry-run, and rejects a foreign override in --send", () => {

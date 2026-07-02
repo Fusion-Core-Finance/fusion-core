@@ -9,6 +9,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { PublicKey, Pk, log } from "./common";
 import {
   deriveConfig, deriveGovGate, deriveBackstop, deriveTimelock, deriveGlobalTimelock, deriveMarket,
+  deriveMarketOracle,
 } from "../sdk/src";
 
 export { PublicKey, log };
@@ -39,6 +40,7 @@ export const govPdas = (pid: Pk) => ({
 export const timelockPda = (pid: Pk, nonce: bigint): Pk => deriveTimelock(nonce, pid);
 export const gtimelockPda = (pid: Pk, nonce: bigint): Pk => deriveGlobalTimelock(nonce, pid);
 export const marketPda = (pid: Pk, coll: Pk): Pk => deriveMarket(coll, pid);
+export const marketOraclePda = (pid: Pk, coll: Pk): Pk => deriveMarketOracle(coll, pid);
 
 /** Print the script's doc-comment header as CLI usage. */
 export const printUsage = (file: string) => console.log(fs.readFileSync(file, "utf8").split("*/")[0].replace("/**", ""));
@@ -75,7 +77,24 @@ export const MARKET_CLAMPS: Record<string, Clamp> = {
   RateAdjustCooldown: { unit: "secs", min: 0, max: 2_592_000, note: "0 disables" },
   KeeperReward: { unit: "bps", min: 0, max: 1000, note: "0 disables" },
   BorrowFee: { unit: "bps", min: 0, max: 500, note: "0 disables (C7 upfront borrow fee)" },
+  BadDebtPaydown: { unit: "bps", min: 0, max: 10_000, note: "0 disables (C16 auto bad-debt paydown)" },
+  RedemptionBaseRateMax: { unit: "bps", min: 0, max: 500, note: "0 disables the dynamic base rate (C9)" },
+  OracleMaxConf: { unit: "bps", min: 1, max: 500 },
+  OracleMaxDeviation: { unit: "bps", min: 1, max: 500 },
+  OracleTwapDivergence: { unit: "bps", min: 1, max: 1000, note: "must stay <= oracleLiqDivergence" },
+  OracleLiqDivergence: { unit: "bps", min: 0, max: 10_000, note: "0 disables; must stay >= oracleTwapDivergence" },
+  OracleMaxAge: { unit: "secs", min: 1, max: 300 },
+  OracleK: { unit: "bps", min: 10_000, max: 30_000 },
+  OracleTwapStaleness: { unit: "secs", min: 1, max: 3600 },
+  Scr: { unit: "bps", min: 10_500, max: 15_000, note: "must stay <= mcr" },
 };
+/** Params that live on `MarketOracle` — queue/execute must pass the optional market_oracle account
+ * for these (mirrors governance.rs::param_targets_oracle). Case-insensitive: callers hold either the
+ * PascalCase IDL variant or Anchor's camelCase decoded key. */
+const ORACLE_PARAMS = ["OracleMaxConf", "OracleMaxDeviation", "OracleTwapDivergence",
+  "OracleLiqDivergence", "OracleMaxAge", "OracleK", "OracleTwapStaleness"];
+export const isOracleParam = (name: string): boolean =>
+  ORACLE_PARAMS.some((p) => p.toLowerCase() === name.toLowerCase());
 export const GLOBAL_CLAMPS: Record<string, Clamp> = {
   Cut: { unit: "bps", min: 0, max: 3000 },
   ReserveCap: { unit: "fUSD-native", note: "0 = no accrual; no upper clamp" },
