@@ -85,7 +85,9 @@
 
 <script>
 const POLL_MS = __POLL_MS__;
-const $ = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h !== undefined) e.innerHTML = h; return e; };
+// append()-based on purpose: string children become TEXT nodes, so RPC/server-derived strings
+// (alert messages, market errors) can never inject markup. Pass elements for nested structure.
+const $ = (t, c, ...kids) => { const e = document.createElement(t); if (c) e.className = c; e.append(...kids); return e; };
 const usd = (n) => n == null ? "—" : "$" + Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 const num = (n, d = 2) => n == null ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: d });
 const ago = (ms) => { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? s + "s ago" : Math.round(s / 60) + "m ago"; };
@@ -96,7 +98,7 @@ function render(m) {
   const stale = Date.now() - m.ts > POLL_MS * 3;
   meta.innerHTML = "";
   meta.append(
-    $("span", "", '<span class="dot' + (stale ? " stale" : "") + '"></span>updated ' + ago(m.ts)),
+    $("span", "", $("span", "dot" + (stale ? " stale" : "")), "updated " + ago(m.ts)),
     $("span", "", "slot " + Number(m.slot).toLocaleString("en-US")),
     $("span", "", "RPC " + (m.rpc || "").replace(/^https?:\/\//, "")),
   );
@@ -105,8 +107,9 @@ function render(m) {
   root.innerHTML = "";
   const g = m.global;
 
-  // hero: supply identity. backing must not exceed circulating.
-  const broken = g.sumBackingUsd - g.fusdSupplyUsd > 0.01;
+  // hero: supply identity. backing must not exceed circulating. The verdict is the SERVER's
+  // (computeAlerts) — recomputing it here could contradict the alert list (epsilon/torn-tick rules).
+  const broken = m.alerts.some((a) => a.message.startsWith("supply identity broken"));
   const hero = $("div", "hero " + (broken ? "bad" : "ok"));
   hero.append($("div", "verdict", (broken ? "⚠ SUPPLY IDENTITY BROKEN" : "✓ SYSTEM SOLVENT")));
   hero.append($("div", "sub", broken
@@ -125,12 +128,12 @@ function render(m) {
   const totTvl = m.markets.reduce((a, x) => a + (x.tvlUsd || 0), 0);
   const totUnminted = m.markets.reduce((a, x) => a + (x.unmintedUsd || 0), 0);
   const tiles = $("div", "tiles");
-  const tile = (k, v) => { const t = $("div", "tile"); t.append($("div", "k", k), $("div", "v", v)); return t; };
+  const tile = (k, ...v) => { const t = $("div", "tile"); t.append($("div", "k", k), $("div", "v", ...v)); return t; };
   tiles.append(
     tile("circulating fUSD", usd(g.fusdSupplyUsd)),
     tile("collateral TVL", usd(totTvl)),
     tile("total debt", usd(totDebt)),
-    tile("collateralization", totDebt > 0 ? num(totTvl / totDebt * 100, 1) + "<small>%</small>" : "—"),
+    totDebt > 0 ? tile("collateralization", num(totTvl / totDebt * 100, 1), $("small", "", "%")) : tile("collateralization", "—"),
     tile("pending interest", usd(totUnminted)),
     tile("backstop reserve", g.backstop ? usd(g.backstop.balanceUsd) : "—"),
   );

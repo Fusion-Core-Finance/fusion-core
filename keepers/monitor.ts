@@ -11,7 +11,9 @@
  * THE SOLVENCY CHECK is the hero: circulating fUSD == Σ(agg_recorded_debt − unminted_interest +
  * bad_debt) across markets (the global supply invariant). When every market is in the config this is
  * exact; with a partial config the backing sum is a lower bound, so we only alarm if backing EXCEEDS
- * circulating (debt with no matching supply — never legitimate).
+ * circulating (debt with no matching supply — never legitimate). The reads are not slot-atomic, so a
+ * mint/burn landing mid-collection would fake a violation: the supply is read again after the market
+ * sweep, and a tick whose supply moved is flagged torn and skipped (checked again next poll).
  *
  * PEG: fUSD has no on-chain USD oracle (its peg IS the redemption floor), so fUSD/$1 deviation is not
  * computable here — wire an off-chain price source into your alerting if you need it. What IS shown is
@@ -96,6 +98,7 @@ export interface Metrics {
   ts: number; slot: number; rpc: string;
   global: {
     fusdSupplyUsd: number; sumBackingUsd: number; supplyDeltaUsd: number;
+    supplySnapshotTorn: boolean; // supply moved during collection — identity check unreliable this tick
     govAuthority: string; guardian: string; pendingGovAuthority: string | null;
     backstop: { balanceUsd: number; cutBps: number; reserveCapUsd: number; contributedUsd: number; absorbedUsd: number; withdrawnUsd: number; solvencyOk: boolean } | null;
   };
@@ -110,8 +113,14 @@ export function computeAlerts(m: Metrics): Alert[] {
   const push = (severity: Severity, scope: string, message: string) => a.push({ severity, scope, message });
   const f = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
-  if (m.global.sumBackingUsd - m.global.fusdSupplyUsd > SUPPLY_EPSILON_USD)
-    push("critical", "global", `supply identity broken: backing $${f(m.global.sumBackingUsd)} exceeds circulating $${f(m.global.fusdSupplyUsd)} (Δ $${f(m.global.supplyDeltaUsd * -1)})`);
+  if (m.global.sumBackingUsd - m.global.fusdSupplyUsd > SUPPLY_EPSILON_USD) {
+    // A mint/burn that landed mid-collection makes the two sides incomparable — don't cry wolf on
+    // the one alert that matters; a REAL violation persists and fires on the next (untorn) tick.
+    if (m.global.supplySnapshotTorn)
+      push("info", "global", "supply moved during collection — identity check skipped this tick");
+    else
+      push("critical", "global", `supply identity broken: backing $${f(m.global.sumBackingUsd)} exceeds circulating $${f(m.global.fusdSupplyUsd)} (Δ $${f(m.global.supplyDeltaUsd * -1)})`);
+  }
   if (m.global.backstop && !m.global.backstop.solvencyOk)
     push("critical", "global", "global backstop solvency mismatch (vault ≠ contributed − absorbed − withdrawn)");
 
@@ -128,7 +137,8 @@ export function computeAlerts(m: Metrics): Alert[] {
     if (mk.liqGraceActive) push("warn", s, "liquidation grace window active (post-staleness resume)");
     if (mk.guardianPauseActive) push("warn", s, "guardian pause active — new borrowing blocked");
     if (mk.bufferTargetUsd !== null && mk.bufferUsd < mk.bufferTargetUsd) push("warn", s, `insurance buffer $${f(mk.bufferUsd)} below target $${f(mk.bufferTargetUsd)}`);
-    if (mk.ceilingUsedPct >= m.thresholds.ceilingWarnPct) push("warn", s, `debt ceiling ${mk.ceilingUsedPct.toFixed(1)}% used`);
+    if (mk.debtCeilingUsd === 0 && mk.aggDebtUsd > 0) push("warn", s, "debt ceiling 0 — new debt paused with debt outstanding");
+    else if (mk.ceilingUsedPct >= m.thresholds.ceilingWarnPct) push("warn", s, `debt ceiling ${mk.ceilingUsedPct.toFixed(1)}% used`);
     if (mk.ccrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.ccrBps && (mk.scrBps === 0 || mk.tcrBps >= mk.scrBps))
       push("warn", s, `TCR ${mk.tcrBps}bps below CCR band ${mk.ccrBps}bps — borrow/withdraw restricted`);
     if (mk.rlUsedPct >= 90) push("info", s, `net-outflow rate limiter ${mk.rlUsedPct.toFixed(0)}% utilized`);
@@ -194,7 +204,8 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
         shutdown: !!m.shutdown, shutdownReason: Number(m.shutdownReason), mintFrozen: !!m.mintFrozen,
         aggDebtUsd: usd(aggDebt), unmintedUsd: usd(unminted), badDebtUsd: usd(badDebt),
         avgRateBps: avgRateBps(bi(m.aggWeightedDebtSum), aggDebt),
-        debtCeilingUsd: usd(debtCeiling), ceilingUsedPct: pct(aggDebt, debtCeiling),
+        // ceiling 0 = new debt paused: with debt outstanding that is a FULLY-used ceiling, not 0%.
+        debtCeilingUsd: usd(debtCeiling), ceilingUsedPct: debtCeiling === 0n ? (aggDebt > 0n ? 100 : 0) : pct(aggDebt, debtCeiling),
         tvlUsd, tcrBps: tcrBps(totalColl, spot, aggDebt),
         mcrBps: Number(m.mcrBps), scrBps: Number(m.scrBps), ccrBps: Number(m.ccrBps),
         spotUsd: spotToUsd(spot, dec), debtSpotUsd: spotToUsd(debtSpot, dec),
@@ -216,10 +227,16 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
     }
   }
 
+  // Re-read the supply: if it moved during the market sweep, a mint/burn landed mid-collection and
+  // the identity comparison is torn (any agg_debt change WITHOUT a mint/burn preserves the identity,
+  // so supply-stable ⇒ the snapshot is comparable even though the reads span slots).
+  const fusdSupplyAfter = BigInt((await conn.getTokenSupply(pc.fusdMint)).value.amount);
+
   const m: Metrics = {
     ts: Date.now(), slot, rpc: (program.provider.connection as any)._rpcEndpoint ?? "",
     global: {
       fusdSupplyUsd: usd(fusdSupply), sumBackingUsd: usd(sumBacking), supplyDeltaUsd: usd(fusdSupply - sumBacking),
+      supplySnapshotTorn: fusdSupplyAfter !== fusdSupply,
       govAuthority: pc.govAuthority.toBase58(), guardian: pc.guardian.toBase58(),
       pendingGovAuthority: pc.pendingGovAuthority?.equals?.(PublicKey.default) ? null : pc.pendingGovAuthority?.toBase58?.() ?? null,
       backstop,

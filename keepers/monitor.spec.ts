@@ -22,7 +22,7 @@ function baseMarket(over: Partial<MarketMetrics> = {}): MarketMetrics {
 function baseMetrics(globalOver: any = {}, marketOver: Partial<MarketMetrics> = {}): Metrics {
   return {
     ts: Date.now(), slot: 1000, rpc: "x",
-    global: { fusdSupplyUsd: 1000, sumBackingUsd: 1000, supplyDeltaUsd: 0, govAuthority: "g", guardian: "u", pendingGovAuthority: null, backstop: null, ...globalOver },
+    global: { fusdSupplyUsd: 1000, sumBackingUsd: 1000, supplyDeltaUsd: 0, supplySnapshotTorn: false, govAuthority: "g", guardian: "u", pendingGovAuthority: null, backstop: null, ...globalOver },
     markets: [baseMarket(marketOver)], thresholds: { staleSlots: 250, ceilingWarnPct: 90 }, alerts: [],
   };
 }
@@ -57,6 +57,15 @@ describe("monitor alert rules", () => {
     // the inverse (more circulating than backing — unmonitored markets) must NOT alarm.
     assert.equal(fire(baseMetrics({ fusdSupplyUsd: 2000, sumBackingUsd: 1000, supplyDeltaUsd: 1000 }), "supply identity").length, 0);
   });
+  it("a torn snapshot downgrades the supply alert to an info skip-note (no false CRITICAL)", () => {
+    const torn = baseMetrics({ fusdSupplyUsd: 1000, sumBackingUsd: 1100, supplyDeltaUsd: -100, supplySnapshotTorn: true });
+    assert.equal(fire(torn, "supply identity broken").length, 0);
+    const note = fire(torn, "identity check skipped");
+    assert.equal(note.length, 1);
+    assert.equal(note[0].severity, "info");
+    // a torn tick with a CLEAN identity stays silent.
+    assert.equal(computeAlerts(baseMetrics({ supplySnapshotTorn: true })).length, 0);
+  });
   it("shutdown / bad debt / TCR<SCR are critical", () => {
     assert.equal(fire(baseMetrics({}, { shutdown: true, shutdownReason: 2 }), "SHUT DOWN")[0].severity, "critical");
     assert.equal(fire(baseMetrics({}, { badDebtUsd: 5 }), "bad debt")[0].severity, "critical");
@@ -66,6 +75,12 @@ describe("monitor alert rules", () => {
     assert.equal(fire(baseMetrics({}, { mintFrozen: true }), "mint frozen")[0].severity, "warn");
     assert.equal(fire(baseMetrics({}, { slotsSincePrice: 300 }), "stale")[0].severity, "warn");
     assert.equal(fire(baseMetrics({}, { ceilingUsedPct: 95 }), "ceiling")[0].severity, "warn");
+    // ceiling 0 with debt outstanding = governance paused new debt: a dedicated warn, not "0% used".
+    const paused = computeAlerts(baseMetrics({}, { debtCeilingUsd: 0, aggDebtUsd: 500, ceilingUsedPct: 100 }));
+    assert.equal(paused.filter((x) => x.message.includes("new debt paused")).length, 1);
+    assert.equal(paused.filter((x) => x.message.includes("% used")).length, 0); // no double-fire
+    // ceiling 0 with NO debt (market never opened) stays silent.
+    assert.equal(fire(baseMetrics({}, { debtCeilingUsd: 0, aggDebtUsd: 0, ceilingUsedPct: 0 }), "paused").length, 0);
     assert.equal(fire(baseMetrics({}, { bufferUsd: 50, bufferTargetUsd: 100 }), "below target")[0].severity, "warn");
     // a target met (or none) ⇒ no buffer alert.
     assert.equal(fire(baseMetrics({}, { bufferUsd: 150, bufferTargetUsd: 100 }), "below target").length, 0);
