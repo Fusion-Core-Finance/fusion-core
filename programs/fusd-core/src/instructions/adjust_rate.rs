@@ -60,6 +60,9 @@ pub fn handler(ctx: Context<AdjustRate>, new_rate_bps: u16) -> Result<()> {
     // accrued interest, so `refresh_market` mints it into the insurance buffer and the supply invariant
     // (`circulating == agg_recorded_debt − unminted_interest + bad_debt`) is preserved. Always update the
     // cooldown clock so the next change is measured from now.
+    // TWIN: borrow.rs's C7 upfront fee folds the same debt+agg+unminted triple (there fused into the
+    // borrow delta BEFORE the health checks). A change to either fee's accounting must be mirrored in
+    // the other and re-modeled in certora.rs's supply rules.
     let cooldown = ctx.accounts.market.rate_adjust_cooldown_secs;
     let last_adjust = ctx.accounts.position.last_rate_adjust_ts;
     let within_cooldown = cooldown > 0 && now < last_adjust.saturating_add(cooldown);

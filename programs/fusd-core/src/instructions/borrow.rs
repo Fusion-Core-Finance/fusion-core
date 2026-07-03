@@ -81,6 +81,9 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     // interest). The supply identity `circulating == agg_recorded_debt − unminted_interest + bad_debt`
     // is preserved: circulating += amount, agg += amount + fee, unminted += fee. The MCR / ceiling /
     // CCR checks below all see the POST-fee debt (the borrower must collateralize what they owe).
+    // TWIN: adjust_rate.rs's premature-adjustment fee folds the same debt+agg+unminted triple (there
+    // contiguously, post-realization). A change to either fee's accounting must be mirrored in the
+    // other; certora.rs's `supply_preserved_by_borrow_ghost` models THIS site's algebra.
     let fee = if ctx.accounts.market.borrow_fee_bps > 0 {
         fusd_math::mul_div_ceil(
             amount as u128,
