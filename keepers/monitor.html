@@ -190,7 +190,7 @@ function card(x, th) {
   row("avg rate", (x.avgRateBps / 100).toFixed(2) + "%");
   row("ceiling used", x.ceilingUsedPct.toFixed(1) + "%", ceilCls);
   const bar = $("div", "bar"); bar.append($("i", x.ceilingUsedPct >= th.ceilingWarnPct ? "warn" : "", "")); bar.lastChild.style.width = Math.min(100, x.ceilingUsedPct) + "%"; rows.append(bar);
-  row("price age", fresh ? x.slotsSincePrice + " slots" : x.slotsSincePrice + " slots", fresh ? "" : "warn");
+  row("price age", x.slotsSincePrice + " slots", fresh ? "" : "warn");
   row("insurance buffer", usd(x.bufferUsd) + (x.bufferTargetUsd != null ? " / " + usd(x.bufferTargetUsd) : ""), (x.bufferTargetUsd != null && x.bufferUsd < x.bufferTargetUsd) ? "warn" : "");
   row("reactor pool", usd(x.rpDepositsUsd));
   if (x.rpSeizedColl > 0) row("RP seized coll", num(x.rpSeizedColl, 4));

@@ -21,7 +21,7 @@
  *   accept-inbound             [--send] [--authority <pk>]  the pending inbound authority accepts (signs)
  */
 import { makeProgram, PublicKey, Pk } from "./common";
-import { flags, govPdas, sendOrPrint, authorityOf, printUsage, log } from "./gov-common";
+import { flags, govPdas, sendOrPrint, authorityOf, printUsage, runCli, log } from "./gov-common";
 
 const ZERO = PublicKey.default;
 const fmtKey = (k: any): string => { const s = k.toBase58(); return s === ZERO.toBase58() ? `${s}  (unset/disabled)` : s; };
@@ -100,6 +100,4 @@ async function main() {
   }
 }
 
-if (require.main === module) {
-  main().catch((e) => { console.error("ERROR:", e.message || e); process.exit(1); });
-}
+if (require.main === module) runCli(main);

@@ -45,6 +45,11 @@ export const marketOraclePda = (pid: Pk, coll: Pk): Pk => deriveMarketOracle(col
 /** Print the script's doc-comment header as CLI usage. */
 export const printUsage = (file: string) => console.log(fs.readFileSync(file, "utf8").split("*/")[0].replace("/**", ""));
 
+/** Shared CLI entry wrapper — one error format + exit code across the gov scripts. */
+export const runCli = (main: () => Promise<unknown>): void => {
+  main().catch((e) => { console.error("ERROR:", e.message || e); process.exit(1); });
+};
+
 /** The signer for a mutating instruction: the loaded wallet, or a --authority override (dry-run
  * proposals only — in --send the loaded wallet must actually sign, so an override must match it). */
 export function authorityOf(f: Flags, me: Pk, send: boolean): Pk {
@@ -65,24 +70,25 @@ export function resolveVariant(idlVariants: string[], input: string): { name: st
 }
 
 export interface Clamp { unit: string; min?: number; max?: number; note?: string; }
+// `min` only where a NON-ZERO floor exists — reqValue already rejects negatives, so `min: 0` never warns.
 export const MARKET_CLAMPS: Record<string, Clamp> = {
   Mcr: { unit: "bps", min: 10000, max: 30000 },
   DebtCeiling: { unit: "fUSD-native", note: "0 pauses new debt; no upper clamp" },
-  RedemptionFee: { unit: "bps", min: 0, max: 500 },
-  LiqGasComp: { unit: "bps", min: 0, max: 1000 },
+  RedemptionFee: { unit: "bps", max: 500 },
+  LiqGasComp: { unit: "bps", max: 1000 },
   RateLimitCap: { unit: "fUSD-native/window", note: "0 disables; no upper clamp" },
   Ccr: { unit: "bps", note: "0 disables; otherwise [10000, 30000]" },
-  LiqBonus: { unit: "bps", min: 0, max: 2000, note: "0 = collar off (seize all)" },
-  MinDebt: { unit: "fUSD-native", min: 0, max: 10_000_000_000, note: "0 disables" },
-  RateAdjustCooldown: { unit: "secs", min: 0, max: 2_592_000, note: "0 disables" },
-  KeeperReward: { unit: "bps", min: 0, max: 1000, note: "0 disables" },
-  BorrowFee: { unit: "bps", min: 0, max: 500, note: "0 disables (C7 upfront borrow fee)" },
-  BadDebtPaydown: { unit: "bps", min: 0, max: 10_000, note: "0 disables (C16 auto bad-debt paydown)" },
-  RedemptionBaseRateMax: { unit: "bps", min: 0, max: 500, note: "0 disables the dynamic base rate (C9)" },
+  LiqBonus: { unit: "bps", max: 2000, note: "0 = collar off (seize all)" },
+  MinDebt: { unit: "fUSD-native", max: 10_000_000_000, note: "0 disables" },
+  RateAdjustCooldown: { unit: "secs", max: 2_592_000, note: "0 disables" },
+  KeeperReward: { unit: "bps", max: 1000, note: "0 disables" },
+  BorrowFee: { unit: "bps", max: 500, note: "0 disables (C7 upfront borrow fee)" },
+  BadDebtPaydown: { unit: "bps", max: 10_000, note: "0 disables (C16 auto bad-debt paydown)" },
+  RedemptionBaseRateMax: { unit: "bps", max: 500, note: "0 disables the dynamic base rate (C9)" },
   OracleMaxConf: { unit: "bps", min: 1, max: 500 },
   OracleMaxDeviation: { unit: "bps", min: 1, max: 500 },
   OracleTwapDivergence: { unit: "bps", min: 1, max: 1000, note: "must stay <= oracleLiqDivergence" },
-  OracleLiqDivergence: { unit: "bps", min: 0, max: 10_000, note: "0 disables; must stay >= oracleTwapDivergence" },
+  OracleLiqDivergence: { unit: "bps", max: 10_000, note: "0 disables; must stay >= oracleTwapDivergence" },
   OracleMaxAge: { unit: "secs", min: 1, max: 300 },
   OracleK: { unit: "bps", min: 10_000, max: 30_000 },
   OracleTwapStaleness: { unit: "secs", min: 1, max: 3600 },
@@ -96,12 +102,12 @@ const ORACLE_PARAMS = ["OracleMaxConf", "OracleMaxDeviation", "OracleTwapDiverge
 export const isOracleParam = (name: string): boolean =>
   ORACLE_PARAMS.some((p) => p.toLowerCase() === name.toLowerCase());
 export const GLOBAL_CLAMPS: Record<string, Clamp> = {
-  Cut: { unit: "bps", min: 0, max: 3000 },
+  Cut: { unit: "bps", max: 3000 },
   ReserveCap: { unit: "fUSD-native", note: "0 = no accrual; no upper clamp" },
   DrawBase: { unit: "fUSD-native", note: "no upper clamp" },
-  DrawK: { unit: "bps", min: 0, max: 100_000 },
-  DrawCeilingShare: { unit: "bps", min: 0, max: 10_000 },
-  DrawDebtShare: { unit: "bps", min: 0, max: 10_000 },
+  DrawK: { unit: "bps", max: 100_000 },
+  DrawCeilingShare: { unit: "bps", max: 10_000 },
+  DrawDebtShare: { unit: "bps", max: 10_000 },
 };
 
 /** Returns a human warning if `value` is outside the documented clamp for `name`, else null. The

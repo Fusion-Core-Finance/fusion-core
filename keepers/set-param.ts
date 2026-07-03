@@ -33,7 +33,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { BN, makeProgram, PublicKey, Pk } from "./common";
 import {
   flags, govPdas, timelockPda, gtimelockPda, marketPda, marketOraclePda, resolveVariant, clampWarning,
-  MARKET_CLAMPS, GLOBAL_CLAMPS, isOracleParam, sendOrPrint, authorityOf, printUsage, log,
+  MARKET_CLAMPS, GLOBAL_CLAMPS, isOracleParam, sendOrPrint, authorityOf, printUsage, runCli, log,
 } from "./gov-common";
 
 const SYS = anchor.web3.SystemProgram.programId;
@@ -117,73 +117,71 @@ async function main() {
   const { program, pid, me } = makeProgram();
   const g = govPdas(pid);
 
-  switch (cmd) {
-    case "status": return status(program, pid, f);
+  // The market and global timelock lifecycles are twins — one handler per verb, parameterized by
+  // kind, so a fix to the shared logic (eta hint, nonce logging, clamp warning) can't drift.
+  type Kind = "market" | "global";
+  const tlPda = (k: Kind, nonce: bigint) => (k === "market" ? timelockPda : gtimelockPda)(pid, nonce);
+  const sfx = (k: Kind) => (k === "market" ? "" : "-global");
 
-    case "queue": {
-      const { name, arg } = resolveVariant(idlVariants("MarketParam"), f.get("param") ?? "");
-      const value = reqValue(f); const coll = reqMint(f); const market = marketPda(pid, coll);
-      const w = clampWarning(name, value, MARKET_CLAMPS); if (w) log(`⚠ ${name}: ${w}`);
-      const gate: any = await program.account.governanceGate.fetch(g.govGate);
-      const nonce = BigInt(gate.queueNonce.toString());
-      log(`queue MARKET ${name}=${value} → nonce ${nonce}, executable ~+${gate.timelockSecs}s after submit`);
-      const b = program.methods.queueParamChange(arg, new BN(value.toString())).accounts({
-        authority: authorityOf(f, me, send), govGate: g.govGate, market,
+  const queueCmd = async (k: Kind) => {
+    const isM = k === "market";
+    const { name, arg } = resolveVariant(idlVariants(isM ? "MarketParam" : "GlobalParam"), f.get("param") ?? "");
+    const value = reqValue(f);
+    const w = clampWarning(name, value, isM ? MARKET_CLAMPS : GLOBAL_CLAMPS); if (w) log(`⚠ ${name}: ${w}`);
+    const gate: any = await program.account.governanceGate.fetch(g.govGate);
+    const nonce = BigInt(gate.queueNonce.toString());
+    log(`queue ${isM ? "MARKET" : "GLOBAL"} ${name}=${value} → nonce ${nonce}, executable ~+${gate.timelockSecs}s after submit`);
+    const base = { authority: authorityOf(f, me, send), govGate: g.govGate, timelockedParam: tlPda(k, nonce), systemProgram: SYS };
+    let b;
+    if (isM) {
+      const coll = reqMint(f);
+      b = program.methods.queueParamChange(arg, new BN(value.toString())).accounts({
+        ...base, market: marketPda(pid, coll),
         // oracle-targeting params validate/write MarketOracle — the optional account is required then
         marketOracle: isOracleParam(name) ? marketOraclePda(pid, coll) : null,
-        timelockedParam: timelockPda(pid, nonce), systemProgram: SYS,
       });
-      return sendOrPrint(b, `queue ${name}=${value} (nonce ${nonce})`, send);
+    } else {
+      b = program.methods.queueGlobalParamChange(arg, new BN(value.toString())).accounts(base);
     }
+    return sendOrPrint(b, `queue${sfx(k)} ${name}=${value} (nonce ${nonce})`, send);
+  };
 
-    case "execute": {
-      const nonce = reqNonce(f); const tp = timelockPda(pid, nonce);
-      const op: any = await program.account.timelockedParam.fetch(tp);
-      const now = Math.floor(Date.now() / 1000);
-      if (now < Number(op.eta)) log(`⚠ timelock not elapsed — ${Number(op.eta) - now}s remain (tx reverts until then)`);
+  const executeCmd = async (k: Kind) => {
+    const isM = k === "market";
+    const nonce = reqNonce(f); const tp = tlPda(k, nonce);
+    const op: any = await (isM ? program.account.timelockedParam : program.account.timelockedGlobalParam).fetch(tp);
+    const now = Math.floor(Date.now() / 1000);
+    if (now < Number(op.eta)) log(`⚠ timelock not elapsed — ${Number(op.eta) - now}s remain (tx reverts until then)`);
+    let b;
+    if (isM) {
       const oracleNeeded = isOracleParam(paramName(op.param));
       const m: any = oracleNeeded ? await program.account.market.fetch(op.market) : null;
-      const b = program.methods.executeParamChange().accounts({
+      b = program.methods.executeParamChange().accounts({
         executor: me, market: op.market,
         marketOracle: oracleNeeded ? marketOraclePda(pid, m.collateralMint) : null,
         timelockedParam: tp,
       });
-      return sendOrPrint(b, `execute nonce ${nonce} (${paramName(op.param)}=${op.value})`, send);
+    } else {
+      b = program.methods.executeGlobalParamChange().accounts({ executor: me, backstop: g.backstop, timelockedParam: tp });
     }
+    return sendOrPrint(b, `execute${sfx(k)} nonce ${nonce} (${paramName(op.param)}=${op.value})`, send);
+  };
 
-    case "cancel": {
-      const nonce = reqNonce(f); const tp = timelockPda(pid, nonce);
-      const b = program.methods.cancelParamChange().accounts({ authority: authorityOf(f, me, send), govGate: g.govGate, timelockedParam: tp });
-      return sendOrPrint(b, `cancel nonce ${nonce}`, send);
-    }
+  const cancelCmd = (k: Kind) => {
+    const nonce = reqNonce(f); const tp = tlPda(k, nonce);
+    const b = (k === "market" ? program.methods.cancelParamChange() : program.methods.cancelGlobalParamChange())
+      .accounts({ authority: authorityOf(f, me, send), govGate: g.govGate, timelockedParam: tp });
+    return sendOrPrint(b, `cancel${sfx(k)} nonce ${nonce}`, send);
+  };
 
-    case "queue-global": {
-      const { name, arg } = resolveVariant(idlVariants("GlobalParam"), f.get("param") ?? "");
-      const value = reqValue(f);
-      const w = clampWarning(name, value, GLOBAL_CLAMPS); if (w) log(`⚠ ${name}: ${w}`);
-      const gate: any = await program.account.governanceGate.fetch(g.govGate);
-      const nonce = BigInt(gate.queueNonce.toString());
-      log(`queue GLOBAL ${name}=${value} → nonce ${nonce} (+${gate.timelockSecs}s)`);
-      const b = program.methods.queueGlobalParamChange(arg, new BN(value.toString())).accounts({
-        authority: authorityOf(f, me, send), govGate: g.govGate, timelockedParam: gtimelockPda(pid, nonce), systemProgram: SYS,
-      });
-      return sendOrPrint(b, `queue-global ${name}=${value} (nonce ${nonce})`, send);
-    }
-
-    case "execute-global": {
-      const nonce = reqNonce(f); const tp = gtimelockPda(pid, nonce);
-      const op: any = await program.account.timelockedGlobalParam.fetch(tp);
-      const now = Math.floor(Date.now() / 1000);
-      if (now < Number(op.eta)) log(`⚠ timelock not elapsed — ${Number(op.eta) - now}s remain`);
-      const b = program.methods.executeGlobalParamChange().accounts({ executor: me, backstop: g.backstop, timelockedParam: tp });
-      return sendOrPrint(b, `execute-global nonce ${nonce} (${paramName(op.param)}=${op.value})`, send);
-    }
-
-    case "cancel-global": {
-      const nonce = reqNonce(f); const tp = gtimelockPda(pid, nonce);
-      const b = program.methods.cancelGlobalParamChange().accounts({ authority: authorityOf(f, me, send), govGate: g.govGate, timelockedParam: tp });
-      return sendOrPrint(b, `cancel-global nonce ${nonce}`, send);
-    }
+  switch (cmd) {
+    case "status": return status(program, pid, f);
+    case "queue": return queueCmd("market");
+    case "queue-global": return queueCmd("global");
+    case "execute": return executeCmd("market");
+    case "execute-global": return executeCmd("global");
+    case "cancel": return cancelCmd("market");
+    case "cancel-global": return cancelCmd("global");
 
     case "guardian-derisk": {
       const coll = reqMint(f); const secs = BigInt(f.get("secs") ?? "0");
@@ -198,6 +196,4 @@ async function main() {
   }
 }
 
-if (require.main === module) {
-  main().catch((e) => { console.error("ERROR:", e.message || e); process.exit(1); });
-}
+if (require.main === module) runCli(main);

@@ -22,6 +22,7 @@ const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 // On-chain constants (programs/fusd-core/src/constants.rs).
 export const RAY = 10n ** 27n;
 export const BPS = 10_000n;
+export const FUSD_DECIMALS = 6;
 export const SECONDS_PER_YEAR = 31_536_000n;
 export const MAX_PRICE_STALENESS_SLOTS = 250n;
 export const ZOMBIE_BUCKET = 256;
@@ -39,10 +40,10 @@ export function loadWallet(): anchor.Wallet {
   return new anchor.Wallet(Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(path, "utf8")))));
 }
 
-/** Anchor program + provider, exactly as keeper.ts wires it (IDL from target/idl/fusd_core.json). */
-export function makeProgram() {
+/** Anchor program + provider (IDL from target/idl/fusd_core.json). Pass a wallet to override the
+ * default keypair file — e.g. a throwaway `new anchor.Wallet(Keypair.generate())` for read-only use. */
+export function makeProgram(wallet: anchor.Wallet = loadWallet()) {
   const url = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
-  const wallet = loadWallet();
   const provider = new anchor.AnchorProvider(new Connection(url, "confirmed"), wallet, { commitment: "confirmed" });
   anchor.setProvider(provider);
   const idl = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
@@ -70,7 +71,8 @@ export function bundle(pid: Pk, coll: Pk) {
 }
 export const positionPda = (pid: Pk, coll: Pk, owner: Pk): Pk => pda([seed("position"), coll, owner], pid);
 
-const bi = (v: any): bigint => BigInt(v.toString());
+/** BN/number/string → bigint (Anchor account fields decode as BN). */
+export const bi = (v: any): bigint => BigInt(v.toString());
 
 /** A scanned position (BigInt-normalized). collateral_mint is at byte offset 40 (8 disc + 32 owner). */
 export interface ScannedPosition {

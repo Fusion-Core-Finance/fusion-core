@@ -24,11 +24,10 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
-  PublicKey, Pk, BN, TOKEN_PROGRAM, MAX_PRICE_STALENESS_SLOTS, ZOMBIE_BUCKET, MAX_REDEMPTION_CANDIDATES,
-  log, makeProgram, bundle, scanPositions, ensureAta, errLine,
+  PublicKey, Pk, BN, TOKEN_PROGRAM, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, ZOMBIE_BUCKET,
+  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine,
 } from "./common";
 
-const FUSD_DECIMALS = 6;
 interface RedeemMarketCfg { collateralMint: string; redeemAmountFusd?: number; }
 interface RedeemerCfg {
   scanIntervalSecs?: number;

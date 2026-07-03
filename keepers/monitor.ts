@@ -27,11 +27,13 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import * as http from "http";
-import { PublicKey, Pk, Keypair, Connection, pda, seed, bundle, RAY, BPS, MAX_PRICE_STALENESS_SLOTS, log, errLine } from "./common";
+import {
+  PublicKey, Pk, Keypair, pda, seed, bundle, makeProgram, bi,
+  RAY, BPS, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, log, errLine,
+} from "./common";
 
 const STALE_SLOTS = Number(MAX_PRICE_STALENESS_SLOTS); // 250
 const SUPPLY_EPSILON_USD = 0.01; // rounding tolerance for the supply identity
-const FUSD_DECIMALS = 6;
 
 interface MonitorCfg {
   port?: number;
@@ -60,7 +62,6 @@ export function validateConfig(cfg: MonitorCfg): void {
 }
 
 // ── pure helpers (unit-tested in monitor.spec.ts) ──────────────────────────────────────────────
-const bi = (v: any): bigint => BigInt(v.toString());
 const usd = (native: bigint): number => Number(native) / 10 ** FUSD_DECIMALS;
 
 /** Debt-weighted average borrow rate (bps), 2-dp. `agg_weighted_debt_sum / agg_recorded_debt`. */
@@ -147,59 +148,45 @@ export function computeAlerts(m: Metrics): Alert[] {
 }
 
 // ── on-chain collection ────────────────────────────────────────────────────────────────────────
-function makeReadonlyProgram(): { program: any; conn: any; pid: Pk; url: string } {
-  const url = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
-  const conn = new Connection(url, "confirmed");
-  const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(Keypair.generate()), { commitment: "confirmed" });
-  const idl = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
-  const program: any = new anchor.Program(idl as anchor.Idl, provider);
-  return { program, conn, pid: program.programId as Pk, url };
-}
-
 async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promise<Metrics> {
-  const slot = await conn.getSlot();
   const tokenBal = async (acc: Pk): Promise<bigint> => {
     try { return BigInt((await conn.getTokenAccountBalance(acc)).value.amount); } catch { return 0n; }
   };
   const cfgPda = pda([seed("config")], pid);
-  const pc: any = await program.account.protocolConfig.fetch(cfgPda);
+  const [slot, pc] = await Promise.all([conn.getSlot(), program.account.protocolConfig.fetch(cfgPda)]) as [number, any];
   const fusdSupply = BigInt((await conn.getTokenSupply(pc.fusdMint)).value.amount);
 
-  let backstop: Metrics["global"]["backstop"] = null;
-  try {
-    const b: any = await program.account.globalBackstopReserve.fetch(pda([seed("backstop")], pid));
-    const bal = await tokenBal(b.fusdVault);
-    const contributed = bi(b.totalContributed), absorbed = bi(b.totalAbsorbed), withdrawn = bi(b.totalWithdrawn);
-    backstop = {
-      balanceUsd: usd(bal), cutBps: Number(b.cutBps), reserveCapUsd: usd(bi(b.reserveCap)),
-      contributedUsd: usd(contributed), absorbedUsd: usd(absorbed), withdrawnUsd: usd(withdrawn),
-      solvencyOk: contributed - absorbed - withdrawn === bal,
-    };
-  } catch { /* backstop not initialized — leave null */ }
+  const readBackstop = async (): Promise<Metrics["global"]["backstop"]> => {
+    try {
+      const b: any = await program.account.globalBackstopReserve.fetch(pda([seed("backstop")], pid));
+      const bal = await tokenBal(b.fusdVault);
+      const contributed = bi(b.totalContributed), absorbed = bi(b.totalAbsorbed), withdrawn = bi(b.totalWithdrawn);
+      return {
+        balanceUsd: usd(bal), cutBps: Number(b.cutBps), reserveCapUsd: usd(bi(b.reserveCap)),
+        contributedUsd: usd(contributed), absorbedUsd: usd(absorbed), withdrawnUsd: usd(withdrawn),
+        solvencyOk: contributed - absorbed - withdrawn === bal,
+      };
+    } catch { return null; } // backstop not initialized
+  };
 
-  const markets: MarketMetrics[] = [];
-  let sumBacking = 0n;
-  for (const mint of cfg.markets) {
+  const readMarket = async (mint: string): Promise<{ metric: MarketMetrics; backing: bigint }> => {
     const coll = new PublicKey(mint);
     const tag = mint.slice(0, 6);
     const p = bundle(pid, coll);
     try {
       const m: any = await program.account.market.fetch(p.market);
       const aggDebt = bi(m.aggRecordedDebt), unminted = bi(m.unmintedInterest), badDebt = bi(m.badDebt);
-      sumBacking += aggDebt - unminted + badDebt;
       const spot = bi(m.spot), debtSpot = bi(m.debtSpot), totalColl = bi(m.totalCollateral);
       const dec = Number(m.collateralDecimals);
       const debtCeiling = bi(m.debtCeiling);
-      const vaultBal = await tokenBal(p.collateralVault);
-      const bufferBal = await tokenBal(p.bufferFusdVault);
-      const rpFusd = await tokenBal(p.reactorFusdVault);
-      const rpColl = await tokenBal(p.reactorCollVault);
-      let buf: any = null;
-      try { buf = await program.account.insuranceBuffer.fetch(p.buffer); } catch { /* none */ }
+      const [bufferBal, rpFusd, rpColl, buf] = await Promise.all([
+        tokenBal(p.bufferFusdVault), tokenBal(p.reactorFusdVault), tokenBal(p.reactorCollVault),
+        program.account.insuranceBuffer.fetch(p.buffer).catch(() => null),
+      ]);
       const tvlUsd = Number((totalColl * spot) / RAY) / 10 ** FUSD_DECIMALS;
       const bufferTargetUsd = cfg.bufferTargetBps !== undefined ? usd((aggDebt * BigInt(Math.round(cfg.bufferTargetBps))) / BPS) : null;
       const rlCap = bi(m.rlCap), rlAccrued = bi(m.rlAccrued);
-      markets.push({
+      const metric: MarketMetrics = {
         mint, tag, exists: true,
         shutdown: !!m.shutdown, shutdownReason: Number(m.shutdownReason), mintFrozen: !!m.mintFrozen,
         aggDebtUsd: usd(aggDebt), unmintedUsd: usd(unminted), badDebtUsd: usd(badDebt),
@@ -219,13 +206,18 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
         rlCapUsd: usd(rlCap), rlUsedPct: pct(rlAccrued, rlCap),
         protocolCollateral: Number(bi(m.protocolCollateral)) / 10 ** dec,
         globalContributedUsd: usd(bi(m.globalContributed)), globalDrawnUsd: usd(bi(m.globalDrawn)),
-        // vaultBal kept for the proof-of-reserves note (vault should cover total_collateral + surpluses)
-        ...( { vaultColl: Number(vaultBal) / 10 ** dec } as any ),
-      });
+      };
+      return { metric, backing: aggDebt - unminted + badDebt };
     } catch (e: any) {
-      markets.push({ mint, tag, exists: false, error: errLine(e) } as any);
+      return { metric: { mint, tag, exists: false, error: errLine(e) } as any, backing: 0n };
     }
-  }
+  };
+
+  // The reads within/across markets are independent — one parallel wave instead of ~6×N round trips
+  // (also shrinks the supply-identity torn-snapshot window below).
+  const [backstop, marketReads] = await Promise.all([readBackstop(), Promise.all(cfg.markets.map(readMarket))]);
+  const markets = marketReads.map((r) => r.metric);
+  const sumBacking = marketReads.reduce((acc, r) => acc + r.backing, 0n);
 
   // Re-read the supply: if it moved during the market sweep, a mint/burn landed mid-collection and
   // the identity comparison is torn (any agg_debt change WITHOUT a mint/burn preserves the identity,
@@ -262,7 +254,9 @@ async function main() {
   const cfgPath = process.argv[2];
   const cfg: MonitorCfg = cfgPath ? { ...DEFAULT_CFG, ...JSON.parse(fs.readFileSync(cfgPath, "utf8")) } : DEFAULT_CFG;
   validateConfig(cfg);
-  const { program, conn, pid, url } = makeReadonlyProgram();
+  // Read-only: a throwaway wallet satisfies Anchor's provider without needing a key file.
+  const { program, provider, pid, url } = makeProgram(new anchor.Wallet(Keypair.generate()));
+  const conn = provider.connection;
   log(`monitor — program ${pid.toBase58()}, RPC ${url}, markets ${cfg.markets.map((s) => s.slice(0, 6)).join(", ")}`);
 
   let latest: Metrics | null = null;
