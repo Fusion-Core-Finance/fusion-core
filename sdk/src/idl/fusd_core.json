@@ -522,6 +522,86 @@
       ]
     },
     {
+      "name": "bump_debt_ceiling",
+      "docs": [
+        "Permissionless: bump the market's `debt_ceiling` toward `min(line, debt + gap)`, throttled to",
+        "once per `ttl`. Never exceeds the gov-set `line`."
+      ],
+      "discriminator": [
+        144,
+        4,
+        98,
+        187,
+        80,
+        96,
+        98,
+        71
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (signs only to carry the tx). No authority check — the bump can never",
+            "raise the ceiling past the gov-set `line`."
+          ],
+          "signer": true
+        },
+        {
+          "name": "collateral_mint"
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "debt_ceiling_line",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  97,
+                  116,
+                  101,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "cancel_global_param_change",
       "docs": [
         "Governance: CANCEL a queued global-param change before it executes."
@@ -1403,6 +1483,35 @@
           "writable": true
         },
         {
+          "name": "market_oracle",
+          "docs": [
+            "OPTIONAL: the market's `MarketOracle`, REQUIRED (and written) only for an oracle-targeting",
+            "param. PDA-bound to `market.collateral_mint`."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.collateral_mint",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
           "name": "timelocked_param",
           "writable": true,
           "pda": {
@@ -1801,6 +1910,118 @@
       "args": [
         {
           "name": "pause_secs",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "init_debt_ceiling_line",
+      "docs": [
+        "Governance: create a market's debt-ceiling auto-line (`line`/`gap`/`ttl`) and apply its",
+        "initial ceiling. Gated on `config.gov_authority`."
+      ],
+      "discriminator": [
+        77,
+        192,
+        239,
+        235,
+        2,
+        138,
+        104,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collateral_mint"
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "debt_ceiling_line",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  97,
+                  116,
+                  101,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "line",
+          "type": "u64"
+        },
+        {
+          "name": "gap",
+          "type": "u64"
+        },
+        {
+          "name": "ttl",
           "type": "i64"
         }
       ]
@@ -2953,6 +3174,77 @@
       "args": []
     },
     {
+      "name": "init_supply_reconciliation",
+      "docs": [
+        "Governance: one-time create the global supply-reconciliation singleton."
+      ],
+      "discriminator": [
+        86,
+        246,
+        104,
+        196,
+        159,
+        157,
+        3,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "supply_recon",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  117,
+                  112,
+                  112,
+                  108,
+                  121,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  110
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "liquidate",
       "docs": [
         "Permissionless: liquidate an under-MCR position via the Reactor Pool."
@@ -3949,6 +4241,34 @@
           ]
         },
         {
+          "name": "market_oracle",
+          "docs": [
+            "OPTIONAL: the market's `MarketOracle`, REQUIRED only for an oracle-targeting param (so its",
+            "sibling can be read for the relational check). PDA-bound to `market.collateral_mint`."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.collateral_mint",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
           "name": "timelocked_param",
           "writable": true,
           "pda": {
@@ -4137,6 +4457,80 @@
           }
         }
       ]
+    },
+    {
+      "name": "reconcile_supply",
+      "docs": [
+        "Permissionless: re-derive `Σ_market (agg − unminted + bad)` over the submitted markets, compare",
+        "to the live mint supply, and stamp the residual. Auditability only; gates nothing."
+      ],
+      "discriminator": [
+        76,
+        3,
+        168,
+        164,
+        69,
+        196,
+        225,
+        250
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (signs only to carry the tx). No authority check — the crank only READS",
+            "markets + the mint and writes the observability singleton; it moves no funds and gates nothing."
+          ],
+          "signer": true
+        },
+        {
+          "name": "fusd_mint",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  117,
+                  115,
+                  100,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "supply_recon",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  117,
+                  112,
+                  112,
+                  108,
+                  121,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  110
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
     },
     {
       "name": "redeem",
@@ -4785,6 +5179,112 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_debt_ceiling_line",
+      "docs": [
+        "Governance: update the auto-line's `line`/`gap`/`ttl` and apply the new ceiling immediately."
+      ],
+      "discriminator": [
+        11,
+        1,
+        60,
+        47,
+        169,
+        218,
+        33,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collateral_mint"
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "debt_ceiling_line",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  97,
+                  116,
+                  101,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "line",
+          "type": "u64"
+        },
+        {
+          "name": "gap",
+          "type": "u64"
+        },
+        {
+          "name": "ttl",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "set_guardian",
@@ -5444,6 +5944,23 @@
               }
             ]
           }
+        },
+        {
+          "name": "sol_usd_pyth_update",
+          "docs": [
+            "when this is an LST market (`market_oracle.lst_stake_pool != default`); verified in the",
+            "handler (owner == a configured Pyth receiver, full verification, feed-id ==",
+            "`PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is unavailable → mints freeze."
+          ],
+          "optional": true
+        },
+        {
+          "name": "lst_stake_pool",
+          "docs": [
+            "LST market; verified in the handler (owner == `SPL_STAKE_POOL_PROGRAM_ID`, key ==",
+            "`market_oracle.lst_stake_pool`). Absent/stale/degenerate ⇒ leg unavailable → mints freeze."
+          ],
+          "optional": true
         },
         {
           "name": "event_authority",
@@ -6244,6 +6761,19 @@
   ],
   "accounts": [
     {
+      "name": "DebtCeilingLine",
+      "discriminator": [
+        232,
+        200,
+        164,
+        50,
+        135,
+        84,
+        223,
+        242
+      ]
+    },
+    {
       "name": "DexTwap",
       "discriminator": [
         141,
@@ -6400,6 +6930,19 @@
       ]
     },
     {
+      "name": "SupplyReconciliation",
+      "discriminator": [
+        36,
+        33,
+        87,
+        156,
+        198,
+        86,
+        233,
+        168
+      ]
+    },
+    {
       "name": "TimelockedGlobalParam",
       "discriminator": [
         165,
@@ -6529,6 +7072,19 @@
         231,
         60,
         73
+      ]
+    },
+    {
+      "name": "DebtCeilingLineBumped",
+      "discriminator": [
+        11,
+        4,
+        255,
+        31,
+        2,
+        50,
+        85,
+        46
       ]
     },
     {
@@ -6857,6 +7413,19 @@
       ]
     },
     {
+      "name": "SupplyReconciled",
+      "discriminator": [
+        135,
+        252,
+        58,
+        73,
+        12,
+        228,
+        56,
+        217
+      ]
+    },
+    {
       "name": "SurplusWithdrawn",
       "discriminator": [
         29,
@@ -7126,6 +7695,11 @@
       "code": 6045,
       "name": "OracleDivergent",
       "msg": "Liquidations are paused: a fresh primary feed grossly disagrees with a present secondary (oracle divergence) — redemptions and repay stay open"
+    },
+    {
+      "code": 6046,
+      "name": "InvalidStakePool",
+      "msg": "C1 LST canonical-rate leg: the supplied SPL stake-pool account has the wrong owner or key (mis-built crank)"
     }
   ],
   "types": [
@@ -7311,6 +7885,113 @@
           {
             "name": "amount",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DebtCeilingLine",
+      "docs": [
+        "Per-market **debt-ceiling auto-line** (Maker DC-IAM analog). PDA `[b\"ratelimit\", collateral_mint]`.",
+        "OPT-IN and default-absent: a market with no `DebtCeilingLine` account uses its static",
+        "`Market.debt_ceiling` exactly as before (the hot `borrow` path is unchanged — it always reads",
+        "`Market.debt_ceiling`, never this account).",
+        "",
+        "When present, the permissionless `bump_debt_ceiling` crank moves `Market.debt_ceiling` toward",
+        "`MIN(line, agg_recorded_debt + gap)` — the effective ceiling \"follows\" utilization up by `gap`",
+        "steps (capped at the hard `line`), no more often than every `ttl` seconds. Governance sets",
+        "`line`/`gap`/`ttl` (gov_authority-gated); the permissionless crank can only ever move the live",
+        "ceiling WITHIN `[debt, line]`, never past the gov-set `line` — so opening the crank to anyone",
+        "adds no authority over the cap."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collateral_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "line",
+            "docs": [
+              "The HARD maximum debt ceiling (fUSD-native) the auto-line may ever raise `Market.debt_ceiling`",
+              "to. Gov-set; the permissionless crank never exceeds it. (Unclamped, like `Market.debt_ceiling`.)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "gap",
+            "docs": [
+              "The maximum step (fUSD-native) a single bump may raise the effective ceiling above current",
+              "utilization: `new = min(line, agg_recorded_debt + gap)`. `0` freezes growth at current debt."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "ttl",
+            "docs": [
+              "Minimum seconds between bumps (the DC-IAM throttle). `0` = bump anytime."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_bump_ts",
+            "docs": [
+              "Unix-ts of the last bump (the throttle anchor)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Forward-compat reserve. Carve new fields from the HEAD; zeroed bytes decode as the field's",
+              "`0 = disabled/none` sentinel."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "DebtCeilingLineBumped",
+      "docs": [
+        "The debt-ceiling auto-line moved `Market.debt_ceiling` (`init`/`set`/permissionless `bump`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collateral_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "debt_ceiling",
+            "type": "u64"
+          },
+          {
+            "name": "line",
+            "type": "u64"
+          },
+          {
+            "name": "gap",
+            "type": "u64"
+          },
+          {
+            "name": "ttl",
+            "type": "i64"
+          },
+          {
+            "name": "agg_recorded_debt",
+            "type": "u128"
           }
         ]
       }
@@ -7944,6 +8625,17 @@
               "`<= MAX_LIQ_DIVERGENCE_BPS` and intended LOOSER than the mint deviation thresholds."
             ],
             "type": "u16"
+          },
+          {
+            "name": "lst_stake_pool",
+            "docs": [
+              "C1 LST canonical-rate leg: the SPL Stake Pool `StakePool` account for this collateral, or",
+              "`Pubkey::default()` (zero) for a non-LST market (leg disabled). When set, this market is an",
+              "LST market: minting requires a fresh canonical rate, and the collateral price is capped at",
+              "`MIN(market, sol_usd · stake_pool_rate)`. The collateral mint must be 9-decimal (SPL pool",
+              "mints are, so `total_lamports / pool_token_supply` is the whole-token SOL/LST rate directly)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -8060,6 +8752,14 @@
             "docs": [
               "The cut routed to the Global Backstop Reserve (global second-loss capital). 0 when the backstop",
               "accounts aren't supplied / cut disabled / reserve at cap."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "to_bad_debt_paydown",
+            "docs": [
+              "The slice diverted to retire `bad_debt` (BOLD-sweep C16 auto-paydown). 0 when disabled or no",
+              "bad debt outstanding."
             ],
             "type": "u64"
           },
@@ -8556,6 +9256,59 @@
             "type": "u16"
           },
           {
+            "name": "borrow_fee_bps",
+            "docs": [
+              "Upfront borrowing fee (bps; BOLD-sweep C7) — a one-time charge added to the position's debt at",
+              "`borrow` (the primary redemption-evasion deterrent). Governable (`MarketParam::BorrowFee`)",
+              "within `[0, MAX_BORROW_FEE_BPS]`; **0 = disabled** (default). The fee is NOT minted to the",
+              "borrower: debt grows by `amount + fee`, only `amount` is minted, and `fee` is booked into",
+              "`unminted_interest` so `refresh_market` mints it to the buffer (funds first-loss capital like",
+              "accrued interest — supply identity preserved). Carved from `_reserved`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bad_debt_paydown_bps",
+            "docs": [
+              "Auto bad-debt paydown rate (bps of post-keeper interest; BOLD-sweep C16). When `bad_debt > 0`,",
+              "`refresh_market` diverts this fraction of the interest it would mint to the buffer to retire",
+              "`bad_debt` instead (automatic recapitalization-from-revenue; supply-preserving — the diverted",
+              "slice is not minted while `bad_debt` drops by the same amount). Governable",
+              "(`MarketParam::BadDebtPaydown`) within `[0, MAX_BAD_DEBT_PAYDOWN_BPS]`; **0 = disabled**",
+              "(default). Carved from `_reserved`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "redemption_base_rate",
+            "docs": [
+              "Dynamic redemption base-rate (RAY-scaled fraction; BOLD-sweep C9). The decaying volume-spike",
+              "component of the redemption fee: each `redeem` decays it toward 0 (6h half-life) then bumps it",
+              "by `(redeemed / market debt) / BETA`, and the effective fee is",
+              "`clamp(redemption_fee_bps + min(base_rate_bps, redemption_base_rate_max_bps), floor, MAX)`.",
+              "Only `redeem` reads/writes it (never `urgent_redeem`, which is 0-fee). `0` when quiet/disabled.",
+              "Carved from `_reserved`."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "redemption_base_rate_ts",
+            "docs": [
+              "Unix-ts of the last `redemption_base_rate` update (the decay anchor). Distinct from",
+              "`last_update_ts` (interest accrual), which moves on every touch. Carved from `_reserved`."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "redemption_base_rate_max_bps",
+            "docs": [
+              "Governable cap (bps) on the dynamic base-rate's ADD over the flat fee floor (C9);",
+              "**0 = the dynamic component is DISABLED** (flat-fee-only, pre-C9 behavior). Clamped",
+              "(`MarketParam::RedemptionBaseRateMax`) to `<= MAX_REDEMPTION_BASE_RATE_BPS`. Carved from `_reserved`."
+            ],
+            "type": "u16"
+          },
+          {
             "name": "protocol_collateral",
             "docs": [
               "Retained PROTOCOL-OWNED collateral (native) — the un-homed liquidation remainder (`coll_r`) that",
@@ -8597,7 +9350,7 @@
             "type": {
               "array": [
                 "u8",
-                40
+                10
               ]
             }
           }
@@ -8778,6 +9531,20 @@
             "type": "u16"
           },
           {
+            "name": "lst_stake_pool",
+            "docs": [
+              "C1 LST canonical-rate leg: the SPL Stake Pool `StakePool` account for this collateral, when",
+              "it is a liquid-staking token. `update_price` reads its `total_lamports / pool_token_supply`",
+              "(SOL per LST) and serves the collateral price at `MIN(market, sol_usd · rate)` so an upward-",
+              "manipulated market feed can't inflate borrowing power past the trustless stake-pool rate",
+              "(BOLD-08). `Pubkey::default()` (zero) = NOT an LST market: the leg is disabled and minting is",
+              "unaffected. When set, minting REQUIRES a fresh, valid stake-pool rate + SOL/USD feed. The",
+              "SOL/USD underlying feed is the shared `constants::PYTH_SOL_USD_FEED_ID`. INIT-ONLY in v1.",
+              "Carved from `_reserved` (the doc's anticipated \"LST redemption-rate\" refinement)."
+            ],
+            "type": "pubkey"
+          },
+          {
             "name": "bump",
             "type": "u8"
           },
@@ -8788,12 +9555,12 @@
               "account cannot grow without realloc post-launch, so carve-from-`_reserved` headroom is free",
               "now and impossible later. Carve new fields from the HEAD; old accounts' zeroed bytes must",
               "decode as the new field's `0 = disabled/none` sentinel. Holds feed-rebind and future",
-              "oracle refinements (e.g. a second Pyth feed for LST redemption-rate pricing)."
+              "oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62.)"
             ],
             "type": {
               "array": [
                 "u8",
-                62
+                30
               ]
             }
           }
@@ -8852,6 +9619,39 @@
           },
           {
             "name": "KeeperReward"
+          },
+          {
+            "name": "BorrowFee"
+          },
+          {
+            "name": "BadDebtPaydown"
+          },
+          {
+            "name": "RedemptionBaseRateMax"
+          },
+          {
+            "name": "OracleMaxConf"
+          },
+          {
+            "name": "OracleMaxDeviation"
+          },
+          {
+            "name": "OracleTwapDivergence"
+          },
+          {
+            "name": "OracleLiqDivergence"
+          },
+          {
+            "name": "OracleMaxAge"
+          },
+          {
+            "name": "OracleK"
+          },
+          {
+            "name": "OracleTwapStaleness"
+          },
+          {
+            "name": "Scr"
           }
         ]
       }
@@ -9783,6 +10583,106 @@
           {
             "name": "reason",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SupplyReconciled",
+      "docs": [
+        "A supply-reconciliation (proof-of-reserves) run (`reconcile_supply`). `residual == 0` ⇒ the summed",
+        "markets exactly back the live mint supply; non-zero ⇒ off-chain alarm (drift or a missing market)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market_count",
+            "type": "u32"
+          },
+          {
+            "name": "mint_supply",
+            "type": "u128"
+          },
+          {
+            "name": "backing",
+            "type": "u128"
+          },
+          {
+            "name": "residual",
+            "type": "i128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SupplyReconciliation",
+      "docs": [
+        "Global supply-reconciliation (proof-of-reserves) singleton. PDA `[b\"supply_recon\"]`.",
+        "",
+        "FUSD's strong global invariant `mint.supply == Σ_market (agg_recorded_debt − unminted_interest +",
+        "bad_debt)` is **sharded** across the per-market `Market` accounts — it deliberately is NOT a single",
+        "hot counter (that would serialize every `borrow` behind one write-lock, the failure that killed",
+        "Maker's `Vat` on Solana). The permissionless `reconcile_supply` crank re-derives the total from the",
+        "markets and compares it to the live mint supply, stamping the result here for on-chain",
+        "proof-of-reserves. This is an **auditability layer, not a solvency dependency**: per-vault hard",
+        "solvency is always enforced inline; a non-zero `last_residual` flags an accounting drift (or a",
+        "market omitted from the crank's input) for off-chain alarms, and never gates any user path."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "last_ts",
+            "docs": [
+              "Unix-ts of the last reconciliation run."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_market_count",
+            "docs": [
+              "How many `Market` accounts the last run summed (the off-chain monitor passes ALL live markets;",
+              "a count below the known market set is itself a signal the residual may be a missing market)."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "last_mint_supply",
+            "docs": [
+              "The live fUSD mint supply read at the last run."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "last_backing",
+            "docs": [
+              "The supply reconstructed from the summed markets: `Σ(agg + bad) − Σ unminted` (underflow-safe;",
+              "each market's `agg + bad ≥ unminted` since its circulating share is non-negative)."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "last_residual",
+            "docs": [
+              "`last_backing − last_mint_supply` (signed). `0` = perfectly reconciled. Positive ⇒ markets",
+              "account for MORE than the mint shows (a market double-counted, or an under-mint bug); negative",
+              "⇒ the mint shows MORE than the summed markets back (a market omitted, or an over-mint bug)."
+            ],
+            "type": "i128"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }

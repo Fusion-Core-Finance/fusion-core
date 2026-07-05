@@ -40,14 +40,23 @@ export function loadWallet(): anchor.Wallet {
   return new anchor.Wallet(Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(path, "utf8")))));
 }
 
-/** Anchor program + provider (IDL from target/idl/fusd_core.json). Pass a wallet to override the
+/** The program IDL: a local anchor build (target/idl) wins; a build-less checkout (e.g. the keeper
+ * server) falls back to the committed production copy in sdk/src/idl (kept current via
+ * `yarn --cwd sdk sync-idl`). Both are the full production IDL — no dev_set_price. */
+export function loadIdl(): anchor.Idl {
+  for (const p of [`${__dirname}/../target/idl/fusd_core.json`, `${__dirname}/../sdk/src/idl/fusd_core.json`]) {
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf8"));
+  }
+  throw new Error("no IDL found — run `anchor build` or restore sdk/src/idl/fusd_core.json");
+}
+
+/** Anchor program + provider (IDL via loadIdl). Pass a wallet to override the
  * default keypair file — e.g. a throwaway `new anchor.Wallet(Keypair.generate())` for read-only use. */
 export function makeProgram(wallet: anchor.Wallet = loadWallet()) {
   const url = process.env.ANCHOR_PROVIDER_URL || "http://127.0.0.1:8899";
   const provider = new anchor.AnchorProvider(new Connection(url, "confirmed"), wallet, { commitment: "confirmed" });
   anchor.setProvider(provider);
-  const idl = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
-  const program: any = new anchor.Program(idl as anchor.Idl, provider);
+  const program: any = new anchor.Program(loadIdl(), provider);
   return { program, provider, pid: program.programId as Pk, me: wallet.publicKey as Pk, url };
 }
 

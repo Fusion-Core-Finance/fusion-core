@@ -37,6 +37,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import * as os from "os";
+import { loadIdl } from "./common";
 
 const { PublicKey, Keypair, Connection } = anchor.web3;
 type Pk = anchor.web3.PublicKey;
@@ -205,8 +206,7 @@ async function main() {
   const wallet = loadWallet();
   const provider = new anchor.AnchorProvider(new Connection(url, "confirmed"), wallet, { commitment: "confirmed" });
   anchor.setProvider(provider);
-  const idl = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
-  const program: any = new anchor.Program(idl as anchor.Idl, provider);
+  const program: any = new anchor.Program(loadIdl(), provider);
   const pid: Pk = program.programId;
   const me = wallet.publicKey;
   const hermesUrl = cfg.hermesUrl || "https://hermes.pyth.network";

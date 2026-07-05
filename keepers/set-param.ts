@@ -30,7 +30,7 @@
  */
 import * as fs from "fs";
 import * as anchor from "@coral-xyz/anchor";
-import { BN, makeProgram, PublicKey, Pk } from "./common";
+import { BN, makeProgram, loadIdl, PublicKey, Pk } from "./common";
 import {
   flags, govPdas, timelockPda, gtimelockPda, marketPda, marketOraclePda, resolveVariant, clampWarning,
   MARKET_CLAMPS, GLOBAL_CLAMPS, isOracleParam, sendOrPrint, authorityOf, printUsage, runCli, log,
@@ -41,7 +41,7 @@ const SYS = anchor.web3.SystemProgram.programId;
 // Lazy + memoized: only queue/queue-global need it, and `help` must work on a build-less clone.
 let IDL: any;
 const idlVariants = (typeName: string): string[] => {
-  if (!IDL) IDL = JSON.parse(fs.readFileSync(`${__dirname}/../target/idl/fusd_core.json`, "utf8"));
+  if (!IDL) IDL = loadIdl(); // target/idl if built, else the committed sdk/src/idl production copy
   return (IDL.types ?? []).find((t: any) => t.name === typeName)?.type.variants.map((v: any) => v.name) ?? [];
 };
 const paramName = (decoded: any): string => Object.keys(decoded)[0]; // Anchor decodes an enum to { camelName: {} }
