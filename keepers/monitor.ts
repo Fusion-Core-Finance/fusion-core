@@ -34,6 +34,10 @@ import {
 
 const STALE_SLOTS = Number(MAX_PRICE_STALENESS_SLOTS); // 250
 const SUPPLY_EPSILON_USD = 0.01; // rounding tolerance for the supply identity
+// TCR on dust debt is meaningless: the live market carries 1 native unit ($0.000001) of interest
+// dust with zero collateral, so TCR reads 0 < SCR — 1-unit interest dust on an empty market must
+// not read as shutdown-eligible. TCR-vs-SCR/CCR alerts only judge debt at or above this floor.
+export const TCR_DUST_DEBT = 1_000_000n; // fUSD-native (6dp) = $1
 
 interface MonitorCfg {
   port?: number;
@@ -128,9 +132,10 @@ export function computeAlerts(m: Metrics): Alert[] {
   for (const mk of m.markets) {
     const s = mk.tag;
     if (!mk.exists) { push("warn", s, `market not readable: ${mk.error ?? "missing"}`); continue; }
+    const tcrJudgeable = mk.aggDebtUsd >= usd(TCR_DUST_DEBT); // see TCR_DUST_DEBT
     if (mk.shutdown) push("critical", s, `market SHUT DOWN (reason ${mk.shutdownReason})`);
     if (mk.badDebtUsd > 0) push("critical", s, `un-homed bad debt $${f(mk.badDebtUsd)}`);
-    if (mk.scrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.scrBps && !mk.shutdown)
+    if (tcrJudgeable && mk.scrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.scrBps && !mk.shutdown)
       push("critical", s, `TCR ${mk.tcrBps}bps below SCR ${mk.scrBps}bps — shutdown-eligible`);
     if (mk.mintFrozen) push("warn", s, "mint frozen (oracle degraded) — borrowing blocked");
     if (mk.slotsSincePrice > m.thresholds.staleSlots) push("warn", s, `price stale: ${mk.slotsSincePrice} slots since update (> ${m.thresholds.staleSlots})`);
@@ -140,7 +145,7 @@ export function computeAlerts(m: Metrics): Alert[] {
     if (mk.bufferTargetUsd !== null && mk.bufferUsd < mk.bufferTargetUsd) push("warn", s, `insurance buffer $${f(mk.bufferUsd)} below target $${f(mk.bufferTargetUsd)}`);
     if (mk.debtCeilingUsd === 0 && mk.aggDebtUsd > 0) push("warn", s, "debt ceiling 0 — new debt paused with debt outstanding");
     else if (mk.ceilingUsedPct >= m.thresholds.ceilingWarnPct) push("warn", s, `debt ceiling ${mk.ceilingUsedPct.toFixed(1)}% used`);
-    if (mk.ccrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.ccrBps && (mk.scrBps === 0 || mk.tcrBps >= mk.scrBps))
+    if (tcrJudgeable && mk.ccrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.ccrBps && (mk.scrBps === 0 || mk.tcrBps >= mk.scrBps))
       push("warn", s, `TCR ${mk.tcrBps}bps below CCR band ${mk.ccrBps}bps — borrow/withdraw restricted`);
     if (mk.rlUsedPct >= 90) push("info", s, `net-outflow rate limiter ${mk.rlUsedPct.toFixed(0)}% utilized`);
   }
