@@ -25,7 +25,9 @@ run against a **surfpool mainnet-fork** so the oracle feed accounts (Pyth/Switch
 
 - `ci-checks.sh` — **the aggregate release gate**: runs every check below in the correct
   order (pure-crate tests → fusd-oracle clippy `-D warnings` → dev-oracle build → litesvm integration
-  tests → Kani `--gate` → dev_set_price isolation → stack-frame gate ×2). This is exactly what `.github/workflows/ci.yml`
+  tests → Kani `--gate` → stack-frame gate ×2 → dev_set_price/certora isolation, which runs LAST
+  because it rebuilds + verifies the production `.so`, so `target/deploy/` is deploy-safe after every
+  run). This is exactly what `.github/workflows/ci.yml`
   runs; run it locally before any deploy / PR. `FAST=1` is reserved for future use.
 - `verifiable-build.sh` — deterministic build via `solana-verify` (fusion-docs.md).
 - `check-no-dev-oracle.sh` — release gate: a production build/IDL must not expose `dev_set_price`.

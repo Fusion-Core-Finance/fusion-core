@@ -7,8 +7,9 @@
 #   scripts/ci-checks.sh            # run every gate
 #   FAST=1 scripts/ci-checks.sh     # skip the slow re-builds in the stack gate's dev-oracle pass
 #
-# Order matters: the integration tests need the `dev-oracle` .so, while the production gates rebuild
-# WITHOUT it — so the dev-oracle build + integration tests run FIRST, then the production gates last.
+# Order matters twice over: the integration tests need the `dev-oracle` .so, so that build runs
+# FIRST — and the isolation gates run LAST because they rebuild + verify the PRODUCTION artifact,
+# guaranteeing target/deploy/ never ends this script holding a dev-oracle .so a deploy could ship.
 # NOTE: this does NOT run the full multi-hour Kani solver pass (that is `scripts/kani-audit.sh`, wired
 # as a separate manual/scheduled CI job); here we run only its fast tag+artifact `--gate`.
 set -euo pipefail
@@ -35,13 +36,17 @@ cargo test -p fusd-integration-tests
 step "5/7  Kani strength + artifact gate (fast; no solver run)"
 scripts/kani-audit.sh --gate
 
-step "6/7  isolation gates (production build must not expose dev_set_price or the cvlr/certora deps)"
-scripts/check-no-dev-oracle.sh
-scripts/check-no-certora.sh
-
-step "7/7  SBF stack-frame gate (production + dev-oracle configurations)"
+step "6/7  SBF stack-frame gate (production + dev-oracle configurations)"
 scripts/check-stack-offsets.sh
 scripts/check-stack-offsets.sh -- --features dev-oracle
+
+# The isolation gates run LAST on purpose: check-no-dev-oracle.sh rebuilds the PRODUCTION .so/IDL
+# and then scans them, so ci-checks always leaves a verified production artifact in target/ — a
+# deploy straight after this script ships the real program, never the dev-oracle .so a feature
+# build above left behind. Keep any step that runs `anchor build -- --features …` ABOVE this one.
+step "7/7  isolation gates (production build must not expose dev_set_price or the cvlr/certora deps)"
+scripts/check-no-dev-oracle.sh
+scripts/check-no-certora.sh
 
 echo
 echo "================================================================"
