@@ -123,14 +123,18 @@ export function isLiquidatable(ink: bigint, presentDebt: bigint, debtSpot: bigin
   return presentDebt > maxDebt;
 }
 
-/** Ensure `owner`'s ATA for `mint` exists, creating it (payer = provider wallet) if missing. */
-export async function ensureAta(provider: anchor.AnchorProvider, mint: Pk, owner: Pk): Promise<Pk> {
+/** Ensure `owner`'s ATA for `mint` exists, creating it (payer = provider wallet) if missing.
+ * `preIxs` prepends e.g. compute-budget instructions to the creation tx (no-op when the ATA exists). */
+export async function ensureAta(
+  provider: anchor.AnchorProvider, mint: Pk, owner: Pk, preIxs: anchor.web3.TransactionInstruction[] = [],
+): Promise<Pk> {
   const ata = ataFor(mint, owner);
   if (!(await provider.connection.getAccountInfo(ata))) {
     let spl: any;
     try { spl = require("@solana/spl-token"); }
     catch { throw new Error("ATA creation needs @solana/spl-token (npm i @solana/spl-token)"); }
     const tx = new anchor.web3.Transaction().add(
+      ...preIxs,
       spl.createAssociatedTokenAccountInstruction(provider.wallet.publicKey, ata, owner, mint),
     );
     await provider.sendAndConfirm(tx);

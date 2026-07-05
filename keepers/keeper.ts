@@ -1,6 +1,11 @@
 /**
  * fUSD keeper — the minimum-viable permissionless crank loop that keeps a market usable.
  *
+ * SUPERSEDED for production cranking by oracle-crank.ts, which adds the mandatory Switchboard
+ * update leg and derives cadences from the on-chain MarketOracle. Do NOT run this alongside
+ * oracle-crank.ts: it double-cranks update_price, and its default 15s sample_twap bounces off the
+ * on-chain anti-flood minimum. keeper.ts remains the dev/fork harness.
+ *
  * One process, three cranks per market on independent intervals (Solana has no native cron):
  *   • sample_twap    — append a DEX (Orca/Raydium CLMM) observation to the per-market TWAP ring.
  *                      Borrow needs >= twap_min_samples spanning twap_window_secs, so this runs often.

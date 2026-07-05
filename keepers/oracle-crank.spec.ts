@@ -12,13 +12,14 @@ describe("oracle-crank helpers", () => {
   });
 
   it("intervalsFrom derives safe cadences from the on-chain oracle config", () => {
-    // window 300 / (3-1) = 150s on-chain floor -> 155s with slack; sb = 2/3 of max_age; price default 60.
+    // window 300 / (3-1) = 150s on-chain floor -> 155s with slack; sb = 2/3 of max_age; price default 60;
+    // refresh_market default 300 (interest folding — no on-chain derivation, config-only).
     const i = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3 }, { markets: [] });
-    assert.deepEqual(i, { sample: 155, sb: 200, price: 60 });
+    assert.deepEqual(i, { sample: 155, sb: 200, price: 60, refresh: 300 });
     // explicit config wins.
     const o = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3 },
-      { markets: [], sampleIntervalSecs: 42, sbIntervalSecs: 99, priceIntervalSecs: 7 });
-    assert.deepEqual(o, { sample: 42, sb: 99, price: 7 });
+      { markets: [], sampleIntervalSecs: 42, sbIntervalSecs: 99, priceIntervalSecs: 7, refreshIntervalSecs: 600 });
+    assert.deepEqual(o, { sample: 42, sb: 99, price: 7, refresh: 600 });
     // degenerate min_samples never divides by zero; sb never below the 30s floor.
     const d = intervalsFrom({ maxAgeSecs: 30, twapWindowSecs: 300, twapMinSamples: 1 }, { markets: [] });
     assert.equal(d.sample, 305);
@@ -36,7 +37,10 @@ describe("oracle-crank helpers", () => {
     assert.throws(() => validateConfig({ markets: [] }), /non-empty/);
     assert.throws(() => validateConfig({ markets: ["not-a-key"] }), /not a valid pubkey/);
     assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], tickSecs: -5 }), /positive/);
+    assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], refreshIntervalSecs: 0 }), /positive/);
+    assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], refreshIntervalSecs: NaN }), /positive/);
     assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], pythShard: 70000 }), /u16/);
     validateConfig({ markets: ["So11111111111111111111111111111111111111112"], priceIntervalSecs: 60 }); // ok
+    validateConfig({ markets: ["So11111111111111111111111111111111111111112"], refreshIntervalSecs: 300 }); // ok
   });
 });

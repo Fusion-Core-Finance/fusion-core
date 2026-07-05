@@ -4,6 +4,9 @@
   "private": true,
   "license": "UNLICENSED",
   "description": "fUSD — Solana-native, futarchy-governed overcollateralized CDP stablecoin",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "lint": "prettier --check \"{tests,sdk,scripts,migrations}/**/*.ts\"",
     "lint:fix": "prettier --write \"{tests,sdk,scripts,migrations}/**/*.ts\"",
