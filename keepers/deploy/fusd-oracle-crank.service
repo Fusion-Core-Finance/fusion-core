@@ -1,0 +1,20 @@
+[Unit]
+Description=fUSD oracle crank (Switchboard + TWAP + update_price + refresh_market)
+After=network-online.target
+Wants=network-online.target
+# The crank down >1h on a priced market = permissionless, irreversible market shutdown.
+# Never stop restarting it.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@RUNUSER@
+WorkingDirectory=@REPO@
+EnvironmentFile=/etc/fusd/keeper.env
+# bash -l so nvm-managed node resolves; exec so signals reach the process.
+ExecStart=/bin/bash -lc 'exec npx ts-node keepers/oracle-crank.ts'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

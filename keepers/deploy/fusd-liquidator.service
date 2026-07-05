@@ -1,0 +1,17 @@
+[Unit]
+Description=fUSD liquidator (scan positions, liquidate under debt_spot MCR)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@RUNUSER@
+WorkingDirectory=@REPO@
+EnvironmentFile=/etc/fusd/keeper.env
+ExecStart=/bin/bash -lc 'exec npx ts-node keepers/liquidator.ts'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

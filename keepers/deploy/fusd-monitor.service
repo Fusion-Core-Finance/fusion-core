@@ -1,0 +1,18 @@
+[Unit]
+Description=fUSD monitor (read-only dashboard + metrics + healthz on 127.0.0.1:8787)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@RUNUSER@
+WorkingDirectory=@REPO@
+# Read-only: uses a throwaway wallet; only ANCHOR_PROVIDER_URL is read from the env file.
+EnvironmentFile=/etc/fusd/keeper.env
+ExecStart=/bin/bash -lc 'exec npx ts-node keepers/monitor.ts'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=fUSD alert webhook bridge (monitor criticals + liveness -> Discord)
+
+[Service]
+Type=oneshot
+User=@RUNUSER@
+EnvironmentFile=/etc/fusd/keeper.env
+ExecStart=@REPO@/keepers/alert-webhook.sh
