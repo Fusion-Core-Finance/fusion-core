@@ -85,15 +85,21 @@ describe("monitor alert rules", () => {
     // a target met (or none) ⇒ no buffer alert.
     assert.equal(fire(baseMetrics({}, { bufferUsd: 150, bufferTargetUsd: 100 }), "below target").length, 0);
   });
-  it("TCR alerts are dust-guarded: sub-$1 debt never reads as shutdown-eligible", () => {
+  it("SCR critical fires on dust too (chain has no dust floor); only the CCR warn is dust-guarded", () => {
     // the live-market shape: agg_recorded_debt = 1 native unit ($0.000001) of interest dust with
-    // zero collateral ⇒ TCR 0 < SCR — must NOT fire the critical (TCR_DUST_DEBT floor).
+    // zero collateral + a fresh price IS permissionlessly shutdown-eligible on-chain
+    // (cdp::tcr_below has no dust floor) — the critical MUST fire, tagged with the disarm hint.
     const dust = { aggDebtUsd: 0.000001, tvlUsd: 0, tcrBps: 0 };
-    assert.equal(fire(baseMetrics({}, { ...dust, scrBps: 11000 }), "below SCR").length, 0);
-    // ... and the CCR band warn is guarded the same way.
+    const scr = fire(baseMetrics({}, { ...dust, scrBps: 11000 }), "below SCR");
+    assert.equal(scr.length, 1);
+    assert.equal(scr[0].severity, "critical");
+    assert.ok(scr[0].message.includes("interest dust"), "dust case carries the disarm hint");
+    // the CCR band warn (reversible borrow restriction) IS dust-guarded — pure noise reduction.
     assert.equal(fire(baseMetrics({}, { ...dust, scrBps: 0, ccrBps: 13000 }), "CCR band").length, 0);
-    // at/above the $1 floor both still fire.
-    assert.equal(fire(baseMetrics({}, { aggDebtUsd: 1, tcrBps: 10000, scrBps: 11000 }), "below SCR")[0].severity, "critical");
+    // at/above the $1 floor: critical untagged, CCR warn fires.
+    const real = fire(baseMetrics({}, { aggDebtUsd: 1, tcrBps: 10000, scrBps: 11000 }), "below SCR");
+    assert.equal(real[0].severity, "critical");
+    assert.ok(!real[0].message.includes("interest dust"));
     assert.equal(fire(baseMetrics({}, { aggDebtUsd: 1, tcrBps: 12000, scrBps: 11000, ccrBps: 13000 }), "CCR band")[0].severity, "warn");
   });
   it("CCR band warns only when TCR is between SCR and CCR (no double-fire with SCR)", () => {

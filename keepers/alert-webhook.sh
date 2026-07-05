@@ -17,7 +17,10 @@ MONITOR_URL="${MONITOR_URL:-http://127.0.0.1:8787}"
 WEBHOOK_URL="${WEBHOOK_URL:?WEBHOOK_URL is required (Discord-compatible webhook)}"
 STATE_FILE="${STATE_FILE:-/tmp/fusd-alert-state}"
 
-post() { curl -sS -m 10 -H 'content-type: application/json' --data "$(jq -cn --arg m "$1" '{content: $m}')" "$WEBHOOK_URL" >/dev/null; }
+# -f: an HTTP-rejected post (429 rate-limit, 400 oversize, rotated 404) must FAIL so set -e aborts
+# BEFORE the state write and the next run retries — without it the alert is recorded as delivered
+# and permanently swallowed. Content truncated to Discord's 2000-char cap (no retry-loop on 400).
+post() { curl -sSf -m 10 -H 'content-type: application/json' --data "$(jq -cn --arg m "$1" '{content: $m[:2000]}')" "$WEBHOOK_URL" >/dev/null; }
 last="$(cat "$STATE_FILE" 2>/dev/null || true)"
 
 # 1) Liveness: an unreachable monitor means nobody is watching the crank.

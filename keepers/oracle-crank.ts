@@ -35,9 +35,10 @@ const ZERO = PublicKey.default;
 
 // Priority fee on EVERY send path (anchor .rpc()s and the SB v0 tx): congestion is exactly when the
 // crank must land (volatility ⇒ fee spikes), and a zero-fee tx is the first to be dropped.
-const PRIORITY_FEE_MICROLAMPORTS = Number(process.env.PRIORITY_FEE_MICROLAMPORTS ?? 20_000);
-if (!Number.isFinite(PRIORITY_FEE_MICROLAMPORTS) || PRIORITY_FEE_MICROLAMPORTS < 0)
-  throw new Error(`PRIORITY_FEE_MICROLAMPORTS must be a non-negative number (got ${process.env.PRIORITY_FEE_MICROLAMPORTS})`);
+const rawPriorityFee = process.env.PRIORITY_FEE_MICROLAMPORTS?.trim();
+const PRIORITY_FEE_MICROLAMPORTS = rawPriorityFee ? Number(rawPriorityFee) : 20_000;
+if (!Number.isInteger(PRIORITY_FEE_MICROLAMPORTS) || PRIORITY_FEE_MICROLAMPORTS < 0)
+  throw new Error(`PRIORITY_FEE_MICROLAMPORTS must be a non-negative integer (got ${process.env.PRIORITY_FEE_MICROLAMPORTS})`);
 // update_price parses Pyth + Switchboard + the TWAP ring (+ the LST leg), and the SB update carries
 // oracle signature verification — both can brush the 200k-CU default, so they get explicit headroom.
 // The other legs (sample_twap, refresh_market) fit the default comfortably.
@@ -140,7 +141,10 @@ async function crankSb(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCr
   const [ixs, responses, , luts] = await mc.pullFeed.fetchUpdateIx({ numSignatures: 3, payer: me });
   if (!ixs || ixs.length === 0)
     throw new Error(`no SB update ix (${JSON.stringify(responses?.map((r: any) => r?.error ?? "ok"))})`);
-  ixs.unshift(...priorityIxs(CU_LIMIT_SB_UPDATE));
+  // APPEND, never prepend: the SB update bundles a sig-verify precompile whose offset descriptors
+  // reference instruction index 0 — prepending shifts it and EVERY SB tx fails. Compute-budget ixs
+  // are position-independent (the runtime scans the whole message), so the tail is safe.
+  ixs.push(...priorityIxs(CU_LIMIT_SB_UPDATE));
   const conn = program.provider.connection;
   const { blockhash } = await conn.getLatestBlockhash();
   const msg = new anchor.web3.TransactionMessage({ payerKey: me, recentBlockhash: blockhash, instructions: ixs })

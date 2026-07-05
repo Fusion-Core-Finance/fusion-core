@@ -34,9 +34,12 @@ import {
 
 const STALE_SLOTS = Number(MAX_PRICE_STALENESS_SLOTS); // 250
 const SUPPLY_EPSILON_USD = 0.01; // rounding tolerance for the supply identity
-// TCR on dust debt is meaningless: the live market carries 1 native unit ($0.000001) of interest
-// dust with zero collateral, so TCR reads 0 < SCR — 1-unit interest dust on an empty market must
-// not read as shutdown-eligible. TCR-vs-SCR/CCR alerts only judge debt at or above this floor.
+// On-chain tcr_breach (shutdown.rs / cdp::tcr_below) has NO dust floor: 1 native unit of interest
+// dust with zero collateral and a fresh price IS permissionlessly, irreversibly shutdown-eligible.
+// So the SCR critical must fire on dust too (it mirrors the chain exactly) — the floor below only
+// softens the CCR-band WARN (reversible borrow-restriction) and tags the dust case in the message.
+// Disarm the dust state operationally: deposit any collateral (value>0 defeats tcr_below) before
+// cranking the price fresh, or repay the dust.
 export const TCR_DUST_DEBT = 1_000_000n; // fUSD-native (6dp) = $1
 
 interface MonitorCfg {
@@ -135,8 +138,10 @@ export function computeAlerts(m: Metrics): Alert[] {
     const tcrJudgeable = mk.aggDebtUsd >= usd(TCR_DUST_DEBT); // see TCR_DUST_DEBT
     if (mk.shutdown) push("critical", s, `market SHUT DOWN (reason ${mk.shutdownReason})`);
     if (mk.badDebtUsd > 0) push("critical", s, `un-homed bad debt $${f(mk.badDebtUsd)}`);
-    if (tcrJudgeable && mk.scrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.scrBps && !mk.shutdown)
-      push("critical", s, `TCR ${mk.tcrBps}bps below SCR ${mk.scrBps}bps — shutdown-eligible`);
+    // No dust gate here: on-chain tcr_breach has none, so this mirrors real shutdown eligibility.
+    if (mk.scrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.scrBps && !mk.shutdown)
+      push("critical", s, `TCR ${mk.tcrBps}bps below SCR ${mk.scrBps}bps — shutdown-eligible${
+        tcrJudgeable ? "" : " (interest dust — disarm: deposit any collateral or repay the dust)"}`);
     if (mk.mintFrozen) push("warn", s, "mint frozen (oracle degraded) — borrowing blocked");
     if (mk.slotsSincePrice > m.thresholds.staleSlots) push("warn", s, `price stale: ${mk.slotsSincePrice} slots since update (> ${m.thresholds.staleSlots})`);
     if (mk.liqDivergenceActive) push("warn", s, "liquidation paused — oracle divergence");
@@ -266,19 +271,28 @@ async function main() {
 
   let latest: Metrics | null = null;
   let lastError: string | null = null;
+  let lastGoodAt = Date.now(); // start of grace window; bumped on every successful collect
   const refresh = async () => {
-    try { latest = await collect(program, conn, pid, cfg); lastError = null; }
+    try { latest = await collect(program, conn, pid, cfg); lastError = null; lastGoodAt = Date.now(); }
     catch (e: any) { lastError = errLine(e); log(`✗ refresh: ${lastError}`); }
   };
   await refresh();
-  setInterval(refresh, (cfg.pollIntervalSecs ?? 15) * 1000);
+  const pollMs = (cfg.pollIntervalSecs ?? 15) * 1000;
+  setInterval(refresh, pollMs);
 
   const page = fs.readFileSync(`${__dirname}/monitor.html`, "utf8")
     .replace("__POLL_MS__", String((cfg.pollIntervalSecs ?? 15) * 1000));
   const server = http.createServer((req, res) => {
     const path = (req.url || "/").split("?")[0];
     if (path === "/" || path === "/index.html") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(page); return; }
-    if (path === "/healthz") { res.writeHead(200, { "content-type": "text/plain" }); res.end(latest ? "ok" : "starting"); return; }
+    if (path === "/healthz") {
+      // A blind-but-up monitor must page: 503 once no snapshot has landed for 3 poll intervals
+      // (persistent RPC failure), so the webhook's liveness branch fires instead of staying green.
+      const fresh = Date.now() - lastGoodAt <= 3 * pollMs;
+      res.writeHead(fresh ? 200 : 503, { "content-type": "text/plain" });
+      res.end(fresh ? (latest ? "ok" : "starting") : `stale: ${lastError ?? "no snapshot"}`);
+      return;
+    }
     if (path === "/metrics.json") {
       if (!latest) { res.writeHead(503, { "content-type": "application/json" }); res.end(JSON.stringify({ error: lastError || "starting" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
