@@ -4,8 +4,10 @@
  *   1. Switchboard: on-demand feeds only update when a consumer cranks them — nobody else cranks
  *      ours (the mainnet dry run found the SOL/USD feed 566s stale, mints frozen), so this keeper
  *      pulls a signed update every sbIntervalSecs (default 2/3 of the oracle's max_age_secs).
- *   2. DEX TWAP: sample_twap every sampleIntervalSecs (default the on-chain minimum,
- *      ceil(window/(min_samples−1)), + slack) so the window always holds enough fresh samples.
+ *   2. DEX TWAP: sample_twap every sampleIntervalSecs (default sits well inside
+ *      twap_max_staleness_secs while still spanning the window with ≥ min_samples) so
+ *      update_price's TWAP corridor stays live — a stale ring makes twap() return None, which
+ *      drops the aggregate out of Ok mode and freezes mints.
  *   3. update_price itself: recommits Market.spot every priceIntervalSecs (default 60s) so borrow's
  *      MAX_PRICE_STALENESS_SLOTS (250-slot ≈ 100s) gate stays open.
  * Plus the interest leg: refresh_market every refreshIntervalSecs (default 300s) folds the aggregate
@@ -16,8 +18,11 @@
  * pool, the LST canonical leg, and the Pyth account (derived: the push-oracle sponsored feed is the
  * PDA [shard_u16_le, feed_id]). Config is just the market list + optional interval overrides.
  *
- * COST: at defaults ≈ 2,800 txs/market/day ≈ 0.014 SOL base fees + ≈0.02 SOL priority fees at the
- * default 20,000 µlamports/CU (override with PRIORITY_FEE_MICROLAMPORTS).
+ * COST: base+priority fees ≈ 0.035 SOL/market/day at defaults — but the SB leg DOMINATES: the
+ * payer funds each signing oracle (~0.0009 SOL/sig/update measured 2026-07-06). At the defaults
+ * (1 signature, 90%-of-max_age cadence ≈ 320 updates/day) that is ≈ 0.3 SOL/day/market; the
+ * original 3-sig/200s config burned ≈ 1.2 SOL/day and drained the keeper wallet in a day.
+ * Knobs: sbNumSignatures, sbIntervalSecs (hard ceiling: the oracle max_age_secs, 300).
  *
  * USAGE
  *   ANCHOR_PROVIDER_URL=<rpc> ANCHOR_WALLET=~/.config/solana/id.json \
@@ -27,11 +32,14 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import { getDefaultQueue, PullFeed } from "@switchboard-xyz/on-demand";
-import { PublicKey, Pk, pda, seed, bundle, log, makeProgram, ensureAta, TOKEN_PROGRAM, errLine, priorityIxs, priorityFeeMicroLamports } from "./common";
+import { PublicKey, Pk, pda, seed, bundle, log, makeProgram, ensureAta, TOKEN_PROGRAM, errLine, priorityIxs, priorityFeeMicroLamports , redactUrl } from "./common";
 
 const PYTH_PUSH_ORACLE = new PublicKey("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
 const SOL_USD_FEED_ID = Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex");
 const ZERO = PublicKey.default;
+// The on-chain DexTwap observation-ring capacity (programs/fusd-core/src/constants.rs:382). The
+// sample_twap anti-flood floor (sample_twap.rs) is ceil(twap_window_secs / (TWAP_RING_CAPACITY-1)).
+const TWAP_RING_CAPACITY = 64;
 
 // Priority fee on EVERY send path (anchor .rpc()s and the SB v0 tx) via common's priorityIxs: congestion
 // is exactly when the crank must land (volatility ⇒ fee spikes), and a zero-fee tx is dropped first.
@@ -46,7 +54,8 @@ interface CrankCfg {
   tickSecs?: number; // dueness check cadence (default 15)
   priceIntervalSecs?: number; // update_price cadence (default 60)
   sbIntervalSecs?: number; // Switchboard update cadence (default derived from max_age_secs)
-  sampleIntervalSecs?: number; // sample_twap cadence (default derived from window/min_samples)
+  sbNumSignatures?: number; // oracle signatures per SB update (default 1 — EACH signing oracle is PAID per update)
+  sampleIntervalSecs?: number; // sample_twap cadence (default from twap_max_staleness_secs + window/min_samples)
   refreshIntervalSecs?: number; // refresh_market cadence (default 300)
   pythShard?: number; // sponsored-feed shard (default 0)
 }
@@ -60,6 +69,8 @@ export function validateConfig(cfg: CrankCfg): void {
     const v = cfg[k];
     if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v <= 0)) bail(`${k} must be a positive number (got ${v})`);
   }
+  if (cfg.sbNumSignatures !== undefined && (!Number.isInteger(cfg.sbNumSignatures) || cfg.sbNumSignatures < 1 || cfg.sbNumSignatures > 8))
+    bail(`sbNumSignatures must be an integer in 1..8 (got ${cfg.sbNumSignatures})`);
   if (cfg.pythShard !== undefined && (!Number.isInteger(cfg.pythShard) || cfg.pythShard < 0 || cfg.pythShard > 0xffff))
     bail(`pythShard must be a u16 (got ${cfg.pythShard})`);
 }
@@ -71,12 +82,23 @@ export function pythFeedAccount(shard: number, feedId: Buffer | Uint8Array): Pk 
   return PublicKey.findProgramAddressSync([s, Buffer.from(feedId)], PYTH_PUSH_ORACLE)[0];
 }
 /** Safe crank cadences from the on-chain oracle config; explicit cfg values win. */
-export function intervalsFrom(o: { maxAgeSecs: number; twapWindowSecs: number; twapMinSamples: number }, cfg: CrankCfg) {
-  // sample_twap's on-chain anti-flood minimum is ceil(window/(min_samples-1)); add slack so a
-  // slightly-early tick never bounces. SB must land well inside max_age or Ok mode drops.
-  const sampleFloor = Math.ceil(o.twapWindowSecs / Math.max(1, o.twapMinSamples - 1));
+export function intervalsFrom(
+  o: { maxAgeSecs: number; twapWindowSecs: number; twapMinSamples: number; twapMaxStalenessSecs: number },
+  cfg: CrankCfg,
+) {
+  // The BINDING sample constraint is twap()'s staleness gate (fusd-oracle::twap): once
+  // now-newest > twap_max_staleness_secs the corridor returns None, dropping the aggregate out of
+  // Ok mode and freezing mints (update_price.rs). So sample well INSIDE max_staleness (2/3), while
+  // also (a) keeping ≥ min_samples spanning the window (≤ ceil(window/(min_samples−1))) and
+  // (b) staying at/above sample_twap's on-chain anti-flood floor ceil(window/(TWAP_RING_CAPACITY−1))
+  // (sample_twap.rs) — sampling faster than that both bounces the tx (TwapSampleRejected) and shrinks
+  // a full ring below the window. SB likewise lands well inside max_age or Ok mode drops.
+  const antiFloodFloor = Math.ceil(o.twapWindowSecs / (TWAP_RING_CAPACITY - 1));
+  const staleBound = Math.floor((o.twapMaxStalenessSecs * 2) / 3);
+  const minSampleBound = Math.ceil(o.twapWindowSecs / Math.max(1, o.twapMinSamples - 1));
+  const sample = Math.max(antiFloodFloor, Math.min(staleBound, minSampleBound));
   return {
-    sample: cfg.sampleIntervalSecs ?? sampleFloor + 5,
+    sample: cfg.sampleIntervalSecs ?? sample,
     sb: cfg.sbIntervalSecs ?? Math.max(30, Math.floor((o.maxAgeSecs * 2) / 3)),
     price: cfg.priceIntervalSecs ?? 60,
     refresh: cfg.refreshIntervalSecs ?? 300,
@@ -112,7 +134,12 @@ async function loadMarket(program: any, queue: any, pid: Pk, coll: Pk, cfg: Cran
   // C1 LST leg: when the oracle carries a stake pool, update_price needs the SOL/USD sponsored feed too.
   const lst = !o.lstStakePool.equals(ZERO);
   const intervals = intervalsFrom(
-    { maxAgeSecs: Number(o.maxAgeSecs), twapWindowSecs: Number(o.twapWindowSecs), twapMinSamples: Number(o.twapMinSamples) },
+    {
+      maxAgeSecs: Number(o.maxAgeSecs),
+      twapWindowSecs: Number(o.twapWindowSecs),
+      twapMinSamples: Number(o.twapMinSamples),
+      twapMaxStalenessSecs: Number(o.twapMaxStalenessSecs),
+    },
     cfg,
   );
   log(`${tag}: pool ${clmmPool.toBase58().slice(0, 6)}…, sb ${sbFeed ? sbFeed.toBase58().slice(0, 6) + "…" : "none"}, pyth ${pythPriceUpdate.toBase58().slice(0, 6)}…${lst ? ", LST leg on" : ""} | intervals sample=${intervals.sample}s sb=${intervals.sb}s price=${intervals.price}s refresh=${intervals.refresh}s`);
@@ -127,9 +154,12 @@ async function loadMarket(program: any, queue: any, pid: Pk, coll: Pk, cfg: Cran
   };
 }
 
-async function crankSb(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCrank): Promise<void> {
+async function crankSb(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCrank, numSignatures: number): Promise<void> {
   // payer MUST be our wallet — omitted, the ix binds the SDK's dummy provider as a signer.
-  const [ixs, responses, , luts] = await mc.pullFeed.fetchUpdateIx({ numSignatures: 3, payer: me });
+  // numSignatures default 1: every signing oracle is PAID by the payer per update (the burn that
+  // drained the keeper wallet in a day at 3 sigs / 200s); the feed itself medians whatever arrives,
+  // and the on-chain leg only checks freshness. Raise via sbNumSignatures if stronger quorum wanted.
+  const [ixs, responses, , luts] = await mc.pullFeed.fetchUpdateIx({ numSignatures, payer: me });
   if (!ixs || ixs.length === 0)
     throw new Error(`no SB update ix (${JSON.stringify(responses?.map((r: any) => r?.error ?? "ok"))})`);
   // APPEND, never prepend: the SB update bundles a sig-verify precompile whose offset descriptors
@@ -147,11 +177,11 @@ async function crankSb(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCr
   log(`  ✓ ${mc.tag} switchboard update (${sig.slice(0, 16)}…)`);
 }
 
-async function tick(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCrank): Promise<void> {
+async function tick(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCrank, sbNumSignatures: number): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
 
   if (mc.pullFeed && due(now, mc.lastSb, mc.intervals.sb)) {
-    try { await crankSb(program, me, wallet, mc); mc.lastSb = now; }
+    try { await crankSb(program, me, wallet, mc, sbNumSignatures); mc.lastSb = now; }
     catch (e: any) { log(`  ✗ ${mc.tag} sb: ${errLine(e)}`); } // retried next tick
   }
 
@@ -212,7 +242,7 @@ async function main() {
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();
   const wallet = (program.provider as anchor.AnchorProvider).wallet as anchor.Wallet;
-  log(`oracle-crank up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}, priority ${priorityFeeMicroLamports()}µlam/CU`);
+  log(`oracle-crank up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${redactUrl(url)}, priority ${priorityFeeMicroLamports()}µlam/CU`);
 
   // The refresh leg's keeper_reward_bps cut lands in the cranker's fUSD ATA — create it once up front.
   const crankerFusdAta = await ensureAta(provider, pda([seed("fusd_mint")], pid), me, priorityIxs());
@@ -234,7 +264,8 @@ async function main() {
   if (markets.length === 0) throw new Error("no markets loaded — check config + oracle setup (see errors above)");
 
   const tickSecs = cfg.tickSecs ?? 15;
-  const run = async () => { for (const mc of markets) { try { await tick(program, me, wallet, mc); } catch (e: any) { log(`✗ ${mc.tag}: ${errLine(e)}`); } } };
+  const sbNumSignatures = cfg.sbNumSignatures ?? 1;
+  const run = async () => { for (const mc of markets) { try { await tick(program, me, wallet, mc, sbNumSignatures); } catch (e: any) { log(`✗ ${mc.tag}: ${errLine(e)}`); } } };
   await run();
   setInterval(run, tickSecs * 1000);
 }

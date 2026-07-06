@@ -22,7 +22,7 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, TOKEN_PROGRAM, MAX_PRICE_STALENESS_SLOTS, log, makeProgram, bundle, scanPositions,
-  currentDebt, isLiquidatable, ensureAta, errLine, priorityIxs,
+  currentDebt, isLiquidatable, ensureAta, errLine, priorityIxs, redactUrl,
 } from "./common";
 
 // A liquidation must land during a collateral crash — precisely when Solana's fee market spikes — so it
@@ -108,7 +108,7 @@ async function main() {
   const cfg: LiqCfg = cfgPath ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : DEFAULT_CFG;
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();
-  log(`liquidator up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}`);
+  log(`liquidator up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${redactUrl(url)}`);
   const watch = cfg.watchPositions?.map((s) => new PublicKey(s));
   log(`markets: ${cfg.markets.join(", ")}${watch ? ` (watching ${watch.length} explicit position(s))` : " (getProgramAccounts scan)"}`);
   for (const mint of cfg.markets) {

@@ -12,10 +12,10 @@ describe("oracle-crank helpers", () => {
   });
 
   it("intervalsFrom derives safe cadences from the on-chain oracle config", () => {
-    // window 300 / (3-1) = 150s on-chain floor -> 155s with slack; sb = 2/3 of max_age; price default 60;
-    // refresh_market default 300 (interest folding — no on-chain derivation, config-only).
+    // window 300 / (3-1) = 150s on-chain floor -> 155s with slack; sb = 90% of max_age − 10
+    // (fee-driven: each SB update PAYS the signing oracles); price default 60; refresh 300.
     const i = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3 }, { markets: [] });
-    assert.deepEqual(i, { sample: 155, sb: 200, price: 60, refresh: 300 });
+    assert.deepEqual(i, { sample: 155, sb: 260, price: 60, refresh: 300 });
     // explicit config wins.
     const o = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3 },
       { markets: [], sampleIntervalSecs: 42, sbIntervalSecs: 99, priceIntervalSecs: 7, refreshIntervalSecs: 600 });
@@ -42,5 +42,8 @@ describe("oracle-crank helpers", () => {
     assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], pythShard: 70000 }), /u16/);
     validateConfig({ markets: ["So11111111111111111111111111111111111111112"], priceIntervalSecs: 60 }); // ok
     validateConfig({ markets: ["So11111111111111111111111111111111111111112"], refreshIntervalSecs: 300 }); // ok
+    assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], sbNumSignatures: 0 }), /1\.\.8/);
+    assert.throws(() => validateConfig({ markets: ["So11111111111111111111111111111111111111112"], sbNumSignatures: 2.5 }), /1\.\.8/);
+    validateConfig({ markets: ["So11111111111111111111111111111111111111112"], sbNumSignatures: 3 }); // ok
   });
 });

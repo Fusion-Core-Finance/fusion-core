@@ -29,10 +29,15 @@ import * as fs from "fs";
 import * as http from "http";
 import {
   PublicKey, Pk, Keypair, pda, seed, bundle, makeProgram, bi,
-  RAY, BPS, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, log, errLine,
+  RAY, BPS, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, SHUTDOWN_ORACLE_STALENESS_SLOTS, log, errLine, redactUrl,
 } from "./common";
 
 const STALE_SLOTS = Number(MAX_PRICE_STALENESS_SLOTS); // 250
+// Past HALF the shutdown fuse the stale-price warn ESCALATES to critical (pages the webhook):
+// at SHUTDOWN_ORACLE_STALENESS_SLOTS (~1h) anyone can trip the irreversible market shutdown —
+// a drained keeper wallet burned 46 of those 60 minutes as a mere warn on 2026-07-06.
+const FUSE_SLOTS = Number(SHUTDOWN_ORACLE_STALENESS_SLOTS); // 9000
+const FUSE_ESCALATE_SLOTS = FUSE_SLOTS / 2;
 const SUPPLY_EPSILON_USD = 0.01; // rounding tolerance for the supply identity
 // On-chain tcr_breach (shutdown.rs / cdp::tcr_below) has NO dust floor: 1 native unit of interest
 // dust with zero collateral and a fresh price IS permissionlessly, irreversibly shutdown-eligible.
@@ -49,6 +54,8 @@ interface MonitorCfg {
   markets: string[]; // collateral mints
   bufferTargetBps?: number; // optional: per-market buffer target = bps of that market's agg_recorded_debt
   debtCeilingWarnPct?: number; // default 90
+  /** Ops wallets to balance-watch (e.g. the crank fee payer): CRITICAL below minSol. */
+  watchWallets?: { label: string; pubkey: string; minSol: number }[];
 }
 const DEFAULT_CFG: MonitorCfg = {
   port: 8787, host: "127.0.0.1", pollIntervalSecs: 15,
@@ -66,6 +73,11 @@ export function validateConfig(cfg: MonitorCfg): void {
   if (cfg.debtCeilingWarnPct !== undefined && (typeof cfg.debtCeilingWarnPct !== "number" || cfg.debtCeilingWarnPct <= 0 || cfg.debtCeilingWarnPct > 100)) bail("debtCeilingWarnPct must be in (0, 100]");
   if (!Array.isArray(cfg.markets) || cfg.markets.length === 0) bail("markets must be a non-empty array");
   cfg.markets.forEach((m, i) => { try { new PublicKey(m); } catch { bail(`markets[${i}] is not a valid pubkey: ${m}`); } });
+  (cfg.watchWallets ?? []).forEach((w, i) => {
+    if (!w.label) bail(`watchWallets[${i}].label required`);
+    try { new PublicKey(w.pubkey); } catch { bail(`watchWallets[${i}].pubkey invalid: ${w.pubkey}`); }
+    if (typeof w.minSol !== "number" || !(w.minSol >= 0)) bail(`watchWallets[${i}].minSol must be >= 0`);
+  });
 }
 
 // ── pure helpers (unit-tested in monitor.spec.ts) ──────────────────────────────────────────────
@@ -111,6 +123,7 @@ export interface Metrics {
     backstop: { balanceUsd: number; cutBps: number; reserveCapUsd: number; contributedUsd: number; absorbedUsd: number; withdrawnUsd: number; solvencyOk: boolean } | null;
   };
   markets: MarketMetrics[];
+  wallets: { label: string; pubkey: string; sol: number; minSol: number }[];
   thresholds: { staleSlots: number; ceilingWarnPct: number };
   alerts: Alert[];
 }
@@ -143,7 +156,9 @@ export function computeAlerts(m: Metrics): Alert[] {
       push("critical", s, `TCR ${mk.tcrBps}bps below SCR ${mk.scrBps}bps — shutdown-eligible${
         tcrJudgeable ? "" : " (interest dust — disarm: deposit any collateral or repay the dust)"}`);
     if (mk.mintFrozen) push("warn", s, "mint frozen (oracle degraded) — borrowing blocked");
-    if (mk.slotsSincePrice > m.thresholds.staleSlots) push("warn", s, `price stale: ${mk.slotsSincePrice} slots since update (> ${m.thresholds.staleSlots})`);
+    if (mk.slotsSincePrice > FUSE_ESCALATE_SLOTS && !mk.shutdown)
+      push("critical", s, `price stale ${mk.slotsSincePrice} slots — SHUTDOWN FUSE ${Math.round((mk.slotsSincePrice / FUSE_SLOTS) * 100)}% (permissionless irreversible shutdown at ${FUSE_SLOTS}); fix the crank NOW`);
+    else if (mk.slotsSincePrice > m.thresholds.staleSlots) push("warn", s, `price stale: ${mk.slotsSincePrice} slots since update (> ${m.thresholds.staleSlots})`);
     if (mk.liqDivergenceActive) push("warn", s, "liquidation paused — oracle divergence");
     if (mk.liqGraceActive) push("warn", s, "liquidation grace window active (post-staleness resume)");
     if (mk.guardianPauseActive) push("warn", s, "guardian pause active — new borrowing blocked");
@@ -153,6 +168,10 @@ export function computeAlerts(m: Metrics): Alert[] {
     if (tcrJudgeable && mk.ccrBps > 0 && mk.tcrBps !== null && mk.tcrBps < mk.ccrBps && (mk.scrBps === 0 || mk.tcrBps >= mk.scrBps))
       push("warn", s, `TCR ${mk.tcrBps}bps below CCR band ${mk.ccrBps}bps — borrow/withdraw restricted`);
     if (mk.rlUsedPct >= 90) push("info", s, `net-outflow rate limiter ${mk.rlUsedPct.toFixed(0)}% utilized`);
+  }
+  for (const w of m.wallets) {
+    if (w.sol < w.minSol)
+      push("critical", "wallet", `${w.label} wallet ${w.pubkey.slice(0, 6)}… at ${w.sol.toFixed(4)} SOL (< ${w.minSol}) — cranks fail when it hits 0; top up`);
   }
   return a;
 }
@@ -225,7 +244,15 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
 
   // The reads within/across markets are independent — one parallel wave instead of ~6×N round trips
   // (also shrinks the supply-identity torn-snapshot window below).
-  const [backstop, marketReads] = await Promise.all([readBackstop(), Promise.all(cfg.markets.map(readMarket))]);
+  const readWallet = async (w: { label: string; pubkey: string; minSol: number }) => ({
+    label: w.label, pubkey: w.pubkey, minSol: w.minSol,
+    sol: (await conn.getBalance(new PublicKey(w.pubkey)).catch(() => 0)) / 1e9,
+  });
+  const [backstop, marketReads, wallets] = await Promise.all([
+    readBackstop(),
+    Promise.all(cfg.markets.map(readMarket)),
+    Promise.all((cfg.watchWallets ?? []).map(readWallet)),
+  ]);
   const markets = marketReads.map((r) => r.metric);
   const sumBacking = marketReads.reduce((acc, r) => acc + r.backing, 0n);
 
@@ -235,7 +262,8 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
   const fusdSupplyAfter = BigInt((await conn.getTokenSupply(pc.fusdMint)).value.amount);
 
   const m: Metrics = {
-    ts: Date.now(), slot, rpc: (program.provider.connection as any)._rpcEndpoint ?? "",
+    // origin only — provider urls carry the API key in the query string
+    ts: Date.now(), slot, rpc: redactUrl((program.provider.connection as any)._rpcEndpoint ?? ""),
     global: {
       fusdSupplyUsd: usd(fusdSupply), sumBackingUsd: usd(sumBacking), supplyDeltaUsd: usd(fusdSupply - sumBacking),
       supplySnapshotTorn: fusdSupplyAfter !== fusdSupply,
@@ -244,6 +272,7 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
       backstop,
     },
     markets,
+    wallets,
     thresholds: { staleSlots: STALE_SLOTS, ceilingWarnPct: cfg.debtCeilingWarnPct ?? 90 },
     alerts: [],
   };
@@ -261,13 +290,13 @@ function spotToUsd(spot: bigint, collDecimals: number): number {
 
 // ── HTTP server ──────────────────────────────────────────────────────────────────────────────
 async function main() {
-  const cfgPath = process.argv[2];
+  const cfgPath = process.argv[2] || process.env.MONITOR_CONFIG; // env: config without touching the systemd unit
   const cfg: MonitorCfg = cfgPath ? { ...DEFAULT_CFG, ...JSON.parse(fs.readFileSync(cfgPath, "utf8")) } : DEFAULT_CFG;
   validateConfig(cfg);
   // Read-only: a throwaway wallet satisfies Anchor's provider without needing a key file.
   const { program, provider, pid, url } = makeProgram(new anchor.Wallet(Keypair.generate()));
   const conn = provider.connection;
-  log(`monitor — program ${pid.toBase58()}, RPC ${url}, markets ${cfg.markets.map((s) => s.slice(0, 6)).join(", ")}`);
+  log(`monitor — program ${pid.toBase58()}, RPC ${redactUrl(url)}, markets ${cfg.markets.map((s) => s.slice(0, 6)).join(", ")}`);
 
   let latest: Metrics | null = null;
   let lastError: string | null = null;

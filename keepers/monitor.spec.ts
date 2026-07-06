@@ -23,7 +23,7 @@ function baseMetrics(globalOver: any = {}, marketOver: Partial<MarketMetrics> = 
   return {
     ts: Date.now(), slot: 1000, rpc: "x",
     global: { fusdSupplyUsd: 1000, sumBackingUsd: 1000, supplyDeltaUsd: 0, supplySnapshotTorn: false, govAuthority: "g", guardian: "u", pendingGovAuthority: null, backstop: null, ...globalOver },
-    markets: [baseMarket(marketOver)], thresholds: { staleSlots: 250, ceilingWarnPct: 90 }, alerts: [],
+    markets: [baseMarket(marketOver)], wallets: [], thresholds: { staleSlots: 250, ceilingWarnPct: 90 }, alerts: [],
   };
 }
 const fire = (m: Metrics, sub: string) => computeAlerts(m).filter((a) => a.message.includes(sub));
@@ -101,6 +101,27 @@ describe("monitor alert rules", () => {
     assert.equal(real[0].severity, "critical");
     assert.ok(!real[0].message.includes("interest dust"));
     assert.equal(fire(baseMetrics({}, { aggDebtUsd: 1, tcrBps: 12000, scrBps: 11000, ccrBps: 13000 }), "CCR band")[0].severity, "warn");
+  });
+  it("stale price escalates to CRITICAL past half the shutdown fuse", () => {
+    // 250 < slots <= 4500: warn only. Past 4500 (half of SHUTDOWN_ORACLE_STALENESS_SLOTS=9000):
+    // critical naming the fuse — the drained-keeper incident burned 46 of 60 minutes as a warn.
+    const warn = computeAlerts(baseMetrics({}, { slotsSincePrice: 3000 }));
+    assert.equal(warn.filter((x) => x.message.includes("price stale") && x.severity === "warn").length, 1);
+    assert.equal(warn.filter((x) => x.message.includes("SHUTDOWN FUSE")).length, 0);
+    const crit = computeAlerts(baseMetrics({}, { slotsSincePrice: 6926 }));
+    const fuse = crit.filter((x) => x.message.includes("SHUTDOWN FUSE"));
+    assert.equal(fuse.length, 1);
+    assert.equal(fuse[0].severity, "critical");
+    // a market already shut down doesn't double-page the fuse
+    assert.equal(computeAlerts(baseMetrics({}, { slotsSincePrice: 6926, shutdown: true })).filter((x) => x.message.includes("SHUTDOWN FUSE")).length, 0);
+  });
+  it("watched wallet below its floor fires a CRITICAL; at/above stays silent", () => {
+    const low = baseMetrics(); low.wallets = [{ label: "keeper", pubkey: "87fqjWjSHTzZWPNZE71YmengRqLDepLP1958ynsuSZ2D", sol: 0.0009, minSol: 0.15 }];
+    const a = computeAlerts(low).filter((x) => x.scope === "wallet");
+    assert.equal(a.length, 1);
+    assert.equal(a[0].severity, "critical");
+    const ok = baseMetrics(); ok.wallets = [{ label: "keeper", pubkey: "87fqjWjSHTzZWPNZE71YmengRqLDepLP1958ynsuSZ2D", sol: 0.5, minSol: 0.15 }];
+    assert.equal(computeAlerts(ok).filter((x) => x.scope === "wallet").length, 0);
   });
   it("CCR band warns only when TCR is between SCR and CCR (no double-fire with SCR)", () => {
     const a = computeAlerts(baseMetrics({}, { tcrBps: 12000, scrBps: 11000, ccrBps: 13000 }));

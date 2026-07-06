@@ -25,6 +25,8 @@ export const BPS = 10_000n;
 export const FUSD_DECIMALS = 6;
 export const SECONDS_PER_YEAR = 31_536_000n;
 export const MAX_PRICE_STALENESS_SLOTS = 250n;
+/** shutdown.rs: past this spot staleness (~1h) anyone can trip the IRREVERSIBLE market shutdown. */
+export const SHUTDOWN_ORACLE_STALENESS_SLOTS = 9000n;
 export const ZOMBIE_BUCKET = 256;
 export const MAX_REDEMPTION_CANDIDATES = 20;
 
@@ -151,8 +153,20 @@ export async function ensureAta(
   return ata;
 }
 
-/** First word of a SendTransactionError/AnchorError message, for compact one-line logging. */
-export const errLine = (e: any): string => (e?.message || String(e)).split("\n")[0];
+/** First line of a SendTransactionError/AnchorError message, for compact one-line logging —
+ * PLUS the first meaningful simulation log line: a bare "Simulation failed." hid an
+ * insufficient-fee-payer drain for hours (2026-07-06); the log line names the cause. */
+export const errLine = (e: any): string => {
+  const first = (e?.message || String(e)).split("\n")[0];
+  const logs: string[] = e?.logs ?? e?.simulationResponse?.logs ?? [];
+  const hint = Array.isArray(logs) ? logs.find((l) => /err|fail|insufficient|exceeded/i.test(l)) : undefined;
+  return hint && !first.includes(hint) ? `${first} — ${hint.slice(0, 140)}` : first;
+};
+
+/** RPC url safe for logs/metrics: origin only — provider urls carry API keys in the query. */
+export const redactUrl = (u: string): string => {
+  try { return new URL(u).origin; } catch { return "<invalid-url>"; }
+};
 
 // Priority fee (µlamports/CU) on every keeper send path: congestion — volatility ⇒ fee spikes — is
 // exactly when a tx must land, and a zero-fee tx is dropped first. Parsed once from

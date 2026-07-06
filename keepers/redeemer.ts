@@ -25,7 +25,7 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, BN, TOKEN_PROGRAM, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, ZOMBIE_BUCKET,
-  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine, priorityIxs,
+  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine, priorityIxs, redactUrl,
 } from "./common";
 
 // Redemption defends the peg floor during a depeg — a congested period — so it carries a priority fee,
@@ -114,7 +114,7 @@ async function main() {
   const cfg: RedeemerCfg = cfgPath ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : DEFAULT_CFG;
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();
-  log(`redeemer up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}`);
+  log(`redeemer up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${redactUrl(url)}`);
   const watch = cfg.watchPositions?.map((s) => new PublicKey(s));
   log(`markets: ${cfg.markets.map((m) => `${m.collateralMint.slice(0, 6)}@${m.redeemAmountFusd ?? 0}fUSD`).join(", ")}${watch ? ` (watching ${watch.length} explicit position(s))` : " (getProgramAccounts scan)"}`);
   for (const mc of cfg.markets) {
