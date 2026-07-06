@@ -98,6 +98,16 @@ describe("SDK health math (mirrors cdp.rs / interest.rs vectors)", () => {
     expect(sdk.maxBorrow(2n, 300n, SPOT, 12000n)).to.equal(0n); // over the cap, no underflow
   });
 
+  it("maxBorrow nets out the C7 upfront borrow fee (post-fee debt must stay <= maxDebt)", () => {
+    expect(sdk.maxBorrow(2n, 100n, SPOT, 12000n, 0n)).to.equal(150n); // fee 0 == the fee-free answer
+    // headroom 150, fee 1% ⇒ floor(150*10000/10100) = 148: borrowing 148 costs ceil(148*0.01)=2 ⇒
+    // post-fee 150 == headroom (borrowing 149 would cost 2 ⇒ 151 > 150 and revert on-chain).
+    expect(sdk.maxBorrow(2n, 100n, SPOT, 12000n, 100n)).to.equal(148n);
+    // At MAX_BORROW_FEE_BPS (500 = 5%): floor(150*10000/10500) = 142.
+    expect(sdk.maxBorrow(2n, 100n, SPOT, 12000n, 500n)).to.equal(142n);
+    expect(sdk.maxBorrow(2n, 250n, SPOT, 12000n, 100n)).to.equal(0n); // no headroom, fee irrelevant
+  });
+
   it("accruedInterest is linear and floored (the per-position direction)", () => {
     const Y = sdk.SECONDS_PER_YEAR;
     expect(sdk.accruedInterest(1_000_000_000n, 500n, Y)).to.equal(50_000_000n); // 5% of 1e9 over 1y
@@ -146,5 +156,12 @@ describe("positionHealth: healthy (LOW spot) vs liquidatable (HIGH debt_spot)", 
   it("unpriced market (debtSpot == 0) is fail-closed un-liquidatable", () => {
     const h = sdk.positionHealth(pos(2n, 10_000n), market(SPOT, 0n), 0n);
     expect(h.liquidatable).to.equal(false);
+  });
+
+  it("maxBorrow in the health view nets out the market's C7 borrow fee", () => {
+    const noFee = sdk.positionHealth(pos(2n, 100n), market(SPOT, DEBT_SPOT), 0n);
+    expect(noFee.maxBorrow).to.equal(150n); // no borrowFeeBps ⇒ raw headroom
+    const withFee = sdk.positionHealth(pos(2n, 100n), { ...market(SPOT, DEBT_SPOT), borrowFeeBps: 100n }, 0n);
+    expect(withFee.maxBorrow).to.equal(148n); // 1% fee applied
   });
 });

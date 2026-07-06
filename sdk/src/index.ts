@@ -150,10 +150,17 @@ export const isHealthy = (ink: bigint, debt: bigint, spot: bigint, mcrBps: bigin
 /** Collateral ratio in bps (value/debt), or `null` when there is no debt. */
 export const collateralRatioBps = (ink: bigint, debt: bigint, spot: bigint) =>
   debt === 0n ? null : (collateralValue(ink, spot) * BPS) / debt;
-/** Remaining fUSD a position can still borrow at `mcrBps` (floored at 0). */
-export const maxBorrow = (ink: bigint, debt: bigint, spot: bigint, mcrBps: bigint) => {
+/**
+ * Remaining fUSD a position can still borrow at `mcrBps` (floored at 0). `borrowFeeBps` (C7,
+ * `Market.borrow_fee_bps`) must be supplied when the market charges an upfront borrow fee: on-chain
+ * `borrow.rs` gates the POST-fee debt `amount + ceil(amount*fee/10000)`, so the largest borrowable
+ * `amount` is `floor(headroom * 10000 / (10000 + fee_bps))`, strictly less than the raw headroom.
+ * Omitting it (default 0) reproduces the old fee-free answer and would overstate capacity by the fee.
+ */
+export const maxBorrow = (ink: bigint, debt: bigint, spot: bigint, mcrBps: bigint, borrowFeeBps: bigint = 0n) => {
   const m = maxDebt(collateralValue(ink, spot), mcrBps);
-  return m > debt ? m - debt : 0n;
+  const headroom = m > debt ? m - debt : 0n;
+  return borrowFeeBps === 0n ? headroom : (headroom * BPS) / (BPS + borrowFeeBps);
 };
 
 /** A position's raw on-chain fields a UI needs for the health view (all native/bps units). */
@@ -188,7 +195,7 @@ export interface HealthView {
  */
 export function positionHealth(
   pos: PositionInput,
-  market: { spot: bigint; debtSpot: bigint; mcrBps: bigint },
+  market: { spot: bigint; debtSpot: bigint; mcrBps: bigint; borrowFeeBps?: bigint },
   nowSecs: bigint
 ): HealthView {
   const debt = currentDebt(pos.recordedDebt, pos.userRateBps, pos.lastDebtUpdate, nowSecs);
@@ -199,6 +206,7 @@ export function positionHealth(
     healthy: isHealthy(pos.ink, debt, market.spot, market.mcrBps),
     // Liquidation eligibility prices at the HIGH debt_spot; debtSpot == 0 (unpriced) is fail-closed.
     liquidatable: market.debtSpot > 0n && !isHealthy(pos.ink, debt, market.debtSpot, market.mcrBps),
-    maxBorrow: maxBorrow(pos.ink, debt, market.spot, market.mcrBps),
+    // maxBorrow nets out the C7 upfront borrow fee when the market charges one (Market.borrow_fee_bps).
+    maxBorrow: maxBorrow(pos.ink, debt, market.spot, market.mcrBps, market.borrowFeeBps ?? 0n),
   };
 }
