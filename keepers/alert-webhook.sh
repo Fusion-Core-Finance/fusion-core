@@ -2,12 +2,16 @@
 # fUSD alert webhook — cron bridge from the monitor (keepers/monitor.ts) to a webhook.
 # Polls /healthz (liveness — the oracle-crank-down tripwire: the market permissionlessly shuts
 # down if the crank is stale >1h, so an unreachable monitor pages immediately) and /metrics.json
-# (critical alerts), POSTing changes as Discord-compatible {"content": "..."} JSON (for Slack,
-# change "content" to "text"). Dedup via a state file holding the last posted alert-set hash:
-# posts only on change, plus an all-clear when criticals go from nonempty to empty.
+# (critical alerts), POSTing changes. Dedup via a state file holding the last posted alert-set
+# hash: posts only on change, plus an all-clear when criticals go from nonempty to empty.
 #
-# Env: WEBHOOK_URL (required), MONITOR_URL (default http://127.0.0.1:8787),
-#      STATE_FILE (default /tmp/fusd-alert-state). Needs curl + jq.
+# Two webhook flavors, picked by the URL:
+#   Telegram: WEBHOOK_URL=https://api.telegram.org/bot<TOKEN>/sendMessage + TELEGRAM_CHAT_ID=<id>
+#   Discord-compatible (default): POSTs {"content": "..."} JSON (for Slack, change to "text")
+#
+# Env: WEBHOOK_URL (required), TELEGRAM_CHAT_ID (Telegram only),
+#      MONITOR_URL (default http://127.0.0.1:8787), STATE_FILE (default /tmp/fusd-alert-state).
+# Needs curl + jq.
 #
 # Crontab (every minute):
 #   * * * * * WEBHOOK_URL=https://discord.com/api/webhooks/... /path/to/fusion-core/keepers/alert-webhook.sh
@@ -19,8 +23,16 @@ STATE_FILE="${STATE_FILE:-/tmp/fusd-alert-state}"
 
 # -f: an HTTP-rejected post (429 rate-limit, 400 oversize, rotated 404) must FAIL so set -e aborts
 # BEFORE the state write and the next run retries — without it the alert is recorded as delivered
-# and permanently swallowed. Content truncated to Discord's 2000-char cap (no retry-loop on 400).
-post() { curl -sSf -m 10 -H 'content-type: application/json' --data "$(jq -cn --arg m "$1" '{content: $m[:2000]}')" "$WEBHOOK_URL" >/dev/null; }
+# and permanently swallowed. Content truncated to each platform's cap (no retry-loop on 400).
+post() {
+  local msg="$1"
+  if [[ "$WEBHOOK_URL" == *api.telegram.org* ]]; then
+    curl -sSf -m 10 --data-urlencode "chat_id=${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is required for a Telegram WEBHOOK_URL}" \
+      --data-urlencode "text=${msg:0:4000}" "$WEBHOOK_URL" >/dev/null
+  else
+    curl -sSf -m 10 -H 'content-type: application/json' --data "$(jq -cn --arg m "$msg" '{content: $m[:2000]}')" "$WEBHOOK_URL" >/dev/null
+  fi
+}
 last="$(cat "$STATE_FILE" 2>/dev/null || true)"
 
 # 1) Liveness: an unreachable monitor means nobody is watching the crank.
