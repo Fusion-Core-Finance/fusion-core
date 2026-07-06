@@ -153,6 +153,9 @@ The deployed program exposes the following (production IDL, `dev_set_price` excl
 | `guardian_derisk` / `set_guardian` | [Built] | The independent de-risk guardian: a per-market auto-expiring borrow pause + gov-gated guardian rotation/revocation. |
 | `shutdown` / `urgent_redeem` | [Built] | Terminal per-market wind-down at SCR breach / oracle failure → unordered 0-fee urgent redemptions. |
 | `withdraw_surplus` / `sweep_protocol_collateral` / `settle_bad_debt` | [Built] | The value-recovery trio (recap): move protocol-owned redemption-fee surplus / un-homed collateral, and burn recovered fUSD against `bad_debt`. Gov-gated; never touches position-backing value. |
+| `init_debt_ceiling_line` / `set_debt_ceiling_line` / `bump_debt_ceiling` | [Built] | The opt-in Maker DC-IAM debt-ceiling auto-line: gov creates/updates `line`/`gap`/`ttl`; permissionless `bump_debt_ceiling` raises `Market.debt_ceiling` toward `min(line, debt+gap)` once per `ttl` (§4.6). |
+| `init_supply_reconciliation` / `reconcile_supply` | [Built] | Proof-of-reserves: the permissionless crank re-derives `Σ market backing` vs the mint supply and stamps a residual (§8.4). Auditability only; gates nothing. |
+| `create_fusd_metadata` | [Built] | Gov-gated: create the fUSD mint's Metaplex metadata (name/symbol/uri) so wallets show "Fusion Dollar / FUSD" (§8.5). Display only; hand-rolled CPI. |
 
 ---
 
@@ -908,6 +911,7 @@ The strong global invariant `FUSD minted == Σ market debt` **cannot** be a sing
 | Mint address | PDA `[b"fusd_mint"]` | `FUSD_MINT_SEED` · [Built] |
 | Mint authority | PDA `[b"mint_authority"]` (`MINT_AUTHORITY_SEED`) — never a keypair | `init_protocol.rs` · [Built] |
 | Freeze authority | **None** (omitted at creation; irreversible) | `init_protocol.rs` · [Built] |
+| Metadata | Metaplex `CreateMetadataAccountV3` account (name "Fusion Dollar" / symbol "FUSD" / uri) — display only, never a fund lever | `create_fusd_metadata` (gov-gated; hand-rolled CPI, the mint-authority PDA signs — no `mpl` dep) · [Built] |
 
 #### Supply model
 
@@ -1063,7 +1067,7 @@ This section is the cross-check between the design and the bytecode: the exact i
 
 ### 11.1 Instruction reference
 
-The `#[program]` block in `fusd-core` exports **51 production instructions** plus one dev/test-only instruction (`dev_set_price`, compiled only under `#[cfg(feature = "dev-oracle")]` and **excluded from every production build and from the IDL**, enforced by a release gate). Init-time setup instructions and the admin `set_guardian` authorize via `require_keys_eq!` against `ProtocolConfig.gov_authority` (itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`). **Market-parameter changes flow through the bounded `GovernanceGate` + FUSD-owned timelock [Built]:** `queue_param_change` (gated on the gate's migratable inbound authority, clamped + relationally validated) → after the delay → permissionless `execute_param_change` (with the two-step `migrate_inbound_authority`/`accept_inbound_authority` and `cancel_param_change`). The same flow now also tunes the **RiskParamRegistry** set (the `MarketOracle` thresholds + `Market.scr_bps`, the eight added `MarketParam`s) via an optional oracle account on queue/execute. The independent **`guardian_derisk`** (gated on `config.guardian`) is [Built]. All events ride the Anchor `#[event_cpi]` self-CPI transport (immune to RPC log truncation).
+The `#[program]` block in `fusd-core` exports **52 production instructions** plus one dev/test-only instruction (`dev_set_price`, compiled only under `#[cfg(feature = "dev-oracle")]` and **excluded from every production build and from the IDL**, enforced by a release gate). Init-time setup instructions and the admin `set_guardian` authorize via `require_keys_eq!` against `ProtocolConfig.gov_authority` (itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`). **Market-parameter changes flow through the bounded `GovernanceGate` + FUSD-owned timelock [Built]:** `queue_param_change` (gated on the gate's migratable inbound authority, clamped + relationally validated) → after the delay → permissionless `execute_param_change` (with the two-step `migrate_inbound_authority`/`accept_inbound_authority` and `cancel_param_change`). The same flow now also tunes the **RiskParamRegistry** set (the `MarketOracle` thresholds + `Market.scr_bps`, the eight added `MarketParam`s) via an optional oracle account on queue/execute. The independent **`guardian_derisk`** (gated on `config.guardian`) is [Built]. All events ride the Anchor `#[event_cpi]` self-CPI transport (immune to RPC log truncation).
 
 | Instruction | Caller | Effect (one line) | Status |
 |---|---|---|---|
@@ -1095,6 +1099,10 @@ The `#[program]` block in `fusd-core` exports **51 production instructions** plu
 | `open_reactor_deposit` / `provide_to_reactor` / `withdraw_from_reactor` / `claim_reactor_gains` | RP depositor | Open / deposit / withdraw (capped at compounded) / claim realized seized-collateral gains. | [Built] |
 | `liquidate` | anyone | Liquidate an under-MCR position via the 5-tier waterfall (gas-comp skim, RP offset, redistribution, insurance buffer, global backstop, un-homed→shutdown); bonus collar; SOL bond to the caller. | [Built] |
 | `withdraw_surplus` / `sweep_protocol_collateral` / `settle_bad_debt` | gate (inbound auth) | The value-recovery trio: move protocol-owned redemption-fee surplus / un-homed collateral; burn recovered FUSD against `bad_debt`. | [Built] |
+| `init_debt_ceiling_line` / `set_debt_ceiling_line` | gov_authority | Create / update a market's opt-in Maker DC-IAM debt-ceiling auto-line (`line`/`gap`/`ttl`); default-absent (§4.6). | [Built] |
+| `bump_debt_ceiling` | anyone | Permissionlessly raise `Market.debt_ceiling` toward `min(line, debt + gap)` in `gap` steps, throttled to once per `ttl`, never above the gov-set `line`. | [Built] |
+| `init_supply_reconciliation` / `reconcile_supply` | governance / anyone | Create the `SupplyReconciliation` proof-of-reserves singleton / re-derive `Σ market backing` vs the live mint supply and stamp `{mint_supply, backing, residual}` + event (§8.4). Auditability only; gates nothing. | [Built] |
+| `create_fusd_metadata` | gov_authority | Create the fUSD mint's Metaplex metadata (name/symbol/uri) so wallets show "Fusion Dollar / FUSD" instead of "Unknown Token"; hand-rolled `CreateMetadataAccountV3` CPI (no `mpl` dep), the mint-authority PDA signs. Display only (§8.5). | [Built] |
 | `dev_set_price` | dev/test only | Set `Market.spot` directly. `#[cfg(feature="dev-oracle")]`; **never** in production builds or IDL. | [Built] (dev-gated) |
 
 ### 11.2 Account reference
