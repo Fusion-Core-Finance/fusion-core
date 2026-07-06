@@ -22,8 +22,13 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, TOKEN_PROGRAM, MAX_PRICE_STALENESS_SLOTS, log, makeProgram, bundle, scanPositions,
-  currentDebt, isLiquidatable, ensureAta, errLine,
+  currentDebt, isLiquidatable, ensureAta, errLine, priorityIxs,
 } from "./common";
+
+// A liquidation must land during a collateral crash — precisely when Solana's fee market spikes — so it
+// carries a priority fee + CU headroom for the waterfall (RP offset → redistribution → buffer). A
+// zero-fee liquidate is dropped exactly when it matters (finding: keeper-security).
+const CU_LIMIT_LIQUIDATE = 300_000;
 
 interface LiqCfg {
   scanIntervalSecs?: number;
@@ -89,7 +94,7 @@ async function scanAndLiquidate(program: any, provider: anchor.AnchorProvider, p
         reactorFusdVault: p.reactorFusdVault, reactorCollVault: p.reactorCollVault, fusdMint: p.fusdMint,
         liquidatorCollateralAta: liqAta, redemptionBitmap: p.redemptionBitmap, insuranceBuffer: p.buffer,
         bufferFusdVault: p.bufferFusdVault, backstop: null, backstopFusdVault: null, tokenProgram: TOKEN_PROGRAM,
-      }).rpc();
+      }).preInstructions(priorityIxs(CU_LIMIT_LIQUIDATE)).rpc();
       log(`  ✓ liquidated ${t.owner.toBase58().slice(0, 6)} (${sig.slice(0, 16)}…)`);
     } catch (e: any) {
       // PositionHealthy / BelowMinCollateralRatio = cured or already taken between scan and send: skip, don't retry.

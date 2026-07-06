@@ -27,28 +27,19 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import { getDefaultQueue, PullFeed } from "@switchboard-xyz/on-demand";
-import { PublicKey, Pk, pda, seed, bundle, log, makeProgram, ensureAta, TOKEN_PROGRAM, errLine } from "./common";
+import { PublicKey, Pk, pda, seed, bundle, log, makeProgram, ensureAta, TOKEN_PROGRAM, errLine, priorityIxs, priorityFeeMicroLamports } from "./common";
 
 const PYTH_PUSH_ORACLE = new PublicKey("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
 const SOL_USD_FEED_ID = Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex");
 const ZERO = PublicKey.default;
 
-// Priority fee on EVERY send path (anchor .rpc()s and the SB v0 tx): congestion is exactly when the
-// crank must land (volatility ⇒ fee spikes), and a zero-fee tx is the first to be dropped.
-const rawPriorityFee = process.env.PRIORITY_FEE_MICROLAMPORTS?.trim();
-const PRIORITY_FEE_MICROLAMPORTS = rawPriorityFee ? Number(rawPriorityFee) : 20_000;
-if (!Number.isInteger(PRIORITY_FEE_MICROLAMPORTS) || PRIORITY_FEE_MICROLAMPORTS < 0)
-  throw new Error(`PRIORITY_FEE_MICROLAMPORTS must be a non-negative integer (got ${process.env.PRIORITY_FEE_MICROLAMPORTS})`);
+// Priority fee on EVERY send path (anchor .rpc()s and the SB v0 tx) via common's priorityIxs: congestion
+// is exactly when the crank must land (volatility ⇒ fee spikes), and a zero-fee tx is dropped first.
 // update_price parses Pyth + Switchboard + the TWAP ring (+ the LST leg), and the SB update carries
 // oracle signature verification — both can brush the 200k-CU default, so they get explicit headroom.
 // The other legs (sample_twap, refresh_market) fit the default comfortably.
 const CU_LIMIT_UPDATE_PRICE = 400_000;
 const CU_LIMIT_SB_UPDATE = 400_000;
-function priorityIxs(cuLimit?: number): anchor.web3.TransactionInstruction[] {
-  const ixs = [anchor.web3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS })];
-  if (cuLimit !== undefined) ixs.unshift(anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
-  return ixs;
-}
 
 interface CrankCfg {
   markets: string[]; // collateral mints
@@ -221,7 +212,7 @@ async function main() {
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();
   const wallet = (program.provider as anchor.AnchorProvider).wallet as anchor.Wallet;
-  log(`oracle-crank up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}, priority ${PRIORITY_FEE_MICROLAMPORTS}µlam/CU`);
+  log(`oracle-crank up — program ${pid.toBase58()}, wallet ${me.toBase58()}, RPC ${url}, priority ${priorityFeeMicroLamports()}µlam/CU`);
 
   // The refresh leg's keeper_reward_bps cut lands in the cranker's fUSD ATA — create it once up front.
   const crankerFusdAta = await ensureAta(provider, pda([seed("fusd_mint")], pid), me, priorityIxs());
@@ -229,7 +220,18 @@ async function main() {
   const needSb = true; // queue is cheap to load and most markets have an SB feed
   const queue = needSb ? await getDefaultQueue(url) : null;
   const markets: MarketCrank[] = [];
-  for (const mint of cfg.markets) markets.push(await loadMarket(program, queue, pid, new PublicKey(mint), cfg, crankerFusdAta));
+  for (const mint of cfg.markets) {
+    try {
+      markets.push(await loadMarket(program, queue, pid, new PublicKey(mint), cfg, crankerFusdAta));
+    } catch (e: any) {
+      // Per-market isolation: a misconfigured/not-yet-onboarded market (no CLMM pool, missing Pyth
+      // sponsored feed) must NOT stop the healthy markets from being cranked — otherwise one bad entry
+      // crash-loops the whole process under Restart=always, and every priced market ages past
+      // MAX_PRICE_STALENESS then into permissionless irreversible shutdown (~1h). Skip + warn instead.
+      log(`✗ skip market ${mint.slice(0, 6)}: ${errLine(e)} — other markets keep cranking`);
+    }
+  }
+  if (markets.length === 0) throw new Error("no markets loaded — check config + oracle setup (see errors above)");
 
   const tickSecs = cfg.tickSecs ?? 15;
   const run = async () => { for (const mc of markets) { try { await tick(program, me, wallet, mc); } catch (e: any) { log(`✗ ${mc.tag}: ${errLine(e)}`); } } };

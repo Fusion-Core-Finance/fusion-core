@@ -153,3 +153,24 @@ export async function ensureAta(
 
 /** First word of a SendTransactionError/AnchorError message, for compact one-line logging. */
 export const errLine = (e: any): string => (e?.message || String(e)).split("\n")[0];
+
+// Priority fee (µlamports/CU) on every keeper send path: congestion — volatility ⇒ fee spikes — is
+// exactly when a tx must land, and a zero-fee tx is dropped first. Parsed once from
+// PRIORITY_FEE_MICROLAMPORTS (default 20,000) on first use; a garbage value fails loud.
+let _priorityFee: number | undefined;
+export function priorityFeeMicroLamports(): number {
+  if (_priorityFee === undefined) {
+    const raw = process.env.PRIORITY_FEE_MICROLAMPORTS?.trim();
+    _priorityFee = raw ? Number(raw) : 20_000;
+    if (!Number.isInteger(_priorityFee) || _priorityFee < 0)
+      throw new Error(`PRIORITY_FEE_MICROLAMPORTS must be a non-negative integer (got ${process.env.PRIORITY_FEE_MICROLAMPORTS})`);
+  }
+  return _priorityFee;
+}
+/** Compute-budget instructions to `.preInstructions([...])` on any anchor send: a priority-fee price
+ *  (always) plus an optional CU limit. Position-independent (the runtime scans the whole message). */
+export function priorityIxs(cuLimit?: number): anchor.web3.TransactionInstruction[] {
+  const ixs = [anchor.web3.ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports() })];
+  if (cuLimit !== undefined) ixs.unshift(anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
+  return ixs;
+}

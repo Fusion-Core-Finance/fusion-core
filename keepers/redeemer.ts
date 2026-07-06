@@ -25,8 +25,13 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, BN, TOKEN_PROGRAM, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, ZOMBIE_BUCKET,
-  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine,
+  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine, priorityIxs,
 } from "./common";
+
+// Redemption defends the peg floor during a depeg — a congested period — so it carries a priority fee,
+// plus CU headroom for a full MAX_REDEMPTION_CANDIDATES batch (each candidate is realized + reweighted
+// twice), well above the 200k default (finding: keeper-security).
+const CU_LIMIT_REDEEM = 400_000;
 
 interface RedeemMarketCfg { collateralMint: string; redeemAmountFusd?: number; }
 interface RedeemerCfg {
@@ -96,7 +101,8 @@ async function scanAndRedeem(program: any, provider: anchor.AnchorProvider, pid:
       redeemer: me, collateralMint: coll, market: p.market, redemptionBitmap: p.redemptionBitmap,
       fusdMint: p.fusdMint, marketCollVault: p.collateralVault, redeemerFusdAta: fusdAta,
       redeemerCollateralAta: collAta, tokenProgram: TOKEN_PROGRAM,
-    }).remainingAccounts(candidates.map((q) => ({ pubkey: q.pubkey, isWritable: true, isSigner: false }))).rpc();
+    }).remainingAccounts(candidates.map((q) => ({ pubkey: q.pubkey, isWritable: true, isSigner: false })))
+      .preInstructions(priorityIxs(CU_LIMIT_REDEEM)).rpc();
     log(`  ✓ redeemed (${sig.slice(0, 16)}…)`);
   } catch (e: any) {
     log(`  · redeem skipped: ${errLine(e)}`);

@@ -1,7 +1,7 @@
 // Unit checks for the liquidator/redeemer money math in common.ts (the pure BigInt ports of the
 // on-chain accrual + cdp::is_healthy). Run via `npm run test:sdk` (ts-mocha picks up keepers/**/*.spec.ts).
 import assert from "node:assert";
-import { currentDebt, isLiquidatable, SECONDS_PER_YEAR } from "./common";
+import { currentDebt, isLiquidatable, SECONDS_PER_YEAR, priorityIxs } from "./common";
 
 // spot/debt_spot are RAY-scaled fUSD-native per native collateral unit:
 //   spot = usd * 10^FUSD_DEC * RAY / 10^COLL_DEC = usd * 1e6 * 1e27 / 1e9 = usd * 1e24  (WSOL, 9-dec coll).
@@ -34,5 +34,19 @@ describe("liquidator/redeemer math (common.ts)", () => {
     assert.equal(isLiquidatable(1_000_000_000n, 0n, usdToDebtSpot(45), 15000), false, "zero debt");
     assert.equal(isLiquidatable(1_000_000_000n, fusd(40), 0n, 15000), false, "no price");
     assert.equal(isLiquidatable(1_000_000_000n, fusd(40), usdToDebtSpot(45), 0), false, "mcr 0 (disabled)");
+  });
+});
+
+describe("priorityIxs (compute-budget send helper, common.ts)", () => {
+  const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
+  it("emits a priority-fee price ix, and prepends a CU-limit ix when given", () => {
+    const price = priorityIxs();
+    assert.equal(price.length, 1);
+    assert.equal(price[0].programId.toBase58(), COMPUTE_BUDGET);
+    assert.equal(price[0].data[0], 3); // SetComputeUnitPrice discriminator
+    const withLimit = priorityIxs(400_000);
+    assert.equal(withLimit.length, 2);
+    assert.equal(withLimit[0].data[0], 2); // SetComputeUnitLimit prepended (finding: SB precompile safe)
+    assert.equal(withLimit[1].data[0], 3); // price second
   });
 });
