@@ -268,6 +268,19 @@ pub mod fusd_core {
         instructions::migrate_gov_authority::accept(ctx)
     }
 
+    /// Governance: create the fUSD mint's Metaplex token-metadata account (name/symbol/uri) so
+    /// wallets can display the token. Display-only admin lane — cannot mint/move/freeze funds;
+    /// the mint-authority PDA signs the CPI because Metaplex requires the mint authority. One-time
+    /// in effect (Metaplex rejects an existing metadata account); gov stays the update authority.
+    pub fn create_fusd_metadata(
+        ctx: Context<CreateFusdMetadata>,
+        name: String,
+        symbol: String,
+        uri: String,
+    ) -> Result<()> {
+        instructions::create_fusd_metadata::handler(ctx, name, symbol, uri)
+    }
+
     /// Open an (empty) CDP for the signer in a market (posts the SOL liquidation bond).
     pub fn open_position(ctx: Context<OpenPosition>, args: OpenPositionArgs) -> Result<()> {
         instructions::open_position::handler(ctx, args)

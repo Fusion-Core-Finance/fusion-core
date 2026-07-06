@@ -233,6 +233,18 @@ pub struct OracleFeedsRebound {
     pub raydium_pool: Pubkey,
 }
 
+/// Governance created the fUSD mint's Metaplex token-metadata account (`create_fusd_metadata`;
+/// display-only — carries the full name/symbol/uri so the one-time identity commit is auditable
+/// from the event stream alone).
+#[event]
+pub struct FusdMetadataCreated {
+    pub metadata: Pubkey,
+    pub update_authority: Pubkey,
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+}
+
 /// A `sample_twap` crank appended a DEX observation (the TWAP-liveness heartbeat).
 #[event]
 pub struct TwapSampled {

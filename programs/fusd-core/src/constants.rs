@@ -474,6 +474,17 @@ pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
 /// rejected. The canonical leg is a manipulation-resistant FLOOR, so mild staleness is conservative.
 pub const MAX_STAKE_POOL_EPOCH_LAG: u64 = 2;
 
+/// Metaplex Token Metadata program — the CPI target of `create_fusd_metadata` (the fUSD mint's
+/// on-chain name/symbol/uri, so wallets stop showing "Unknown Token"). Hardcoded like the other
+/// external program IDs above and pinned by an `address =` constraint (never caller-supplied).
+/// The CPI is deliberately HAND-ROLLED (a one-u8-discriminator borsh instruction, verified against
+/// the Metaplex source and pinned by a golden-vector test) instead of adding the
+/// `mpl-token-metadata` crate: one display-only instruction is not worth a new dependency surface
+/// in the verified build — the SBF lockfile pins are already fragile (fusion-docs.md, the
+/// dependency-pins section), and "audit the full build-dep tree" is the verifiable-build posture.
+pub const MPL_TOKEN_METADATA_PROGRAM_ID: Pubkey =
+    pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
 // Note: `update_price` defers ALL feed staleness to `fusd_oracle::aggregate` (which uses
 // `MarketOracle.max_age_secs`), so a stale feed yields a conservative price + a frozen mint —
 // never a hard revert.

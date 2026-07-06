@@ -1179,6 +1179,180 @@
       "args": []
     },
     {
+      "name": "create_fusd_metadata",
+      "docs": [
+        "Governance: create the fUSD mint's Metaplex token-metadata account (name/symbol/uri) so",
+        "wallets can display the token. Display-only admin lane — cannot mint/move/freeze funds;",
+        "the mint-authority PDA signs the CPI because Metaplex requires the mint authority. One-time",
+        "in effect (Metaplex rejects an existing metadata account); gov stays the update authority."
+      ],
+      "discriminator": [
+        66,
+        25,
+        126,
+        85,
+        161,
+        198,
+        8,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "MUST equal `config.gov_authority`. Doubles as the metadata account's rent payer (Metaplex's",
+            "`payer` slot, signer + writable) and as the metadata UPDATE authority, so the display",
+            "metadata stays fixable by governance (never by the program's mint-authority PDA, which",
+            "could not sign an update from off-chain)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fusd_mint",
+          "docs": [
+            "The fUSD mint the metadata describes. Read-only in the CPI (only the metadata PDA is created)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  117,
+                  115,
+                  100,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint_authority",
+          "docs": [
+            "sign metadata creation), never a token instruction."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "metadata",
+          "docs": [
+            "typed account here). Pinned in the handler to",
+            "`find_program_address([b\"metadata\", mpl_id, fusd_mint], mpl_id)` — Metaplex re-derives and",
+            "enforces the same PDA, but failing at our boundary keeps the error legible and never",
+            "forwards a caller-chosen account into an external program."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_metadata_program",
+          "docs": [
+            "a spoofed program would receive the mint-authority PDA's signature)."
+          ],
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "symbol",
+          "type": "string"
+        },
+        {
+          "name": "uri",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "deposit",
       "docs": [
         "Deposit collateral into the caller's position."
@@ -7088,6 +7262,19 @@
       ]
     },
     {
+      "name": "FusdMetadataCreated",
+      "discriminator": [
+        201,
+        26,
+        178,
+        126,
+        173,
+        104,
+        237,
+        21
+      ]
+    },
+    {
       "name": "GlobalParamChangeCanceled",
       "discriminator": [
         86,
@@ -7700,6 +7887,11 @@
       "code": 6046,
       "name": "InvalidStakePool",
       "msg": "C1 LST canonical-rate leg: the supplied SPL stake-pool account has the wrong owner or key (mis-built crank)"
+    },
+    {
+      "code": 6047,
+      "name": "InvalidMetadataAccount",
+      "msg": "Metadata account is not the canonical Metaplex metadata PDA for the fUSD mint (mis-built transaction)"
     }
   ],
   "types": [
@@ -8070,6 +8262,39 @@
                 512
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "FusdMetadataCreated",
+      "docs": [
+        "Governance created the fUSD mint's Metaplex token-metadata account (`create_fusd_metadata`;",
+        "display-only — carries the full name/symbol/uri so the one-time identity commit is auditable",
+        "from the event stream alone)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "metadata",
+            "type": "pubkey"
+          },
+          {
+            "name": "update_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "symbol",
+            "type": "string"
+          },
+          {
+            "name": "uri",
+            "type": "string"
           }
         ]
       }

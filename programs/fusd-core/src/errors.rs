@@ -104,4 +104,6 @@ pub enum FusdError {
     OracleDivergent,
     #[msg("C1 LST canonical-rate leg: the supplied SPL stake-pool account has the wrong owner or key (mis-built crank)")]
     InvalidStakePool,
+    #[msg("Metadata account is not the canonical Metaplex metadata PDA for the fUSD mint (mis-built transaction)")]
+    InvalidMetadataAccount,
 }
