@@ -98,6 +98,20 @@ export function tcrBps(totalCollateral: bigint, spot: bigint, aggDebt: bigint): 
   return Number((value * BPS) / aggDebt);
 }
 
+/**
+ * Global-backstop solvency. The on-chain invariant is `vault ≥ total_contributed − total_absorbed −
+ * total_withdrawn`, NOT equality: the vault is a plain SPL account, so anyone can donate fUSD straight
+ * in (bypassing `fund_backstop`, the only inflow that bumps `total_contributed`), and
+ * `withdraw_backstop_excess` reads the LIVE balance and lets gov recover any surplus above `reserve_cap`
+ * without reconciling donations into the counters — so the balance can only drift UP. Only a genuine
+ * shortfall (`bal < counters`, an unaccounted outflow) is the real break. See
+ * programs/fusd-core/src/instructions/global_backstop.rs (fund / withdraw_excess) +
+ * state/global_backstop.rs.
+ */
+export function backstopSolvent(contributed: bigint, absorbed: bigint, withdrawn: bigint, bal: bigint): boolean {
+  return bal >= contributed - absorbed - withdrawn;
+}
+
 export type Severity = "critical" | "warn" | "info";
 export interface Alert { severity: Severity; scope: string; message: string; }
 
@@ -143,7 +157,7 @@ export function computeAlerts(m: Metrics): Alert[] {
       push("critical", "global", `supply identity broken: backing $${f(m.global.sumBackingUsd)} exceeds circulating $${f(m.global.fusdSupplyUsd)} (Δ $${f(m.global.supplyDeltaUsd * -1)})`);
   }
   if (m.global.backstop && !m.global.backstop.solvencyOk)
-    push("critical", "global", "global backstop solvency mismatch (vault ≠ contributed − absorbed − withdrawn)");
+    push("critical", "global", "global backstop shortfall: vault < contributed − absorbed − withdrawn (unaccounted outflow)");
 
   for (const mk of m.markets) {
     const s = mk.tag;
@@ -193,7 +207,7 @@ async function collect(program: any, conn: any, pid: Pk, cfg: MonitorCfg): Promi
       return {
         balanceUsd: usd(bal), cutBps: Number(b.cutBps), reserveCapUsd: usd(bi(b.reserveCap)),
         contributedUsd: usd(contributed), absorbedUsd: usd(absorbed), withdrawnUsd: usd(withdrawn),
-        solvencyOk: contributed - absorbed - withdrawn === bal,
+        solvencyOk: backstopSolvent(contributed, absorbed, withdrawn, bal),
       };
     } catch { return null; } // backstop not initialized
   };

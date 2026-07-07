@@ -1,7 +1,7 @@
 // Unit checks for the monitor's pure logic — the metric math and the alert rules (the parts that
 // decide whether the dashboard screams). Run via `npm run test:sdk` (ts-mocha globs keepers/**/*.spec.ts).
 import assert from "node:assert";
-import { avgRateBps, pct, tcrBps, computeAlerts, Metrics, MarketMetrics } from "./monitor";
+import { avgRateBps, pct, tcrBps, backstopSolvent, computeAlerts, Metrics, MarketMetrics } from "./monitor";
 
 const RAY = 10n ** 27n;
 
@@ -43,6 +43,16 @@ describe("monitor metric math", () => {
     // 10 coll @ spot 100 ⇒ value 1000; debt 500 ⇒ 200% = 20000 bps.
     assert.equal(tcrBps(10n, 100n * RAY, 500n), 20000);
     assert.equal(tcrBps(10n, 100n * RAY, 0n), null);
+  });
+
+  it("backstopSolvent: bal ≥ contributed − absorbed − withdrawn (donations tolerated; only a shortfall breaks)", () => {
+    // exact match ⇒ solvent (the donation-free steady state).
+    assert.equal(backstopSolvent(10n, 3n, 2n, 5n), true); // 10−3−2 = 5 == bal
+    // a direct donation lifts bal above the counters — benign, still solvent; the old `===` false-alarmed here.
+    assert.equal(backstopSolvent(10n, 3n, 2n, 6n), true); // bal 6 > counters 5 (1 unit donated)
+    assert.equal(backstopSolvent(0n, 0n, 0n, 1n), true);  // 1-lamport donation into a fresh reserve
+    // bal below the counters is the genuine break (unaccounted outflow) — the real critical.
+    assert.equal(backstopSolvent(10n, 3n, 2n, 4n), false); // bal 4 < counters 5
   });
 });
 
@@ -128,8 +138,8 @@ describe("monitor alert rules", () => {
     assert.equal(a.filter((x) => x.message.includes("CCR band")).length, 1);
     assert.equal(a.filter((x) => x.message.includes("below SCR")).length, 0);
   });
-  it("backstop solvency mismatch ⇒ critical", () => {
+  it("backstop shortfall ⇒ critical", () => {
     const m = baseMetrics({ backstop: { balanceUsd: 5, cutBps: 0, reserveCapUsd: 0, contributedUsd: 10, absorbedUsd: 0, withdrawnUsd: 0, solvencyOk: false } });
-    assert.equal(fire(m, "backstop solvency")[0].severity, "critical");
+    assert.equal(fire(m, "backstop shortfall")[0].severity, "critical");
   });
 });
