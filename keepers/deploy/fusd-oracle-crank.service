@@ -15,6 +15,24 @@ EnvironmentFile=/etc/fusd/keeper.env
 ExecStart=/bin/bash -lc 'exec npx ts-node keepers/oracle-crank.ts'
 Restart=always
 RestartSec=5
+# Sandbox. ProtectHome=read-only (NOT tmpfs): nvm's node under ~/.nvm and the in-home repo
+# checkout must stay READABLE. InaccessiblePaths hides the gov/deployer default key
+# (~/.config/solana/id.json — loadWallet's fallback) from the keeper. Do NOT add
+# MemoryDenyWriteExecute (node's V8 JIT needs W^X) or a SystemCallFilter (breaks node net).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+InaccessiblePaths=-@HOME@/.config/solana
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

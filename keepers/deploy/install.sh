@@ -15,10 +15,15 @@ REPO="$(cd "$HERE/../.." && pwd)"
 RUNUSER="${SUDO_USER:-root}"
 if [ "${1:-}" = "--user" ]; then RUNUSER="${2:?--user needs a value}"; fi
 id "$RUNUSER" >/dev/null
+# The runuser's real home — the units' InaccessiblePaths must mask ITS ~/.config/solana. NOTE: the
+# systemd `%h` specifier resolves to /root in a SYSTEM unit regardless of User=, so we template the
+# absolute path in instead.
+RUNHOME="$(getent passwd "$RUNUSER" | cut -d: -f6)"
+[ -n "$RUNHOME" ] || { echo "could not resolve home dir for user $RUNUSER"; exit 1; }
 
 UNITS="fusd-oracle-crank.service fusd-liquidator.service fusd-monitor.service fusd-alert-webhook.service fusd-alert-webhook.timer"
 for u in $UNITS; do
-  sed -e "s|@REPO@|$REPO|g" -e "s|@RUNUSER@|$RUNUSER|g" "$HERE/$u" > "/etc/systemd/system/$u"
+  sed -e "s|@REPO@|$REPO|g" -e "s|@RUNUSER@|$RUNUSER|g" -e "s|@HOME@|$RUNHOME|g" "$HERE/$u" > "/etc/systemd/system/$u"
 done
 
 mkdir -p /etc/fusd /var/lib/fusd
