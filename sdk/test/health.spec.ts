@@ -165,4 +165,47 @@ describe("positionHealth: healthy (LOW spot) vs liquidatable (HIGH debt_spot)", 
     const withFee = sdk.positionHealth(pos(2n, 100n), { ...market(SPOT, DEBT_SPOT), borrowFeeBps: 100n }, 0n);
     expect(withFee.maxBorrow).to.equal(148n); // 1% fee applied
   });
+
+  it("pending tier-2 redistribution flips liquidatable false -> true (folds like accrual.rs::realize)", () => {
+    // pos(2, 260) sits in the safe band: 260 <= maxDebt@debt_spot 266, so with NO redistribution
+    // snapshot supplied the SDK reports the pre-redistribution estimate — not liquidatable.
+    const estimate = sdk.positionHealth(pos(2n, 260n), market(SPOT, DEBT_SPOT), 0n);
+    expect(estimate.liquidatable).to.equal(false);
+
+    // But a prior liquidation parked pending tier-2 debt this position hasn't realized yet. On-chain
+    // liquidate.rs calls accrual::realize FIRST, folding pending_debt = floor(stake·(l_art−snap)/1e18)
+    // into recorded_debt before the MCR check. With stake == REDIST_PRECISION and snapshot 0, pending
+    // equals the accumulator delta directly: pending_debt = 10 => realized debt 270 > maxDebt 266.
+    const posIn = {
+      ...pos(2n, 260n),
+      stake: sdk.REDIST_PRECISION,
+      redistLCollSnapshot: 0n,
+      redistLArtSnapshot: 0n,
+    };
+    const realized = sdk.positionHealth(posIn, { ...market(SPOT, DEBT_SPOT), lColl: 0n, lArt: 10n }, 0n);
+    expect(realized.liquidatable).to.equal(true); // 270 > maxDebt@debt_spot 266 — now eligible
+    // currentDebt stays the interest-only DISPLAY estimate (pending is NOT folded there — doc caveat honest).
+    expect(realized.currentDebt).to.equal(260n);
+  });
+
+  it("pending redistribution collateral is folded too; an incomplete field set keeps the old estimate", () => {
+    // Collateral leg: pos(2, 270) is liquidatable (270 > maxDebt@debt_spot 266), but pending redistributed
+    // collateral raises ink 2 -> 3 (pending_coll = floor(1e18·(1−0)/1e18) = 1) => value 480, maxDebt 400,
+    // so 270 <= 400 and it is no longer liquidatable — matching realize folding ink up before the check.
+    const withColl = sdk.positionHealth(
+      { ...pos(2n, 270n), stake: sdk.REDIST_PRECISION, redistLCollSnapshot: 0n, redistLArtSnapshot: 0n },
+      { ...market(SPOT, DEBT_SPOT), lColl: 1n, lArt: 0n },
+      0n
+    );
+    expect(withColl.liquidatable).to.equal(false);
+
+    // Backward compatible: supplying the position snapshot but NOT the market accumulators (an incomplete
+    // set) falls back to the raw pre-redistribution predicate — pos(2, 270) stays liquidatable.
+    const partial = sdk.positionHealth(
+      { ...pos(2n, 270n), stake: sdk.REDIST_PRECISION, redistLCollSnapshot: 0n, redistLArtSnapshot: 0n },
+      market(SPOT, DEBT_SPOT),
+      0n
+    );
+    expect(partial.liquidatable).to.equal(true);
+  });
 });

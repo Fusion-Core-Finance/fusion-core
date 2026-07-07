@@ -22,6 +22,7 @@ const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 // On-chain constants (programs/fusd-core/src/constants.rs).
 export const RAY = 10n ** 27n;
 export const BPS = 10_000n;
+export const REDIST_PRECISION = 10n ** 18n; // fusd_math::redistribution::PRECISION (1e18 reward-per-unit)
 export const FUSD_DECIMALS = 6;
 export const SECONDS_PER_YEAR = 31_536_000n;
 export const MAX_PRICE_STALENESS_SLOTS = 250n;
@@ -94,6 +95,10 @@ export interface ScannedPosition {
   userRateBps: number;
   lastDebtUpdate: bigint;
   bucket: number;
+  // tier-2 redistribution inputs (accrual::realize folds these into ink/recorded_debt on every touch)
+  stake: bigint;
+  redistLCollSnapshot: bigint;
+  redistLArtSnapshot: bigint;
 }
 // Default: getProgramAccounts with a memcmp on collateral_mint (offset 40) — the permissionless
 // discovery path, but it needs a gPA-capable RPC. If `watch` is given, fetch exactly those position
@@ -117,6 +122,9 @@ export async function scanPositions(program: any, coll: Pk, watch?: Pk[]): Promi
     userRateBps: Number(a.account.userRateBps),
     lastDebtUpdate: bi(a.account.lastDebtUpdate),
     bucket: Number(a.account.bucket),
+    stake: bi(a.account.stake),
+    redistLCollSnapshot: bi(a.account.redistLCollSnapshot),
+    redistLArtSnapshot: bi(a.account.redistLArtSnapshot),
   }));
 }
 
@@ -125,6 +133,21 @@ export function currentDebt(recordedDebt: bigint, rateBps: number, lastDebtUpdat
   const period = nowSecs > lastDebtUpdate ? nowSecs - lastDebtUpdate : 0n;
   const accrued = (recordedDebt * BigInt(rateBps) * period) / (SECONDS_PER_YEAR * BPS);
   return recordedDebt + accrued;
+}
+
+/** A position's pending (unrealized) tier-2 redistribution gains `(coll, debt)` — a BigInt port of
+ * redist::pending → fusd_math::redistribution::pending_one: `stake·(l − snapshot)/1e18`, floored per
+ * leg (protocol-favoring dust). `lColl`/`lArt` are the market's accumulators; the snapshots are the
+ * position's own. accrual::realize folds `coll` into `ink` and `debt` into `recorded_debt` BEFORE the
+ * liquidation health check, so the bot must too — else a position pushed under MCR by a prior
+ * redistribution is invisible. Best-effort estimate; the on-chain re-check is authoritative. */
+export function pendingRedist(
+  stake: bigint, lColl: bigint, lArt: bigint, snapColl: bigint, snapArt: bigint,
+): { coll: bigint; debt: bigint } {
+  // pending_one: delta = l.saturating_sub(snap); 0 when stake==0 or delta==0; else floor(stake*delta/1e18).
+  const one = (l: bigint, snap: bigint): bigint =>
+    stake === 0n || l <= snap ? 0n : (stake * (l - snap)) / REDIST_PRECISION;
+  return { coll: one(lColl, snapColl), debt: one(lArt, snapArt) };
 }
 /** cdp::is_healthy at the HIGH debt_spot price: liquidatable when present debt exceeds the max. */
 export function isLiquidatable(ink: bigint, presentDebt: bigint, debtSpot: bigint, mcrBps: number): boolean {

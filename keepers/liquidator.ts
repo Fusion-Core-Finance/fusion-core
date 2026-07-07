@@ -22,7 +22,7 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, TOKEN_PROGRAM, MAX_PRICE_STALENESS_SLOTS, log, makeProgram, bundle, scanPositions,
-  currentDebt, isLiquidatable, ensureAta, errLine, priorityIxs, redactUrl,
+  currentDebt, isLiquidatable, pendingRedist, ensureAta, errLine, priorityIxs, redactUrl,
 } from "./common";
 
 // A liquidation must land during a collateral crash — precisely when Solana's fee market spikes — so it
@@ -78,10 +78,19 @@ async function scanAndLiquidate(program: any, provider: anchor.AnchorProvider, p
 
   const mcrBps = Number(m.mcrBps);
   const now = BigInt(Math.floor(Date.now() / 1000));
+  // Market redistribution accumulators — fold each position's pending share into its health, matching
+  // accrual::realize (run on-chain before the liquidation check).
+  const lColl = BigInt(m.lColl.toString());
+  const lArt = BigInt(m.lArt.toString());
   const positions = await scanPositions(program, coll, watch);
-  const targets = positions.filter(
-    (q) => q.recordedDebt > 0n && isLiquidatable(q.ink, currentDebt(q.recordedDebt, q.userRateBps, q.lastDebtUpdate, now), debtSpot, mcrBps),
-  );
+  const targets = positions.filter((q) => {
+    // Fold pending tier-2 redistribution into ink + present debt exactly as accrual::realize does
+    // on-chain BEFORE the health check — else a position pushed under MCR by a prior redistribution
+    // (its recorded_debt/ink still stale) is invisible. `debt > 0` mirrors liquidate.rs's require!.
+    const pend = pendingRedist(q.stake, lColl, lArt, q.redistLCollSnapshot, q.redistLArtSnapshot);
+    const debt = currentDebt(q.recordedDebt, q.userRateBps, q.lastDebtUpdate, now) + pend.debt;
+    return debt > 0n && isLiquidatable(q.ink + pend.coll, debt, debtSpot, mcrBps);
+  });
   if (targets.length === 0) return log(`· ${tag} scanned ${positions.length} positions, none liquidatable`);
 
   const liqAta = await ensureAta(provider, coll, me); // receives the gas-comp skim

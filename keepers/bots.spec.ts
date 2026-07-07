@@ -1,7 +1,7 @@
 // Unit checks for the liquidator/redeemer money math in common.ts (the pure BigInt ports of the
 // on-chain accrual + cdp::is_healthy). Run via `npm run test:sdk` (ts-mocha picks up keepers/**/*.spec.ts).
 import assert from "node:assert";
-import { currentDebt, isLiquidatable, SECONDS_PER_YEAR, priorityIxs } from "./common";
+import { currentDebt, isLiquidatable, pendingRedist, REDIST_PRECISION, SECONDS_PER_YEAR, priorityIxs } from "./common";
 
 // spot/debt_spot are RAY-scaled fUSD-native per native collateral unit:
 //   spot = usd * 10^FUSD_DEC * RAY / 10^COLL_DEC = usd * 1e6 * 1e27 / 1e9 = usd * 1e24  (WSOL, 9-dec coll).
@@ -48,5 +48,41 @@ describe("priorityIxs (compute-budget send helper, common.ts)", () => {
     assert.equal(withLimit.length, 2);
     assert.equal(withLimit[0].data[0], 2); // SetComputeUnitLimit prepended (finding: SB precompile safe)
     assert.equal(withLimit[1].data[0], 3); // price second
+  });
+});
+
+describe("pendingRedist (tier-2 redistribution fold, common.ts)", () => {
+  it("ports redist::pending: floor(stake·(l − snapshot)/1e18) per leg", () => {
+    // stake 100, snapshot 0; l_coll bumped 0.1·1e18 ⇒ 100·1e17/1e18 = 10 coll; l_art 0.4 ⇒ 40 debt.
+    const p = pendingRedist(100n, REDIST_PRECISION / 10n, (REDIST_PRECISION * 4n) / 10n, 0n, 0n);
+    assert.deepEqual(p, { coll: 10n, debt: 40n });
+  });
+
+  it("floors each leg (protocol-favoring dust), never rounds up", () => {
+    // stake 3, delta 0.5·1e18 ⇒ 3·5e17/1e18 = 1.5 → floored to 1.
+    assert.equal(pendingRedist(3n, REDIST_PRECISION / 2n, 0n, 0n, 0n).coll, 1n);
+  });
+
+  it("no gain when stake is 0 or the accumulator has not passed the snapshot (saturating_sub)", () => {
+    assert.deepEqual(pendingRedist(0n, REDIST_PRECISION, REDIST_PRECISION, 0n, 0n), { coll: 0n, debt: 0n });
+    assert.deepEqual(pendingRedist(100n, 5n, 5n, 5n, 5n), { coll: 0n, debt: 0n }); // l == snapshot
+    assert.deepEqual(pendingRedist(100n, 3n, 3n, 5n, 5n), { coll: 0n, debt: 0n }); // l < snapshot ⇒ delta 0
+  });
+
+  it("a prior redistribution can tip an otherwise-healthy position under MCR (the miss this closes)", () => {
+    // 1 WSOL @ $45, MCR 150% ⇒ max debt $30. $25 recorded debt is healthy on its own...
+    const ink = 1_000_000_000n;
+    const debtSpot = usdToDebtSpot(45);
+    const baseDebt = fusd(25);
+    assert.equal(isLiquidatable(ink, baseDebt, debtSpot, 15000), false, "healthy pre-redistribution");
+    // ...but a pending redistribution of +$8 debt tips present debt to $33 > $30.
+    const stake = 1_000_000_000n;
+    const lArt = (fusd(8) * REDIST_PRECISION) / stake; // craft l_art so stake·l_art/1e18 == $8
+    const pend = pendingRedist(stake, 0n, lArt, 0n, 0n);
+    assert.equal(pend.debt, fusd(8));
+    assert.equal(
+      isLiquidatable(ink + pend.coll, baseDebt + pend.debt, debtSpot, 15000), true,
+      "liquidatable after folding pending redistribution",
+    );
   });
 });

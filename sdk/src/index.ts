@@ -111,6 +111,8 @@ export const RAY = 10n ** 27n;
 export const BPS = 10_000n;
 export const SECONDS_PER_YEAR = 31_536_000n;
 export const INTEREST_DENOM = SECONDS_PER_YEAR * BPS;
+/** Tier-2 redistribution accumulator precision (1e18, `fusd_math::redistribution::PRECISION`). */
+export const REDIST_PRECISION = 10n ** 18n;
 
 /** `floor(a*b / RAY)`. */
 export const rayMul = (a: bigint, b: bigint) => (a * b) / RAY;
@@ -123,9 +125,21 @@ export const accruedInterest = (recordedDebt: bigint, rateBps: bigint, periodSec
   (recordedDebt * rateBps * periodSecs) / INTEREST_DENOM;
 
 /**
+ * A position's pending (unrealized) tier-2 redistribution share of one accumulator, floored — mirrors
+ * `fusd_math::redistribution::pending_one`: `floor(stake · (l_now − l_snapshot) / 1e18)`, 0 when the
+ * stake or the delta is 0 (accumulators grow monotonically, so `l_now >= l_snapshot`). Used to fold
+ * pending redistribution into the on-chain liquidation predicate (`accrual.rs::realize`).
+ */
+export const redistPending = (stake: bigint, lNow: bigint, lSnapshot: bigint) => {
+  const delta = lNow > lSnapshot ? lNow - lSnapshot : 0n;
+  return stake === 0n || delta === 0n ? 0n : (stake * delta) / REDIST_PRECISION;
+};
+
+/**
  * A position's CURRENT debt = `recorded_debt` + interest accrued since `lastDebtUpdate`.
  * NOTE: pending tier-2 redistribution (`Market.l_art`) is NOT included — it is applied lazily on the
  * next touch and is zero for the common case; this is a display estimate, not the exact on-touch value.
+ * (`positionHealth` DOES fold pending redistribution into `liquidatable` when given the snapshot fields.)
  * Assumes a LIVE (non-shutdown) market: interest STOPS at shutdown (`accrual.rs::realize` caps the
  * period at the frozen `Market.last_update_ts`), so for a shut-down market pass that frozen timestamp
  * as `nowSecs` — otherwise this over-estimates by accruing past the freeze.
@@ -171,6 +185,15 @@ export interface PositionInput {
   recordedDebt: bigint;
   userRateBps: bigint;
   lastDebtUpdate: bigint;
+  /**
+   * OPTIONAL tier-2 redistribution snapshot (`Position.stake`, `.redist_l_coll_snapshot`,
+   * `.redist_l_art_snapshot`). Supply ALL THREE together with the market's `lColl`/`lArt` and
+   * `liquidatable` folds in pending redistribution exactly as `accrual.rs::realize` does before the
+   * on-chain eligibility check. Omit them (the default) for the pre-redistribution estimate.
+   */
+  stake?: bigint;
+  redistLCollSnapshot?: bigint;
+  redistLArtSnapshot?: bigint;
 }
 export interface HealthView {
   currentDebt: bigint;
@@ -185,7 +208,10 @@ export interface HealthView {
   /**
    * Eligible for liquidation on-chain: `!isHealthy(ink, debt, debt_spot, mcrBps)` priced at the HIGH
    * `Market.debt_spot` (matches liquidate.rs). `false` when `debtSpot == 0` (an unpriced market —
-   * liquidation is fail-closed). This is the liquidation predicate; `healthy` is the borrow predicate.
+   * liquidation is fail-closed). When the redistribution snapshot is supplied (`PositionInput.stake` +
+   * snapshots and `market.lColl`/`lArt`), pending tier-2 redistribution is first folded into `ink`/`debt`
+   * exactly as `accrual.rs::realize` does before the check; otherwise this is the pre-redistribution
+   * estimate. This is the liquidation predicate; `healthy` is the borrow predicate.
    */
   liquidatable: boolean;
   maxBorrow: bigint;
@@ -197,17 +223,30 @@ export interface HealthView {
  */
 export function positionHealth(
   pos: PositionInput,
-  market: { spot: bigint; debtSpot: bigint; mcrBps: bigint; borrowFeeBps?: bigint },
+  market: { spot: bigint; debtSpot: bigint; mcrBps: bigint; borrowFeeBps?: bigint; lColl?: bigint; lArt?: bigint },
   nowSecs: bigint
 ): HealthView {
   const debt = currentDebt(pos.recordedDebt, pos.userRateBps, pos.lastDebtUpdate, nowSecs);
+  // On-chain the liquidation check runs AFTER accrual::realize folds pending tier-2 redistribution into
+  // ink/recorded_debt (liquidate.rs, accrual.rs::realize). When the caller supplies the position's
+  // stake+snapshots AND the market's l_coll/l_art, fold that pending in so `liquidatable` matches the
+  // program exactly; otherwise fall back to the raw (pre-redistribution) ink/debt — the documented estimate.
+  const haveRedist =
+    pos.stake !== undefined &&
+    pos.redistLCollSnapshot !== undefined &&
+    pos.redistLArtSnapshot !== undefined &&
+    market.lColl !== undefined &&
+    market.lArt !== undefined;
+  const liqInk = haveRedist ? pos.ink + redistPending(pos.stake!, market.lColl!, pos.redistLCollSnapshot!) : pos.ink;
+  const liqDebt = haveRedist ? debt + redistPending(pos.stake!, market.lArt!, pos.redistLArtSnapshot!) : debt;
   return {
     currentDebt: debt,
     collateralValue: collateralValue(pos.ink, market.spot),
     collateralRatioBps: collateralRatioBps(pos.ink, debt, market.spot),
     healthy: isHealthy(pos.ink, debt, market.spot, market.mcrBps),
     // Liquidation eligibility prices at the HIGH debt_spot; debtSpot == 0 (unpriced) is fail-closed.
-    liquidatable: market.debtSpot > 0n && !isHealthy(pos.ink, debt, market.debtSpot, market.mcrBps),
+    // liqInk/liqDebt fold in pending tier-2 redistribution when the caller supplied the snapshot.
+    liquidatable: market.debtSpot > 0n && !isHealthy(liqInk, liqDebt, market.debtSpot, market.mcrBps),
     // maxBorrow nets out the C7 upfront borrow fee when the market charges one (Market.borrow_fee_bps).
     maxBorrow: maxBorrow(pos.ink, debt, market.spot, market.mcrBps, market.borrowFeeBps ?? 0n),
   };
