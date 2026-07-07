@@ -25,7 +25,7 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, BN, TOKEN_PROGRAM, FUSD_DECIMALS, MAX_PRICE_STALENESS_SLOTS, ZOMBIE_BUCKET,
-  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine, priorityIxs, redactUrl,
+  MAX_REDEMPTION_CANDIDATES, log, makeProgram, bundle, scanPositions, ensureAta, errLine, priorityIxs, redactUrl, nonReentrant,
 } from "./common";
 
 // Redemption defends the peg floor during a depeg — a congested period — so it carries a priority fee,
@@ -64,7 +64,8 @@ export function validateConfig(cfg: RedeemerCfg): void {
 }
 
 function every(label: string, secs: number, fn: () => Promise<void>) {
-  const tick = async () => { try { await fn(); } catch (e: any) { log(`✗ ${label}: ${errLine(e)}`); } };
+  const guarded = nonReentrant(fn); // skip a tick if the previous scan/submit is still running
+  const tick = async () => { try { await guarded(); } catch (e: any) { log(`✗ ${label}: ${errLine(e)}`); } };
   tick();
   return setInterval(tick, secs * 1000);
 }

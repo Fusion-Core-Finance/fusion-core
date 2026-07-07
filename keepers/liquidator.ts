@@ -22,7 +22,7 @@ import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import {
   PublicKey, Pk, TOKEN_PROGRAM, MAX_PRICE_STALENESS_SLOTS, log, makeProgram, bundle, scanPositions,
-  currentDebt, isLiquidatable, pendingRedist, ensureAta, errLine, priorityIxs, redactUrl,
+  currentDebt, isLiquidatable, pendingRedist, ensureAta, errLine, priorityIxs, redactUrl, nonReentrant,
 } from "./common";
 
 // A liquidation must land during a collateral crash — precisely when Solana's fee market spikes — so it
@@ -56,7 +56,8 @@ export function validateConfig(cfg: LiqCfg): void {
 }
 
 function every(label: string, secs: number, fn: () => Promise<void>) {
-  const tick = async () => { try { await fn(); } catch (e: any) { log(`✗ ${label}: ${errLine(e)}`); } };
+  const guarded = nonReentrant(fn); // skip a tick if the previous scan/submit is still running
+  const tick = async () => { try { await guarded(); } catch (e: any) { log(`✗ ${label}: ${errLine(e)}`); } };
   tick();
   return setInterval(tick, secs * 1000);
 }

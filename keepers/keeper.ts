@@ -37,7 +37,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import * as os from "os";
-import { loadIdl } from "./common";
+import { loadIdl, nonReentrant } from "./common";
 
 const { PublicKey, Keypair, Connection } = anchor.web3;
 type Pk = anchor.web3.PublicKey;
@@ -153,8 +153,9 @@ async function updatePricePost(
 
 // Run a crank on an interval, isolating failures so one bad tick never kills the loop.
 function every(label: string, secs: number, fn: () => Promise<void>) {
+  const guarded = nonReentrant(fn); // skip a tick if the previous crank is still running
   const tick = async () => {
-    try { await fn(); log(`✓ ${label}`); }
+    try { if (await guarded()) log(`✓ ${label}`); }
     catch (e: any) { log(`✗ ${label}: ${(e?.message || String(e)).split("\n")[0]}`); }
   };
   tick();

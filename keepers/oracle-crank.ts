@@ -32,7 +32,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
 import { getDefaultQueue, PullFeed } from "@switchboard-xyz/on-demand";
-import { PublicKey, Pk, pda, seed, bundle, log, makeProgram, ensureAta, TOKEN_PROGRAM, errLine, priorityIxs, priorityFeeMicroLamports , redactUrl } from "./common";
+import { PublicKey, Pk, pda, seed, bundle, log, makeProgram, ensureAta, TOKEN_PROGRAM, errLine, priorityIxs, priorityFeeMicroLamports , redactUrl, nonReentrant } from "./common";
 
 const PYTH_PUSH_ORACLE = new PublicKey("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
 const SOL_USD_FEED_ID = Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex");
@@ -265,7 +265,8 @@ async function main() {
 
   const tickSecs = cfg.tickSecs ?? 15;
   const sbNumSignatures = cfg.sbNumSignatures ?? 1;
-  const run = async () => { for (const mc of markets) { try { await tick(program, me, wallet, mc, sbNumSignatures); } catch (e: any) { log(`✗ ${mc.tag}: ${errLine(e)}`); } } };
+  // Skip a tick if the previous sweep is still running (slow RPC ⇒ overlapping cranks would double-submit).
+  const run = nonReentrant(async () => { for (const mc of markets) { try { await tick(program, me, wallet, mc, sbNumSignatures); } catch (e: any) { log(`✗ ${mc.tag}: ${errLine(e)}`); } } });
   await run();
   setInterval(run, tickSecs * 1000);
 }

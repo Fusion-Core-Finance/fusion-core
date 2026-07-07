@@ -1,7 +1,7 @@
 // Unit checks for the liquidator/redeemer money math in common.ts (the pure BigInt ports of the
 // on-chain accrual + cdp::is_healthy). Run via `npm run test:sdk` (ts-mocha picks up keepers/**/*.spec.ts).
 import assert from "node:assert";
-import { currentDebt, isLiquidatable, pendingRedist, REDIST_PRECISION, SECONDS_PER_YEAR, priorityIxs } from "./common";
+import { currentDebt, isLiquidatable, pendingRedist, REDIST_PRECISION, SECONDS_PER_YEAR, priorityIxs, nonReentrant } from "./common";
 
 // spot/debt_spot are RAY-scaled fUSD-native per native collateral unit:
 //   spot = usd * 10^FUSD_DEC * RAY / 10^COLL_DEC = usd * 1e6 * 1e27 / 1e9 = usd * 1e24  (WSOL, 9-dec coll).
@@ -84,5 +84,33 @@ describe("pendingRedist (tier-2 redistribution fold, common.ts)", () => {
       isLiquidatable(ink + pend.coll, baseDebt + pend.debt, debtSpot, 15000), true,
       "liquidatable after folding pending redistribution",
     );
+  });
+});
+
+describe("nonReentrant (interval re-entrancy guard, common.ts)", () => {
+  it("skips a tick while the previous one is still in flight, then resumes", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const guarded = nonReentrant(async () => { calls++; await gate; });
+
+    const first = guarded();                 // starts, now in flight (awaiting gate)
+    await Promise.resolve();                 // let the wrapped fn reach its await
+    assert.equal(calls, 1);
+    assert.equal(await guarded(), false, "overlapping tick is skipped");
+    assert.equal(calls, 1, "wrapped fn is not re-invoked while in flight");
+
+    release();                               // let the first tick finish (gate now resolved)
+    assert.equal(await first, true, "the tick that actually ran returns true");
+    assert.equal(await guarded(), true, "the next tick runs once the previous finished");
+    assert.equal(calls, 2);
+  });
+
+  it("clears the in-flight flag when a tick throws (error still propagates)", async () => {
+    let calls = 0;
+    const guarded = nonReentrant(async () => { calls++; throw new Error("boom"); });
+    await assert.rejects(guarded(), /boom/);       // error reaches the caller's try/catch (its `✗` log)
+    await assert.rejects(guarded(), /boom/);       // flag was reset ⇒ the next tick still runs
+    assert.equal(calls, 2);
   });
 });

@@ -179,6 +179,21 @@ export async function ensureAta(
 /** First line of a SendTransactionError/AnchorError message, for compact one-line logging —
  * PLUS the first meaningful simulation log line: a bare "Simulation failed." hid an
  * insufficient-fee-payer drain for hours (2026-07-06); the log line names the cause. */
+/** Re-entrancy guard for an interval tick. setInterval/`every` fire on the wall clock regardless of
+ * whether the previous tick finished; a slow scan/RPC would let ticks pile up and double-submit
+ * (liquidate/redeem/crank). This wraps a tick so that while a previous call is still in flight, later
+ * calls are skipped (resolve to false) instead of overlapping — the next interval catches up. The
+ * in-flight flag is cleared in `finally`, so a throwing tick still propagates its error to the caller
+ * (for its own `✗` logging) and does not wedge the guard. Returns true when the wrapped fn ran. */
+export function nonReentrant(fn: () => Promise<void>): () => Promise<boolean> {
+  let running = false;
+  return async () => {
+    if (running) return false;
+    running = true;
+    try { await fn(); return true; } finally { running = false; }
+  };
+}
+
 export const errLine = (e: any): string => {
   const first = (e?.message || String(e)).split("\n")[0];
   const logs: string[] = e?.logs ?? e?.simulationResponse?.logs ?? [];
