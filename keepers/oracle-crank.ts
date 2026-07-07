@@ -99,7 +99,7 @@ export function intervalsFrom(
   const sample = Math.max(antiFloodFloor, Math.min(staleBound, minSampleBound));
   return {
     sample: cfg.sampleIntervalSecs ?? sample,
-    sb: cfg.sbIntervalSecs ?? Math.max(30, Math.floor((o.maxAgeSecs * 2) / 3)),
+    sb: cfg.sbIntervalSecs ?? Math.max(30, Math.floor((o.maxAgeSecs * 9) / 10) - 10),
     price: cfg.priceIntervalSecs ?? 60,
     refresh: cfg.refreshIntervalSecs ?? 300,
   };

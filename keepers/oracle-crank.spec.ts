@@ -12,17 +12,25 @@ describe("oracle-crank helpers", () => {
   });
 
   it("intervalsFrom derives safe cadences from the on-chain oracle config", () => {
-    // window 300 / (3-1) = 150s on-chain floor -> 155s with slack; sb = 90% of max_age − 10
-    // (fee-driven: each SB update PAYS the signing oracles); price default 60; refresh 300.
-    const i = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3 }, { markets: [] });
-    assert.deepEqual(i, { sample: 155, sb: 260, price: 60, refresh: 300 });
+    // sample is bounded BELOW twap_max_staleness (2/3 of it) so the TWAP corridor never ages out and
+    // freezes mints, while spanning the window with >= min_samples and staying >= the anti-flood floor
+    // ceil(window/(RING-1))=ceil(window/63). sb = 90% of max_age − 10s (fee-driven: each SB update PAYS
+    // the signing oracles), floored at 30s. For window 300 / min_samples 3 / max_staleness 300:
+    // antiFlood ceil(300/63)=5, staleBound floor(300*2/3)=200, minSampleBound ceil(300/2)=150 ->
+    // sample max(5,min(200,150))=150; sb floor(300*9/10)-10=260.
+    const i = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3, twapMaxStalenessSecs: 300 }, { markets: [] });
+    assert.deepEqual(i, { sample: 150, sb: 260, price: 60, refresh: 300 });
     // explicit config wins.
-    const o = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3 },
+    const o = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 300, twapMinSamples: 3, twapMaxStalenessSecs: 300 },
       { markets: [], sampleIntervalSecs: 42, sbIntervalSecs: 99, priceIntervalSecs: 7, refreshIntervalSecs: 600 });
     assert.deepEqual(o, { sample: 42, sb: 99, price: 7, refresh: 600 });
+    // a tight max_staleness BINDS the sample cadence below the window/min_samples target (the #8 bug:
+    // a large window with the min sample count must still sample often enough to stay fresh).
+    const s = intervalsFrom({ maxAgeSecs: 300, twapWindowSecs: 1800, twapMinSamples: 3, twapMaxStalenessSecs: 300 }, { markets: [] });
+    assert.equal(s.sample, 200); // staleBound floor(300*2/3)=200 < minSampleBound ceil(1800/2)=900
     // degenerate min_samples never divides by zero; sb never below the 30s floor.
-    const d = intervalsFrom({ maxAgeSecs: 30, twapWindowSecs: 300, twapMinSamples: 1 }, { markets: [] });
-    assert.equal(d.sample, 305);
+    const d = intervalsFrom({ maxAgeSecs: 30, twapWindowSecs: 300, twapMinSamples: 1, twapMaxStalenessSecs: 3600 }, { markets: [] });
+    assert.equal(d.sample, 300); // minSampleBound ceil(300/1)=300 < staleBound floor(3600*2/3)=2400
     assert.equal(d.sb, 30);
   });
 
