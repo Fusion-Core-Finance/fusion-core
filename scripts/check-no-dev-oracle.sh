@@ -34,8 +34,16 @@ else
   fi
 fi
 
-# The compiled program must carry no DevSetPrice symbol/string.
-if strings "$so" | grep -qi "DevSetPrice"; then
+# The compiled program must carry no DevSetPrice symbol/string. Guard against a fail-open pass: if
+# `strings` is missing or produces no output, the grep below would match nothing and spuriously look
+# "clean". Require `strings` present and a non-empty scan before concluding the .so is clean.
+if ! command -v strings >/dev/null 2>&1; then
+  echo "FAIL: 'strings' (binutils) not found — cannot scan '$so' for a DevSetPrice leak." >&2
+  fail=1
+elif ! so_syms="$(strings "$so")" || [ -z "$so_syms" ]; then
+  echo "FAIL: 'strings $so' produced no output — the .so symbol scan did not run." >&2
+  fail=1
+elif printf '%s\n' "$so_syms" | grep -qi "DevSetPrice"; then
   echo "FAIL: '$so' contains a DevSetPrice symbol — the dev-oracle feature leaked into the build." >&2
   fail=1
 fi

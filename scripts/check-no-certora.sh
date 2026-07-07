@@ -12,7 +12,7 @@
 #      lto='fat' can inline+strip a tiny helper's symbol, so step 1 + the workspace structure are the
 #      actual guarantee, not this scan).
 #
-# Run before any deploy / IDL publish (wired into scripts/verifiable-build.sh and the certora.yml lane).
+# Run before any deploy / IDL publish (wired into scripts/ci-checks.sh and scripts/verifiable-build.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -39,9 +39,18 @@ fail=0
 
 # 1. The program's normal (non-dev, non-build) dependency tree must not contain `cvlr`.
 echo "Checking 'cargo tree -e normal' for fusd-core has no cvlr crate..."
-if cargo tree -p fusd-core -e normal 2>/dev/null | detect_cvlr; then
+# Capture the tree + its exit status SEPARATELY, never `cargo tree ... | detect_cvlr`: a cargo
+# failure (crate rename, lock error) would collapse to empty stdout → detect_cvlr finds no cvlr and
+# exits 1 → the `if` is false → this gate (the real proof) silently PASSES with no evidence. Fail
+# CLOSED: if cargo tree cannot produce the tree, hard-error rather than treat absence as clean.
+if ! tree_output=$(cargo tree -p fusd-core -e normal 2>&1); then
+  echo "FAIL: 'cargo tree -p fusd-core -e normal' errored — cannot prove cvlr is absent; failing closed:" >&2
+  printf '%s\n' "$tree_output" >&2
+  exit 1
+fi
+if printf '%s\n' "$tree_output" | detect_cvlr; then
   echo "FAIL: 'cvlr' is a NORMAL dependency of fusd-core — the Certora dep is not verification-only." >&2
-  cargo tree -p fusd-core -e normal 2>/dev/null | sed 's/[^[:alnum:]_-]/ /g' | grep -w cvlr >&2 || true
+  printf '%s\n' "$tree_output" | sed 's/[^[:alnum:]_-]/ /g' | grep -w cvlr >&2 || true
   fail=1
 fi
 
@@ -53,7 +62,15 @@ if [ ! -f "$so" ] || [ "${REBUILD:-0}" = "1" ]; then
   anchor build
 fi
 if [ -f "$so" ]; then
-  if strings "$so" | grep -qiF -e cvlr -e certora; then
+  # Guard against a fail-open: if `strings` is missing or yields no output, the grep below would
+  # match nothing and spuriously look "clean". Require the scan to actually run before deciding.
+  if ! command -v strings >/dev/null 2>&1; then
+    echo "FAIL: 'strings' (binutils) not found — cannot scan '$so' for a cvlr/certora leak." >&2
+    fail=1
+  elif ! so_syms="$(strings "$so")" || [ -z "$so_syms" ]; then
+    echo "FAIL: 'strings $so' produced no output — the .so symbol scan did not run." >&2
+    fail=1
+  elif printf '%s\n' "$so_syms" | grep -qiF -e cvlr -e certora; then
     echo "FAIL: '$so' contains a cvlr/certora string — the certora feature likely leaked into the build." >&2
     fail=1
   fi

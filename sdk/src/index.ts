@@ -37,6 +37,7 @@ export const SEEDS = {
   globalTimelock: Buffer.from("gtimelock"),
   backstop: Buffer.from("backstop"),
   backstopFusdVault: Buffer.from("backstop_fusd"),
+  supplyRecon: Buffer.from("supply_recon"),
   registry: Buffer.from("registry"),
   market: Buffer.from("market"),
   collateralVault: Buffer.from("coll_vault"),
@@ -65,6 +66,7 @@ export const deriveMintAuthority = (p = PID) => pda([SEEDS.mintAuthority], p);
 export const deriveGovGate = (p = PID) => pda([SEEDS.govGate], p);
 export const deriveBackstop = (p = PID) => pda([SEEDS.backstop], p);
 export const deriveBackstopFusdVault = (p = PID) => pda([SEEDS.backstopFusdVault], p);
+export const deriveSupplyRecon = (p = PID) => pda([SEEDS.supplyRecon], p);
 /** Queued-param timelock entry, keyed by the gate's queue nonce (u64 little-endian). */
 export const deriveTimelock = (nonce: bigint, p = PID) =>
   pda([SEEDS.timelock, u64le(nonce)], p);

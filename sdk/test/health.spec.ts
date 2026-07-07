@@ -29,6 +29,7 @@ describe("SDK PDA derivers (seeds pinned to constants.rs)", () => {
     expect(sdk.deriveGovGate().toBase58()).to.equal(at([s("gov_gate")]));
     expect(sdk.deriveBackstop().toBase58()).to.equal(at([s("backstop")]));
     expect(sdk.deriveBackstopFusdVault().toBase58()).to.equal(at([s("backstop_fusd")]));
+    expect(sdk.deriveSupplyRecon().toBase58()).to.equal(at([s("supply_recon")]));
     expect(sdk.deriveTimelock(5n).toBase58()).to.equal(at([s("timelock"), u64le(5n)]));
     expect(sdk.deriveGlobalTimelock(0n).toBase58()).to.equal(at([s("gtimelock"), u64le(0n)]));
   });
