@@ -67,6 +67,7 @@ fn post_canonical(
     svm: &mut litesvm::LiteSVM,
     sol_usd_key: &Pubkey,
     stake_pool: &Pubkey,
+    coll: &Pubkey,
     sol_usd: i64,
     total_lamports: u64,
     pool_token_supply: u64,
@@ -74,7 +75,9 @@ fn post_canonical(
     let now = now_unix(svm);
     let epoch = now_epoch(svm);
     set_pyth_price(svm, sol_usd_key, PYTH_SOL_USD_FEED_ID, pyth_usd(sol_usd), 0, PYTH_EXPO, now);
-    set_stake_pool(svm, stake_pool, total_lamports, pool_token_supply, epoch);
+    // The pool's LST mint is bound to the market collateral (audit #21) — a canonical crank must
+    // present a pool whose pool_mint == coll, else the leg degrades to None.
+    set_stake_pool(svm, stake_pool, coll, total_lamports, pool_token_supply, epoch);
 }
 
 #[test]
@@ -88,7 +91,7 @@ fn canonical_caps_collateral_below_inflated_market() {
     let sol_usd = Pubkey::new_unique();
 
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 90, lst(1_000_000), lst(1_000_000)); // rate 1.0
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 90, lst(1_000_000), lst(1_000_000)); // rate 1.0
     send(
         &mut svm,
         &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
@@ -112,7 +115,7 @@ fn canonical_above_market_is_a_noop() {
     let sol_usd = Pubkey::new_unique();
 
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 110, lst(1_000_000), lst(1_000_000));
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 110, lst(1_000_000), lst(1_000_000));
     send(
         &mut svm,
         &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
@@ -136,7 +139,7 @@ fn canonical_uses_stake_pool_rate() {
     let sol_usd = Pubkey::new_unique();
 
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(1_200_000), lst(1_000_000)); // rate 1.2
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 100, lst(1_200_000), lst(1_000_000)); // rate 1.2
     send(
         &mut svm,
         &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
@@ -149,7 +152,7 @@ fn canonical_uses_stake_pool_rate() {
     // Re-crank with rate 0.8 (800k lamports / 1M tokens) ⇒ canonical $80 < market $100 ⇒ cap to $80.
     warp_unix(&mut svm, 5);
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(800_000), lst(1_000_000));
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 100, lst(800_000), lst(1_000_000));
     send(
         &mut svm,
         &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
@@ -169,7 +172,7 @@ fn missing_canonical_freezes_mints_but_serves_market_spot() {
     let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
     let sol_usd = Pubkey::new_unique();
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(1_000_000), lst(1_000_000));
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 100, lst(1_000_000), lst(1_000_000));
 
     // Omit BOTH canonical accounts: the LST market freezes mints.
     send(
@@ -186,7 +189,7 @@ fn missing_canonical_freezes_mints_but_serves_market_spot() {
     // Supplying the canonical accounts on the next crank clears the freeze.
     warp_unix(&mut svm, 5);
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(1_000_000), lst(1_000_000));
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 100, lst(1_000_000), lst(1_000_000));
     send(
         &mut svm,
         &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
@@ -205,12 +208,12 @@ fn wrong_stake_pool_account_reverts() {
     let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
     let sol_usd = Pubkey::new_unique();
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(1_000_000), lst(1_000_000));
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 100, lst(1_000_000), lst(1_000_000));
 
     // A different, valid-looking stake pool the market did not bind.
     let wrong_pool = Pubkey::new_unique();
     let epoch = now_epoch(&svm);
-    set_stake_pool(&mut svm, &wrong_pool, lst(1_000_000), lst(1_000_000), epoch);
+    set_stake_pool(&mut svm, &wrong_pool, &coll, lst(1_000_000), lst(1_000_000), epoch);
     let f = send(
         &mut svm,
         &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(wrong_pool))],
@@ -238,7 +241,7 @@ fn stale_sol_usd_underlying_freezes_mints() {
     post_market(&mut svm, &h, 100);
     let now = now_unix(&svm);
     let epoch = now_epoch(&svm);
-    set_stake_pool(&mut svm, &stake_pool, lst(1_000_000), lst(1_000_000), epoch); // rate 1.0, fresh
+    set_stake_pool(&mut svm, &stake_pool, &coll, lst(1_000_000), lst(1_000_000), epoch); // rate 1.0, fresh
     // SOL/USD posted 120s in the past (> DEFAULT_ORACLE_MAX_AGE_SECS = 60) ⇒ stale.
     set_pyth_price(&mut svm, &sol_usd, PYTH_SOL_USD_FEED_ID, pyth_usd(100), 0, PYTH_EXPO, now - 120);
 
@@ -265,7 +268,7 @@ fn degenerate_stake_pool_rate_freezes_mints() {
     let now = now_unix(&svm);
     let epoch = now_epoch(&svm);
     set_pyth_price(&mut svm, &sol_usd, PYTH_SOL_USD_FEED_ID, pyth_usd(100), 0, PYTH_EXPO, now);
-    set_stake_pool(&mut svm, &stake_pool, lst(1_000_000), 0, epoch); // zero supply ⇒ degenerate rate
+    set_stake_pool(&mut svm, &stake_pool, &coll, lst(1_000_000), 0, epoch); // zero supply ⇒ degenerate rate
 
     send(
         &mut svm,
@@ -289,7 +292,7 @@ fn epoch_lagged_stake_pool_freezes_mints() {
     let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
     let sol_usd = Pubkey::new_unique();
     post_market(&mut svm, &h, 100);
-    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(1_000_000), lst(1_000_000)); // pool stamped at epoch E
+    post_canonical(&mut svm, &sol_usd, &stake_pool, &coll, 100, lst(1_000_000), lst(1_000_000)); // pool stamped at epoch E
 
     let mut clock: solana_sdk::clock::Clock = svm.get_sysvar();
     clock.epoch = clock.epoch.saturating_add(fusd_core::constants::MAX_STAKE_POOL_EPOCH_LAG + 1);
@@ -305,5 +308,34 @@ fn epoch_lagged_stake_pool_freezes_mints() {
     .expect("crank with epoch-lagged pool");
     let m = read_market(&svm, &market_pda(&coll));
     assert!(m.mint_frozen, "stake-pool epoch lag > MAX ⇒ canonical None ⇒ mints frozen");
+    assert_eq!(m.spot, spot_for_usd(100), "conservative market price still served");
+}
+
+#[test]
+fn stake_pool_pool_mint_mismatch_freezes_mints() {
+    // The bound stake pool (correct KEY, fresh, non-degenerate) but whose pool_mint is a DIFFERENT
+    // LST than the market collateral — a gov misconfiguration that bound the wrong pool. The leg
+    // degrades to None (never prices the wrong LST) ⇒ mints freeze, market price still served
+    // (audit #21). Distinct from the wrong-KEY case, which hard-reverts.
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
+    let sol_usd = Pubkey::new_unique();
+    post_market(&mut svm, &h, 100);
+    let now = now_unix(&svm);
+    let epoch = now_epoch(&svm);
+    set_pyth_price(&mut svm, &sol_usd, PYTH_SOL_USD_FEED_ID, pyth_usd(100), 0, PYTH_EXPO, now);
+    // Correct key, fresh, rate 1.0 — but pool_mint is a DIFFERENT mint than the market collateral.
+    let wrong_mint = Pubkey::new_unique();
+    set_stake_pool(&mut svm, &stake_pool, &wrong_mint, lst(1_000_000), lst(1_000_000), epoch);
+
+    send(
+        &mut svm,
+        &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
+        &gov,
+        &[],
+    )
+    .expect("crank with mismatched pool_mint");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.mint_frozen, "pool_mint != collateral ⇒ canonical None ⇒ mints frozen");
     assert_eq!(m.spot, spot_for_usd(100), "conservative market price still served");
 }

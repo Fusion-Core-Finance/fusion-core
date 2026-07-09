@@ -856,12 +856,14 @@ pub fn now_epoch(svm: &LiteSVM) -> u64 {
 pub fn set_stake_pool(
     svm: &mut LiteSVM,
     key: &Pubkey,
+    pool_mint: &Pubkey,
     total_lamports: u64,
     pool_token_supply: u64,
     last_update_epoch: u64,
 ) {
     let mut data = vec![0u8; 320]; // past min_len (282), mimicking the real account's tail
     data[0] = 1; // AccountType::StakePool
+    data[162..194].copy_from_slice(pool_mint.as_ref()); // pool_mint (bound to the market collateral)
     data[258..266].copy_from_slice(&total_lamports.to_le_bytes());
     data[266..274].copy_from_slice(&pool_token_supply.to_le_bytes());
     data[274..282].copy_from_slice(&last_update_epoch.to_le_bytes());

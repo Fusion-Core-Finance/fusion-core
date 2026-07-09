@@ -101,6 +101,7 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         canonical_required: mo.lst_stake_pool != Pubkey::default(),
     };
     let lst_stake_pool_key = mo.lst_stake_pool;
+    let collateral_mint_key = ctx.accounts.collateral_mint.key();
     let coll_decimals = ctx.accounts.market.collateral_decimals;
     // The bounded-updatable oracle program IDs (genesis = the compile-time constants; updatable by
     // gov via `set_oracle_program_ids` to absorb the Pyth core migration without a redeploy). The
@@ -137,6 +138,7 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
             ctx.accounts.sol_usd_pyth_update.as_ref(),
             ctx.accounts.lst_stake_pool.as_ref(),
             &lst_stake_pool_key,
+            &collateral_mint_key,
             &pyth_program_id,
             &pyth_program_id_alt,
             now,
@@ -307,6 +309,7 @@ fn compute_canonical(
     sol_usd_acc: Option<&UncheckedAccount>,
     stake_pool_acc: Option<&UncheckedAccount>,
     expected_stake_pool: &Pubkey,
+    collateral_mint: &Pubkey,
     pyth_program_id: &Pubkey,
     pyth_program_id_alt: &Pubkey,
     now: i64,
@@ -338,6 +341,12 @@ fn compute_canonical(
         }
     };
     if current_epoch.saturating_sub(sample.last_update_epoch) > MAX_STAKE_POOL_EPOCH_LAG {
+        return Ok(None);
+    }
+    // Bind the pool's LST mint to the market's collateral. A gov-misconfigured pool (correct key,
+    // wrong underlying asset) degrades the leg to None — pricing the wrong LST would silently
+    // mis-cap the collateral. The stake-pool analog of the CLMM leg's per-crank mint check (audit #21).
+    if sample.pool_mint != collateral_mint.to_bytes() {
         return Ok(None);
     }
 

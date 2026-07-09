@@ -38,6 +38,7 @@
 /// `AccountType::StakePool` discriminant (borsh enum variant index at byte 0).
 const ACCOUNT_TYPE_STAKE_POOL: u8 = 1;
 
+const POOL_MINT_OFFSET: usize = 162; // 32 bytes — the LST mint this pool issues
 const TOTAL_LAMPORTS_OFFSET: usize = 258; // u64 LE
 const POOL_TOKEN_SUPPLY_OFFSET: usize = 266; // u64 LE
 const LAST_UPDATE_EPOCH_OFFSET: usize = 274; // u64 LE
@@ -59,6 +60,11 @@ pub enum StakePoolError {
 /// The fields the canonical leg needs out of a `StakePool` account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StakePoolSample {
+    /// The LST mint this pool issues. The caller binds it to the market's `collateral_mint` so a
+    /// gov-misconfigured pool (correct key, wrong underlying asset) can't price the wrong LST — the
+    /// stake-pool analog of the CLMM leg's per-crank mint-pair check (audit #21). Raw bytes to keep
+    /// this module dependency-free / host-testable; compare against `collateral_mint.to_bytes()`.
+    pub pool_mint: [u8; 32],
     /// Total SOL (lamports) backing the pool.
     pub total_lamports: u64,
     /// Total LST tokens minted (smallest unit).
@@ -85,13 +91,15 @@ pub fn parse(data: &[u8]) -> Result<StakePoolSample, StakePoolError> {
     if data[0] != ACCOUNT_TYPE_STAKE_POOL {
         return Err(StakePoolError::NotStakePool);
     }
+    let mut pool_mint = [0u8; 32];
+    pool_mint.copy_from_slice(&data[POOL_MINT_OFFSET..POOL_MINT_OFFSET + 32]);
     let total_lamports = read_u64_le(data, TOTAL_LAMPORTS_OFFSET);
     let pool_token_supply = read_u64_le(data, POOL_TOKEN_SUPPLY_OFFSET);
     let last_update_epoch = read_u64_le(data, LAST_UPDATE_EPOCH_OFFSET);
     if pool_token_supply == 0 || total_lamports == 0 {
         return Err(StakePoolError::DegenerateRate);
     }
-    Ok(StakePoolSample { total_lamports, pool_token_supply, last_update_epoch })
+    Ok(StakePoolSample { pool_mint, total_lamports, pool_token_supply, last_update_epoch })
 }
 
 #[cfg(test)]
@@ -102,10 +110,12 @@ mod tests {
         buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
     }
 
-    /// A StakePool buffer with a realistic ~1.18 SOL/jitoSOL rate (total/supply).
+    /// A StakePool buffer with a realistic ~1.18 SOL/jitoSOL rate (total/supply) and a recognizable
+    /// `pool_mint`.
     fn stake_pool_buf(total_lamports: u64, pool_token_supply: u64, epoch: u64) -> Vec<u8> {
         let mut buf = vec![0u8; 320]; // past min_len, mimicking the real account's larger tail
         buf[0] = ACCOUNT_TYPE_STAKE_POOL;
+        buf[POOL_MINT_OFFSET..POOL_MINT_OFFSET + 32].copy_from_slice(&[9u8; 32]);
         put_u64(&mut buf, TOTAL_LAMPORTS_OFFSET, total_lamports);
         put_u64(&mut buf, POOL_TOKEN_SUPPLY_OFFSET, pool_token_supply);
         put_u64(&mut buf, LAST_UPDATE_EPOCH_OFFSET, epoch);
@@ -116,6 +126,7 @@ mod tests {
     fn parses_balances_and_epoch() {
         // 1_180_000 SOL backing 1_000_000 jitoSOL ⇒ rate 1.18.
         let s = parse(&stake_pool_buf(1_180_000_000_000_000, 1_000_000_000_000_000, 742)).unwrap();
+        assert_eq!(s.pool_mint, [9u8; 32]);
         assert_eq!(s.total_lamports, 1_180_000_000_000_000);
         assert_eq!(s.pool_token_supply, 1_000_000_000_000_000);
         assert_eq!(s.last_update_epoch, 742);
