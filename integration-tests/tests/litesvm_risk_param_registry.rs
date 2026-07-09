@@ -87,6 +87,28 @@ fn oracle_divergence_relational_is_enforced() {
 }
 
 #[test]
+fn oracle_liq_divergence_floored_at_the_pyth_sb_corridor() {
+    // Audit #5: the liq-pause gate must stay `>=` the Pyth↔SB deviation corridor too, not just the
+    // TWAP leg. Flip the defaults (dev=100 < twap=500) by lowering the TWAP leg below the deviation
+    // corridor, so the DEVIATION leg is the binding floor and the twap leg can't mask it.
+    let (mut svm, gov, _cma, coll) = setup();
+    let dev = read_market_oracle(&svm, &coll).max_deviation_bps; // 100
+    set_oracle_param(&mut svm, &gov, &coll, 0, MarketParam::OracleTwapDivergence, (dev - 50) as u64); // twap = 50 < dev
+    // liq in (twap, dev): passes the TWAP leg (>= 50) but below the Pyth↔SB corridor (< 100) ⇒ reject.
+    let f = send(&mut svm, &[queue_param_change_oracle_ix(&gov.pubkey(), &coll, 1, MarketParam::OracleLiqDivergence, (dev - 25) as u64)], &gov, &[])
+        .expect_err("liq >= twap but < the Pyth↔SB deviation corridor");
+    assert_eq!(custom_code(&f), E_PARAM_COMBINATION_INVALID);
+    // At the corridor it's accepted (>= both legs).
+    set_oracle_param(&mut svm, &gov, &coll, 1, MarketParam::OracleLiqDivergence, dev as u64);
+    assert_eq!(read_market_oracle(&svm, &coll).liq_max_divergence_bps, dev);
+    // Reciprocal (the OracleMaxDeviation arm): once the liq gate is set, RAISING the deviation
+    // corridor above it is rejected too — the coupling holds from both sides.
+    let f = send(&mut svm, &[queue_param_change_oracle_ix(&gov.pubkey(), &coll, 2, MarketParam::OracleMaxDeviation, (dev + 100) as u64)], &gov, &[])
+        .expect_err("raising the deviation corridor above the liq gate");
+    assert_eq!(custom_code(&f), E_PARAM_COMBINATION_INVALID);
+}
+
+#[test]
 fn scr_above_mcr_is_rejected_relationally() {
     let (mut svm, gov, _cma, coll) = setup();
     // MCR defaults to MCR_BPS; raise SCR above it (but still under MAX_SCR_BPS) → mcr >= scr fails.

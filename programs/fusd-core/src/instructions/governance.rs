@@ -251,9 +251,26 @@ fn validate_param_for_market(
             require!(liq == 0 || liq >= value, FusdError::ParamCombinationInvalid);
             Ok(())
         }
+        // The Pyth↔SB deviation corridor is the OTHER mint-freeze leg — `aggregate` trips
+        // `liq_divergent` off BOTH it AND the Pyth↔TWAP leg — so it takes the same relational floor:
+        // the liq-pause gate must stay `>=` it too, else liquidations pause on a feed disagreement
+        // mild enough that mints stay open (twitchier than the mint gate, inverting the "looser than
+        // the mint thresholds" design intent). Reciprocal of the OracleLiqDivergence arm (audit #5).
+        MarketParam::OracleMaxDeviation => {
+            let liq = oracle.map_or(u64::MAX, |o| o.liq_max_divergence_bps as u64);
+            require!(liq == 0 || liq >= value, FusdError::ParamCombinationInvalid);
+            Ok(())
+        }
         MarketParam::OracleLiqDivergence => {
+            // The liq-pause gate must stay `>=` BOTH mint-corridor legs (Pyth↔TWAP divergence AND
+            // Pyth↔SB deviation), so it can only ever pause liquidations on a LARGER disagreement
+            // than the one that already froze mints.
             let twap = oracle.map_or(0, |o| o.twap_max_divergence_bps as u64);
-            require!(value == 0 || value >= twap, FusdError::ParamCombinationInvalid);
+            let dev = oracle.map_or(0, |o| o.max_deviation_bps as u64);
+            require!(
+                value == 0 || (value >= twap && value >= dev),
+                FusdError::ParamCombinationInvalid
+            );
             Ok(())
         }
         _ => Ok(()),

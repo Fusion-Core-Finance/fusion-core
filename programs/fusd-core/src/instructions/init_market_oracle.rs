@@ -171,10 +171,19 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
             .ok_or(FusdError::MathOverflow)?;
         require!(args.price_band_upper_ray >= min_upper, FusdError::ParamOutOfBounds);
     }
-    // Liquidation-divergence threshold: 0 = disabled; otherwise clamped (set looser than the mint
-    // deviation thresholds — enforced by deployer choice, not relationally, matching the other oracle
-    // thresholds' init-only clamp pattern).
+    // Liquidation-divergence threshold: 0 = disabled; otherwise clamped AND relationally floored at
+    // BOTH mint-freeze legs (Pyth↔TWAP divergence and Pyth↔SB deviation). The liq-pause gate must be
+    // `>=` both, so liquidations only ever pause on a LARGER disagreement than the one that froze
+    // mints — never twitchier than the mint gate. Enforced here to match the queue/execute relational
+    // check in governance.rs (`validate_param_for_market`); an inconsistent config can't slip in at
+    // init only to be un-adjustable later (audit #5).
     require!(args.liq_max_divergence_bps <= MAX_LIQ_DIVERGENCE_BPS, FusdError::ParamOutOfBounds);
+    require!(
+        args.liq_max_divergence_bps == 0
+            || (args.liq_max_divergence_bps >= args.twap_max_divergence_bps
+                && args.liq_max_divergence_bps >= args.max_deviation_bps),
+        FusdError::ParamOutOfBounds
+    );
     // C1 LST canonical-rate leg: if a stake pool is bound (LST market), the collateral mint must be
     // 9-decimal so `total_lamports / pool_token_supply` cancels to the whole-token SOL/LST rate
     // directly (SPL pool mints are 9-decimal). A non-LST market (`default`) imposes no constraint.
