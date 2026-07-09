@@ -31,3 +31,12 @@ impl RedemptionBitmap {
 // (no tail padding) for bytemuck.
 const _: () = assert!(RedemptionBitmap::SPACE == 8 + core::mem::size_of::<RedemptionBitmap>());
 const _: () = assert!(core::mem::size_of::<RedemptionBitmap>() % 8 == 0);
+// Field-offset pins (audit #18): the size assert above catches a size CHANGE, but a size-neutral
+// mid-struct field swap (two equal-width fields) would remap live bytes with no size drift and no
+// deserialization error (raw Pod cast reads by offset). Pin each field's offset so any reorder is a
+// compile error too.
+const _: () = assert!(core::mem::offset_of!(RedemptionBitmap, words) == 0);
+const _: () = assert!(core::mem::offset_of!(RedemptionBitmap, counts) == BITMAP_WORDS * 8);
+const _: () = assert!(
+    core::mem::offset_of!(RedemptionBitmap, zombie_count) == BITMAP_WORDS * 8 + NUM_RATE_BUCKETS * 4
+);

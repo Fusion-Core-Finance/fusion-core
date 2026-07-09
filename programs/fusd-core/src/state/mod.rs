@@ -65,6 +65,8 @@ mod layout_tests {
             assert_space(&std::mem::zeroed::<MarketOracle>(), MarketOracle::SPACE, "MarketOracle");
             assert_space(&std::mem::zeroed::<InsuranceBuffer>(), InsuranceBuffer::SPACE, "InsuranceBuffer");
             assert_space(&std::mem::zeroed::<GlobalBackstopReserve>(), GlobalBackstopReserve::SPACE, "GlobalBackstopReserve");
+            assert_space(&std::mem::zeroed::<DebtCeilingLine>(), DebtCeilingLine::SPACE, "DebtCeilingLine");
+            assert_space(&std::mem::zeroed::<SupplyReconciliation>(), SupplyReconciliation::SPACE, "SupplyReconciliation");
         }
         // TimelockedParam carries a MarketParam enum — explicit valid variant.
         let tl = TimelockedParam {

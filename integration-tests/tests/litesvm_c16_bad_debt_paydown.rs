@@ -37,7 +37,7 @@ fn set_param(svm: &mut litesvm::LiteSVM, gov: &Keypair, coll: &Pubkey, nonce: u6
 /// `unminted_interest`, then crash + liquidate it into un-homed `bad_debt` (no RP, empty buffer, no
 /// backstop accounts ⇒ the whole loss is un-homed, shutting the market down). Returns `(svm, gov,
 /// coll)` with `bad_debt > 0` AND `unminted_interest > 0`.
-fn market_with_bad_debt_and_pending_interest() -> (litesvm::LiteSVM, Keypair, Pubkey) {
+fn market_with_bad_debt_and_pending_interest() -> (litesvm::LiteSVM, Keypair, Pubkey, Actor) {
     let (mut svm, gov, cma) = actors();
     let coll = bootstrap_market(&mut svm, &gov, &cma);
     init_gov_gate(&mut svm, &gov);
@@ -58,12 +58,12 @@ fn market_with_bad_debt_and_pending_interest() -> (litesvm::LiteSVM, Keypair, Pu
     assert!(m.bad_debt > 0 && m.shutdown, "sole-position terminal liquidation ⇒ un-homed bad debt + shutdown");
     assert!(m.unminted_interest > 0, "a year of interest is pending in unminted_interest");
     assert_supply_invariant(&svm, &coll);
-    (svm, gov, coll)
+    (svm, gov, coll, victim)
 }
 
 #[test]
 fn paydown_diverts_interest_to_retire_bad_debt() {
-    let (mut svm, gov, coll) = market_with_bad_debt_and_pending_interest();
+    let (mut svm, gov, coll, _victim) = market_with_bad_debt_and_pending_interest();
     set_param(&mut svm, &gov, &coll, 0, MarketParam::BadDebtPaydown, 10_000); // 100% of post-keeper interest
 
     let m0 = read_market(&svm, &market_pda(&coll));
@@ -88,7 +88,7 @@ fn paydown_diverts_interest_to_retire_bad_debt() {
 
 #[test]
 fn paydown_disabled_by_default_mints_to_buffer() {
-    let (mut svm, gov, coll) = market_with_bad_debt_and_pending_interest();
+    let (mut svm, gov, coll, _victim) = market_with_bad_debt_and_pending_interest();
     assert_eq!(read_market(&svm, &market_pda(&coll)).bad_debt_paydown_bps, 0, "off by default");
 
     let m0 = read_market(&svm, &market_pda(&coll));
@@ -110,7 +110,7 @@ fn paydown_disabled_by_default_mints_to_buffer() {
 
 #[test]
 fn paydown_splits_interest_between_recovery_and_buffer() {
-    let (mut svm, gov, coll) = market_with_bad_debt_and_pending_interest();
+    let (mut svm, gov, coll, _victim) = market_with_bad_debt_and_pending_interest();
     set_param(&mut svm, &gov, &coll, 0, MarketParam::BadDebtPaydown, 4_000); // 40% to paydown, 60% to buffer
 
     let m0 = read_market(&svm, &market_pda(&coll));
@@ -129,5 +129,53 @@ fn paydown_splits_interest_between_recovery_and_buffer() {
         "the remaining 60% funded the buffer"
     );
     assert_eq!(m1.unminted_interest, 0);
+    assert_supply_invariant(&svm, &coll);
+}
+
+/// Move fUSD between ATAs (spl transfer) — recap plumbing for the full-retire case below.
+fn transfer_fusd(svm: &mut litesvm::LiteSVM, from: &Keypair, from_ata: &Pubkey, to_ata: &Pubkey, amount: u64) {
+    let ix = spl_token::instruction::transfer(&spl_token::ID, from_ata, to_ata, &from.pubkey(), &[], amount).unwrap();
+    send(svm, &[ix], from, &[]).expect("transfer fUSD");
+}
+
+/// The FULL-RETIRE branch (`want >= bad_debt`): when the diverted interest covers the whole
+/// outstanding `bad_debt`, `refresh_market` retires it to EXACTLY 0 (the `want.min(bad_debt)` cap
+/// picks `bad_debt`). The other three tests only ever hit a PARTIAL paydown (pending < bad_debt), so
+/// `bad_debt` never reaches 0 — this closes that coverage gap.
+///
+/// Construction: recap the loss down to the pending interest via `settle_bad_debt`. The only
+/// circulating fUSD is the victim's borrowed principal, and post-liquidation the supply invariant
+/// gives `bad_debt == circulating + unminted_interest`; so burning the entire circulating supply
+/// leaves `bad_debt == pending` exactly, and a 100% refresh then zeroes it.
+#[test]
+fn paydown_fully_retires_bad_debt_when_interest_covers_it() {
+    let (mut svm, gov, coll, victim) = market_with_bad_debt_and_pending_interest();
+    set_param(&mut svm, &gov, &coll, 0, MarketParam::BadDebtPaydown, 10_000); // 100%
+
+    // Recap: hand the victim's entire borrowed fUSD to gov and burn it via settle_bad_debt. That is
+    // the whole circulating supply, so it drops bad_debt to exactly the pending interest.
+    let circulating = token_balance(&svm, &victim.fusd_ata);
+    let gov_fusd = create_ata_and_fund(&mut svm, &gov, &gov.pubkey(), &fusd_mint_pda(), None, 0);
+    transfer_fusd(&mut svm, &victim.kp, &victim.fusd_ata, &gov_fusd, circulating);
+    send(&mut svm, &[settle_bad_debt_ix(&gov.pubkey(), &coll, &gov_fusd, circulating)], &gov, &[])
+        .expect("recap the principal");
+
+    let m1 = read_market(&svm, &market_pda(&coll));
+    assert_eq!(m1.bad_debt, m1.unminted_interest, "recap left bad_debt == pending interest (supply invariant)");
+    assert!(m1.bad_debt > 0, "a non-zero residual remains to be fully retired");
+    assert_eq!(mint_supply(&svm, &fusd_mint_pda()), 0, "the whole circulating supply was recapped");
+    let buffer_before = token_balance(&svm, &buffer_fusd_vault_pda(&coll));
+
+    // 100% paydown of the interest == the residual bad_debt ⇒ full retire; the (zero) remainder mints.
+    send(&mut svm, &[refresh_market_ix(&coll)], &gov, &[]).expect("refresh fully retires bad_debt");
+
+    let m2 = read_market(&svm, &market_pda(&coll));
+    assert_eq!(m2.bad_debt, 0, "bad_debt retired to exactly zero (the full-retire branch)");
+    assert_eq!(m2.unminted_interest, 0, "the pending interest was consumed");
+    assert_eq!(
+        token_balance(&svm, &buffer_fusd_vault_pda(&coll)),
+        buffer_before,
+        "buffer got nothing — interest exactly covered the residual, no remainder to mint"
+    );
     assert_supply_invariant(&svm, &coll);
 }

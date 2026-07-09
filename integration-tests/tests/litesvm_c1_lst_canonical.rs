@@ -220,3 +220,90 @@ fn wrong_stake_pool_account_reverts() {
     .expect_err("wrong stake pool key must revert");
     assert_eq!(custom_code(&f), E_INVALID_STAKE_POOL);
 }
+
+// --- Canonical-leg None branches (audit #13) -------------------------------------------------
+// `compute_canonical` returns `None` (⇒ mints freeze via `canonical_required`, but a conservative
+// market price is still served) on THREE degradations distinct from the absent-leg case above:
+// a STALE SOL/USD underlying, an un-parseable / degenerate stake pool, and an epoch-lagged pool.
+// Each below drives exactly one branch while keeping every other leg fresh + agreeing, and asserts
+// the fail-closed-but-serve outcome.
+
+#[test]
+fn stale_sol_usd_underlying_freezes_mints() {
+    // The stake pool is fresh, but the SOL/USD Pyth underlying is posted past `max_age_secs`
+    // (DEFAULT 60s) ⇒ `sol_pv.is_stale` ⇒ canonical None ⇒ mints freeze (market price still served).
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
+    let sol_usd = Pubkey::new_unique();
+    post_market(&mut svm, &h, 100);
+    let now = now_unix(&svm);
+    let epoch = now_epoch(&svm);
+    set_stake_pool(&mut svm, &stake_pool, lst(1_000_000), lst(1_000_000), epoch); // rate 1.0, fresh
+    // SOL/USD posted 120s in the past (> DEFAULT_ORACLE_MAX_AGE_SECS = 60) ⇒ stale.
+    set_pyth_price(&mut svm, &sol_usd, PYTH_SOL_USD_FEED_ID, pyth_usd(100), 0, PYTH_EXPO, now - 120);
+
+    send(
+        &mut svm,
+        &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
+        &gov,
+        &[],
+    )
+    .expect("crank with stale SOL/USD");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.mint_frozen, "stale SOL/USD underlying ⇒ canonical None ⇒ mints frozen");
+    assert_eq!(m.spot, spot_for_usd(100), "conservative market price still served");
+}
+
+#[test]
+fn degenerate_stake_pool_rate_freezes_mints() {
+    // SOL/USD fresh, but the stake pool has zero token supply ⇒ an undefined rate the parser rejects
+    // (`Err`) ⇒ canonical degrades to None ⇒ mints freeze (market price still served).
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
+    let sol_usd = Pubkey::new_unique();
+    post_market(&mut svm, &h, 100);
+    let now = now_unix(&svm);
+    let epoch = now_epoch(&svm);
+    set_pyth_price(&mut svm, &sol_usd, PYTH_SOL_USD_FEED_ID, pyth_usd(100), 0, PYTH_EXPO, now);
+    set_stake_pool(&mut svm, &stake_pool, lst(1_000_000), 0, epoch); // zero supply ⇒ degenerate rate
+
+    send(
+        &mut svm,
+        &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
+        &gov,
+        &[],
+    )
+    .expect("crank with degenerate stake pool");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.mint_frozen, "degenerate stake-pool rate ⇒ parse Err ⇒ canonical None ⇒ mints frozen");
+    assert_eq!(m.spot, spot_for_usd(100), "conservative market price still served");
+}
+
+#[test]
+fn epoch_lagged_stake_pool_freezes_mints() {
+    // Both legs fresh, but the stake pool's `last_update_epoch` trails the chain by more than
+    // MAX_STAKE_POOL_EPOCH_LAG (a pool whose rate hasn't been re-based recently) ⇒ canonical None ⇒
+    // mints freeze. Advance ONLY the clock epoch past the pool's stamp (unix/slot untouched, so no
+    // other leg goes stale).
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fresh_lst(&mut svm, &gov, &cma);
+    let sol_usd = Pubkey::new_unique();
+    post_market(&mut svm, &h, 100);
+    post_canonical(&mut svm, &sol_usd, &stake_pool, 100, lst(1_000_000), lst(1_000_000)); // pool stamped at epoch E
+
+    let mut clock: solana_sdk::clock::Clock = svm.get_sysvar();
+    clock.epoch = clock.epoch.saturating_add(fusd_core::constants::MAX_STAKE_POOL_EPOCH_LAG + 1);
+    svm.set_sysvar(&clock);
+    svm.expire_blockhash();
+
+    send(
+        &mut svm,
+        &[update_price_lst_ix(&gov.pubkey(), &coll, &h.pyth, Some(h.sb), Some(sol_usd), Some(stake_pool))],
+        &gov,
+        &[],
+    )
+    .expect("crank with epoch-lagged pool");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.mint_frozen, "stake-pool epoch lag > MAX ⇒ canonical None ⇒ mints frozen");
+    assert_eq!(m.spot, spot_for_usd(100), "conservative market price still served");
+}

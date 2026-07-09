@@ -32,7 +32,8 @@ pub struct InitMarketOracleArgs {
     pub twap_window_secs: i64,
     pub twap_min_samples: u32,
     pub twap_max_staleness_secs: i64,
-    /// Plausibility band, RAY-scaled USD per native collateral unit. Each bound
+    /// Plausibility band, RAY-scaled USD per whole collateral TOKEN (the `usd_ray` scale the
+    /// committed price is compared against — NOT per native unit; they differ by 10^decimals). Each bound
     /// `0` = disabled; when both are set they must be `>= MIN_PRICE_BAND_RATIO` apart (a coarse rail,
     /// not a tight opinion). Default `(0, 0)` = off — byte-identical to the pre-band oracle behavior.
     pub price_band_lower_ray: u128,

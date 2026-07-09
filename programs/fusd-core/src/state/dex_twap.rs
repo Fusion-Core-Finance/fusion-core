@@ -32,6 +32,17 @@ const _: () = assert!(
 );
 // %8 alignment pin for uniformity with the other zero-copy accounts.
 const _: () = assert!(core::mem::size_of::<DexTwap>() % 8 == 0);
+// Field-offset pins (audit #18): a size-neutral swap of two equal-width fields (e.g. next<->count,
+// both u64) would pass the size asserts + the mirror test yet silently remap bytes; pin the offsets
+// so any reorder is a compile error. (The mirror round-trip test already pins these behaviorally;
+// this makes the guarantee static + uniform across the zero-copy accounts.)
+const _: () = assert!(core::mem::offset_of!(DexTwap, prices) == 0);
+const _: () = assert!(core::mem::offset_of!(DexTwap, ts) == TWAP_RING_CAPACITY * 16);
+const _: () =
+    assert!(core::mem::offset_of!(DexTwap, next) == TWAP_RING_CAPACITY * 16 + TWAP_RING_CAPACITY * 8);
+const _: () = assert!(
+    core::mem::offset_of!(DexTwap, count) == TWAP_RING_CAPACITY * 16 + TWAP_RING_CAPACITY * 8 + 8
+);
 
 impl DexTwap {
     pub const SPACE: usize = 8 + core::mem::size_of::<DexTwap>(); // 8 + 1552 = 1560

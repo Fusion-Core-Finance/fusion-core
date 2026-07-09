@@ -51,7 +51,8 @@ pub struct MarketOracle {
 
     // --- Plausibility band — a coarse 10^k-scale / absolute-nonsense rail on the
     //     committed spot, mirroring `fusd_oracle::OracleConfig::band_{lower,upper}_ray`. RAY-scaled
-    //     USD per 1 native collateral unit; each bound `0` = disabled. Set 10×–100× wide at init and
+    //     USD per whole collateral TOKEN (the `usd_ray` scale the band is compared against in
+    //     `update_price` — NOT per native unit; they differ by 10^decimals); each bound `0` = disabled. Set 10×–100× wide at init and
     //     INIT-ONLY in v1 (no governance setter — a `MarketParam::PriceBand` would have to add a
     //     placement sanity check on top of the width clamp). The guardian gets NO band power. ---
     pub price_band_lower_ray: u128,
