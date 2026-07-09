@@ -178,6 +178,72 @@ fn urgent_redeem_winds_down_at_zero_fee_and_last_price() {
 }
 
 #[test]
+fn urgent_redeem_underwater_caps_at_collateral_value_no_overdraw() {
+    // Graceful degradation from a genuinely UNDERWATER position (debt > ink·price). urgent_redeem must
+    // pay the redeemer only the position's ACTUAL collateral (capped at coll_value), never face value
+    // for the full debt — so a redeemer cannot over-draw the vault, the unbacked residual is left
+    // orphaned on the drained position (contained), and the 4-term vault invariant still holds exactly.
+    // (Djed models this via P_sc = min(r, L/N_sc); fusion-core's per-position `min(debt, coll_value)`
+    // cap is the CDP analog — no test exercised the binding-on-coll_value case before.)
+    let mut svm = new_svm();
+    let gov = Keypair::new();
+    airdrop_sol(&mut svm, &gov.pubkey(), 10_000);
+    let cma = Keypair::new();
+    let coll = bootstrap_market(&mut svm, &gov, &cma);
+    send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll, spot_for_usd(100))], &gov, &[]).expect("price $100");
+
+    // A: 10 coll @ $100 = $1000 value, $600 debt (CR 167%, healthy to open) — the redemption target.
+    let a = open_borrower(&mut svm, &cma, &coll, 10, usd(600));
+    // B: the redeemer, well-collateralized, holding $600 fUSD.
+    let b = open_borrower(&mut svm, &cma, &coll, 40, usd(600));
+
+    // Price collapses to $50: A is now UNDERWATER — 10 coll · $50 = $500 value < $600 debt.
+    send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll, spot_for_usd(50))], &gov, &[]).expect("price $50");
+    // Oracle then dies + shutdown → urgent_redeem winds down at the last ($50) price, no staleness gate.
+    warp_slots(&mut svm, oracle_staleness() + 1);
+    send(&mut svm, &[shutdown_ix(&gov.pubkey(), &coll)], &gov, &[]).expect("shutdown");
+
+    let b_coll_before = token_balance(&svm, &b.coll_ata);
+
+    // B urgent-redeems $600 against the underwater A. redeem_amt = min($600 want, $600 debt, $500
+    // coll_value) = $500 — BINDING on coll_value. B receives A's FULL collateral (10 tokens, worth $500
+    // at $50), NOT $600 worth (12 tokens A does not have), and burns only the $500 it could redeem.
+    send(
+        &mut svm,
+        &[urgent_redeem_ix(&b.kp.pubkey(), &coll, &b.fusd_ata, &b.coll_ata, &[a.position], usd(600))],
+        &b.kp,
+        &[],
+    )
+    .expect("urgent_redeem underwater");
+
+    // No over-draw: B got exactly A's collateral (10 tokens), and burned only the redeemable $500.
+    assert_eq!(
+        token_balance(&svm, &b.coll_ata),
+        b_coll_before + whole_coll(10),
+        "B receives A's actual collateral, not face value for the full debt",
+    );
+    assert_eq!(
+        token_balance(&svm, &b.fusd_ata),
+        usd(600) - usd(500),
+        "B burned only the $500 it could redeem against A's collateral, not the full $600",
+    );
+
+    // A is drained to ink 0 with the unbacked residual $100 debt left orphaned (contained, never paid out).
+    let pa = read_position(&svm, &a.position);
+    assert_eq!(pa.ink, 0, "A's collateral is fully drawn");
+    assert_eq!(pa.recorded_debt, usd(100) as u128, "residual $100 debt orphaned on the drained position");
+
+    // The vault invariant still holds exactly — the redeemer could not over-draw the vault.
+    let m = read_market(&svm, &market_pda(&coll));
+    assert_eq!(m.surplus_collateral, 0, "urgent_redeem is 0-fee");
+    assert_eq!(
+        token_balance(&svm, &coll_vault_pda(&coll)),
+        m.total_collateral as u64 + m.surplus_collateral,
+        "vault == total_collateral + surplus after an underwater urgent_redeem",
+    );
+}
+
+#[test]
 fn urgent_redeem_is_unordered() {
     // Two positions in DIFFERENT rate buckets: A @ 5% (lower bucket), B @ 6% (higher bucket).
     // urgent_redeem can target B directly — which ordered `redeem` could never reach before A.

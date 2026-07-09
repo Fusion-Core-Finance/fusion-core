@@ -44,7 +44,8 @@ scripts/check-stack-offsets.sh -- --features dev-oracle
 # and then scans them, so ci-checks always leaves a verified production artifact in target/ — a
 # deploy straight after this script ships the real program, never the dev-oracle .so a feature
 # build above left behind. Keep any step that runs `anchor build -- --features …` ABOVE this one.
-step "7/7  isolation gates (production build must not expose dev_set_price or the cvlr/certora deps)"
+step "7/7  isolation + source-hygiene gates (no dev_set_price / cvlr-certora leak; no floats in the SBF money path)"
+scripts/check-no-floats.sh   # pure source scan (no build) — run first, fail-fast
 scripts/check-no-dev-oracle.sh
 scripts/check-no-certora.sh
 
