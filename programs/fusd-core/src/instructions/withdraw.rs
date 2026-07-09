@@ -48,7 +48,11 @@ pub struct Withdraw<'info> {
 
 pub fn handler(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     require!(amount > 0, FusdError::ZeroAmount);
-    let now = Clock::get()?.unix_timestamp;
+    // One Clock fetch reused for both the accrual timestamp and the two staleness-slot checks
+    // below (the value is constant within an instruction).
+    let clock = Clock::get()?;
+    let now = clock.unix_timestamp;
+    let slot = clock.slot;
     let art_before = ctx.accounts.position.recorded_debt;
     let old_weighted = accrual::weighted(&ctx.accounts.position)?;
     // Accrue the market, then realize this position's interest + any pending tier-2 redistribution
@@ -63,7 +67,6 @@ pub fn handler(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     let recorded_debt = ctx.accounts.position.recorded_debt;
     if recorded_debt > 0 {
         let spot = ctx.accounts.market.spot;
-        let slot = Clock::get()?.slot;
         require!(spot > 0, FusdError::OracleUnavailable);
         require!(
             slot.saturating_sub(ctx.accounts.market.spot_updated_slot) <= MAX_PRICE_STALENESS_SLOTS,
@@ -89,7 +92,6 @@ pub fn handler(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     // deposit, withdraw, and liquidation all stay open with no admin involvement.
     if ctx.accounts.market.ccr_bps > 0 && !ctx.accounts.market.shutdown {
         let m = &ctx.accounts.market;
-        let slot = Clock::get()?.slot;
         let fresh =
             m.spot > 0 && slot.saturating_sub(m.spot_updated_slot) <= MAX_PRICE_STALENESS_SLOTS;
         if fresh {

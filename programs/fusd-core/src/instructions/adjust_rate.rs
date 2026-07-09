@@ -42,6 +42,10 @@ pub struct AdjustRate<'info> {
 }
 
 pub fn handler(ctx: Context<AdjustRate>, new_rate_bps: u16) -> Result<()> {
+    // Rejected in a shut-down market: the rate buckets it maintains only order live redemptions,
+    // but a terminal market winds down via unordered 0-fee `urgent_redeem`, so a rate change does
+    // nothing useful — and would still charge the premature-adjustment fee. Matches borrow/redeem.
+    require!(!ctx.accounts.market.shutdown, FusdError::MarketShutdown);
     require!(
         new_rate_bps >= MIN_USER_RATE_BPS && new_rate_bps <= MAX_USER_RATE_BPS,
         FusdError::InterestRateOutOfBounds
