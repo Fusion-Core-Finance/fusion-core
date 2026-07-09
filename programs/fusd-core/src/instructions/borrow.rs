@@ -4,7 +4,8 @@ use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 use crate::accrual;
 use crate::cdp;
 use crate::constants::{
-    FUSD_MINT_SEED, MARKET_SEED, MAX_PRICE_STALENESS_SLOTS, MINT_AUTHORITY_SEED, POSITION_SEED,
+    FUSD_MINT_SEED, MARKET_SEED, MAX_PRICE_STALENESS_SLOTS, MINT_AUTHORITY_BUMP, MINT_AUTHORITY_SEED,
+    POSITION_SEED,
     RATELIMIT_WINDOW_SECS, REDEMPTION_BITMAP_SEED,
 };
 use crate::errors::FusdError;
@@ -33,7 +34,7 @@ pub struct Borrow<'info> {
     pub fusd_mint: Account<'info, Mint>,
 
     /// CHECK: the fUSD mint-authority PDA; only signs minting from inside this rule.
-    #[account(seeds = [MINT_AUTHORITY_SEED], bump)]
+    #[account(seeds = [MINT_AUTHORITY_SEED], bump = MINT_AUTHORITY_BUMP)]
     pub mint_authority: UncheckedAccount<'info>,
 
     #[account(mut, token::mint = fusd_mint, token::authority = owner)]
@@ -167,7 +168,7 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     accrual::reweight(&mut ctx.accounts.market, &ctx.accounts.position, old_weighted)?;
     crate::redist::set_stake(&mut ctx.accounts.market, &mut ctx.accounts.position)?;
 
-    let bump = ctx.bumps.mint_authority;
+    let bump = MINT_AUTHORITY_BUMP;
     let signer: &[&[&[u8]]] = &[&[MINT_AUTHORITY_SEED, &[bump]]];
     token::mint_to(
         CpiContext::new_with_signer(

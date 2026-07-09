@@ -51,6 +51,13 @@ pub const BACKSTOP_SEED: &[u8] = b"backstop";
 pub const BACKSTOP_FUSD_VAULT_SEED: &[u8] = b"backstop_fusd";
 /// `[b"mint_authority"]` — the only signer that may mint/burn fUSD.
 pub const MINT_AUTHORITY_SEED: &[u8] = b"mint_authority";
+/// Canonical bump for the `[MINT_AUTHORITY_SEED]` PDA under this program's ID. Hardcoding it lets the
+/// hot mint-signer paths (`borrow`, `refresh_market`) resolve the account with `bump =
+/// MINT_AUTHORITY_BUMP` (one `create_program_address` hash) instead of the ~6k-CU
+/// `find_program_address` search. Pinned to the derived canonical bump by the
+/// `mint_authority_bump_is_canonical` test below, so a redeploy to a NEW program ID can't silently
+/// ship a stale bump (the test fails). (Audit #15.)
+pub const MINT_AUTHORITY_BUMP: u8 = 251;
 /// `[b"fusd_mint"]` — the fUSD mint PDA (freeze authority None).
 pub const FUSD_MINT_SEED: &[u8] = b"fusd_mint";
 /// `[b"supply_recon"]` — the global supply-reconciliation (proof-of-reserves) singleton.
@@ -492,3 +499,19 @@ pub const MPL_TOKEN_METADATA_PROGRAM_ID: Pubkey =
 // TODO(params milestone): compile-time `[min, max]` clamps for every governable
 // parameter (MCR/CCR/SCR, debt ceiling, fees, rate bounds, rate-bucket width...).
 // These are program constants — never governance-settable. See fusion-docs.md.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::prelude::Pubkey;
+
+    /// The hardcoded `MINT_AUTHORITY_BUMP` must equal the canonical bump derived for THIS program ID
+    /// — else `borrow`/`refresh_market` (which resolve the mint-signer with `bump =
+    /// MINT_AUTHORITY_BUMP`) fail to sign. A redeploy to a new program ID that changes the bump trips
+    /// this test (audit #15).
+    #[test]
+    fn mint_authority_bump_is_canonical() {
+        let (_, bump) = Pubkey::find_program_address(&[MINT_AUTHORITY_SEED], &crate::ID);
+        assert_eq!(bump, MINT_AUTHORITY_BUMP, "MINT_AUTHORITY_BUMP is stale for the current program ID");
+    }
+}

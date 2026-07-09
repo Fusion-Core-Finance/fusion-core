@@ -2,7 +2,9 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
 use crate::accrual;
-use crate::constants::{BUFFER_SEED, FUSD_MINT_SEED, MARKET_SEED, MINT_AUTHORITY_SEED};
+use crate::constants::{
+    BUFFER_SEED, FUSD_MINT_SEED, MARKET_SEED, MINT_AUTHORITY_BUMP, MINT_AUTHORITY_SEED,
+};
 use crate::errors::FusdError;
 use crate::state::{InsuranceBuffer, Market};
 
@@ -23,7 +25,7 @@ pub struct RefreshMarket<'info> {
     pub fusd_mint: Box<Account<'info, Mint>>,
 
     /// CHECK: the fUSD mint-authority PDA; only signs minting from inside the protocol rules.
-    #[account(seeds = [MINT_AUTHORITY_SEED], bump)]
+    #[account(seeds = [MINT_AUTHORITY_SEED], bump = MINT_AUTHORITY_BUMP)]
     pub mint_authority: UncheckedAccount<'info>,
 
     #[account(mut, seeds = [BUFFER_SEED, collateral_mint.key().as_ref()], bump = insurance_buffer.bump)]
@@ -126,7 +128,7 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
         };
     let buffer_amount = post_paydown - backstop_cut;
 
-    let bump = ctx.bumps.mint_authority;
+    let bump = MINT_AUTHORITY_BUMP;
     let signer: &[&[&[u8]]] = &[&[MINT_AUTHORITY_SEED, &[bump]]];
     if buffer_amount > 0 {
         token::mint_to(
