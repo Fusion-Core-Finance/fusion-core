@@ -35,6 +35,9 @@ pub enum MarketParam {
     /// collar-fundability/RP-solvency products (`validate_market_config`).
     Mcr,
     /// `debt_ceiling` — fUSD-native debt cap. A ceiling (no upper clamp); 0 pauses new debt.
+    /// NB: on a market with a `DebtCeilingLine` (auto-line), the next permissionless `bump` re-derives
+    /// `debt_ceiling` from `MIN(line, debt + gap)`, overriding this param — govern such a market via
+    /// `set_debt_ceiling_line` instead (audit #10; see `state/debt_ceiling_line.rs`).
     DebtCeiling,
     /// `redemption_fee_bps` — flat redemption fee (bps). Clamp: `<= MAX_REDEMPTION_FEE_BPS`.
     RedemptionFee,

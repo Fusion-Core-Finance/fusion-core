@@ -6,6 +6,7 @@
 //!     anchor build -- --features dev-oracle
 //!     cargo test -p fusd-integration-tests --test litesvm_debt_ceiling_line
 
+use fusd_core::state::MarketParam;
 use fusd_integration_tests::*;
 use solana_sdk::signature::{Keypair, Signer};
 
@@ -127,4 +128,35 @@ fn governance_set_applies_new_params_immediately() {
     airdrop_sol(&mut svm, &rando.pubkey(), 10);
     let f = send(&mut svm, &[set_debt_ceiling_line_ix(&rando.pubkey(), &coll, usd(99_999), usd(99_999), 0)], &rando, &[]).expect_err("not gov");
     assert_eq!(custom_code(&f), E_UNAUTHORIZED);
+}
+
+#[test]
+fn auto_line_bump_overrides_a_debt_ceiling_param_change() {
+    // Audit #10: on a market WITH an auto-line, the permissionless bump re-derives Market.debt_ceiling
+    // from MIN(line, debt+gap) — so a (timelocked) DebtCeiling PARAM change is transient, overridden by
+    // the next bump. It is BOUNDED (never above the gov-set `line`), not an escalation; the correct
+    // lever for an auto-line market is set_debt_ceiling_line (the `line`). This pins that interaction.
+    let (mut svm, gov, cma) = actors();
+    let coll = bootstrap_market(&mut svm, &gov, &cma);
+    let market = market_pda(&coll);
+    send(&mut svm, &[init_governance_gate_ix(&gov.pubkey(), &gov.pubkey(), 0)], &gov, &[]).expect("gov gate");
+    send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll, spot_for_usd(100))], &gov, &[]).expect("price");
+    // Auto-line: line $50k, gap $10k. No debt ⇒ ceiling = min(50k, 0+10k) = $10k.
+    send(&mut svm, &[init_debt_ceiling_line_ix(&gov.pubkey(), &coll, usd(50_000), usd(10_000), HOUR)], &gov, &[]).expect("init auto-line");
+    assert_eq!(read_market(&svm, &market).debt_ceiling, usd(10_000));
+
+    // A timelocked DebtCeiling param LOWERS the live ceiling to $2k (queue + execute, timelock 0).
+    send(&mut svm, &[queue_param_change_ix(&gov.pubkey(), &coll, 0, MarketParam::DebtCeiling, usd(2_000))], &gov, &[]).expect("queue DebtCeiling");
+    send(&mut svm, &[execute_param_change_ix(&gov.pubkey(), &coll, 0)], &gov, &[]).expect("execute DebtCeiling");
+    assert_eq!(read_market(&svm, &market).debt_ceiling, usd(2_000), "DebtCeiling param applied");
+
+    // The next permissionless bump re-derives the ceiling from the auto-line, OVERRIDING the param
+    // back to min(line, debt+gap) = min(50k, 0+10k) = $10k — never above the hard `line`.
+    warp_unix(&mut svm, HOUR);
+    send(&mut svm, &[bump_debt_ceiling_ix(&gov.pubkey(), &coll)], &gov, &[]).expect("bump");
+    assert_eq!(
+        read_market(&svm, &market).debt_ceiling,
+        usd(10_000),
+        "auto-line bump overrode the DebtCeiling param (bounded by line)"
+    );
 }

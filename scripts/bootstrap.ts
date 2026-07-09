@@ -206,6 +206,10 @@ async function main() {
         market, marketOracle, dexTwap, systemProgram: SystemProgram.programId,
       }).rpc());
 
+    // LOAD-BEARING ORDERING (audit #24): the ReactorPool + InsuranceBuffer below are liquidation
+    // PREREQUISITES — `liquidate` requires both as non-optional accounts, while `borrow` does not.
+    // A market must NOT be opened for borrowing before these succeed, or it would be un-liquidatable
+    // until governance inits them. This loop always creates them before returning; do not reorder.
     await trySend("init_reactor_pool", () =>
       program.methods.initReactorPool().accounts({
         authority: me, config, collateralMint: coll, fusdMint, market, reactorPool,

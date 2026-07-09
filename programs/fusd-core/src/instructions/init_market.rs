@@ -1,3 +1,15 @@
+//! `init_market` — create a collateral market's `Market` + collateral vault + redemption bitmap.
+//!
+//! ORDERING INVARIANT (audit #24): a market's `ReactorPool` and `InsuranceBuffer` must be initialized
+//! (`init_reactor_pool` + `init_insurance_buffer`, both gov_authority-gated) BEFORE the market is
+//! opened for borrowing. `borrow` deliberately does NOT require those accounts (they're off the hot
+//! mint path), but `liquidate` requires BOTH as non-optional accounts — so a market that mints debt
+//! before they exist would be un-liquidatable (`AccountNotInitialized`) until governance inits them.
+//! This is NOT enforced on-chain (an on-chain `borrow`-time guard would cost the hot path a flag +
+//! read for an ordering the bootstrap already controls); it is guaranteed by the deploy sequence —
+//! `scripts/bootstrap.ts` inits market → oracle → reactor_pool → insurance_buffer per market before
+//! any position opens. Keep that order load-bearing.
+
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 

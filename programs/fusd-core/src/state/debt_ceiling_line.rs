@@ -11,6 +11,13 @@ use anchor_lang::prelude::*;
 /// `line`/`gap`/`ttl` (gov_authority-gated); the permissionless crank can only ever move the live
 /// ceiling WITHIN `[debt, line]`, never past the gov-set `line` — so opening the crank to anyone
 /// adds no authority over the cap.
+///
+/// INTERACTION WITH THE `DebtCeiling` PARAM (audit #10): on a market that HAS an auto-line, govern the
+/// ceiling via `set_debt_ceiling_line` (the hard `line`), NOT the timelocked `DebtCeiling`
+/// `MarketParam`. Both write `Market.debt_ceiling`, but the next permissionless `bump` re-derives it
+/// from `MIN(line, debt + gap)` — so a `DebtCeiling` param change is transient (overridden by the next
+/// bump). It is BOUNDED, not an escalation: a bump can never raise the ceiling above the gov-set
+/// `line`. Pinned by `litesvm_debt_ceiling_line::auto_line_bump_overrides_a_debt_ceiling_param_change`.
 #[account]
 #[derive(Debug)]
 pub struct DebtCeilingLine {
