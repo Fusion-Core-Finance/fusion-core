@@ -131,3 +131,43 @@ fn liquidation_succeeds_when_underwater_even_at_debt_spot() {
     assert_eq!(p.recorded_debt, 0);
     assert_eq!(p.ink, 0);
 }
+
+#[test]
+fn redemption_pays_at_mid_not_the_low_spot() {
+    // Under a confidence band (spot < mid < debt_spot) redemption must pay at the MID
+    // ((spot + debt_spot)/2), NOT the conservative LOW spot: dividing the outflow by the LOW price
+    // hands out MORE collateral than a dollar is worth, over-paying the redeemer by the band and
+    // draining the lowest-rate borrower. (Audit #1; BOLD/Liquity pay redemption at the single price.)
+    let (mut svm, gov, cma) = actors();
+    let (coll, h) = reach_fresh(&mut svm, &gov, &cma);
+    // bootstrap_market defaults redemption_fee_bps = 0, so the redeemer's payout is exactly the
+    // collateral drawn (nothing to net out) — the assertion below reads the raw mid conversion.
+
+    // Lowest-bucket borrower (rate 100) with ample collateral; a separate redeemer holding $300 fUSD.
+    let b = open_borrower_rate(&mut svm, &cma, &coll, 10, usd(300), 100);
+    let r = open_borrower_rate(&mut svm, &cma, &coll, 10, usd(300), 500);
+
+    // Confident crank: mid $100, conf $3 ⇒ spot ≈ $93.64 < mid $100 < debt_spot ≈ $106.36.
+    crank_confident(&mut svm, &gov, &coll, &h, 100, 3);
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.debt_spot > m.spot, "conf > 0 ⇒ the band is open (spot < debt_spot)");
+
+    let redeem_amt = usd(100) as u128;
+    let mid = (m.spot + m.debt_spot) / 2;
+    let at_mid = fusd_math::mul_div_floor(redeem_amt, fusd_math::RAY, mid).unwrap();
+    let at_low = fusd_math::mul_div_floor(redeem_amt, fusd_math::RAY, m.spot).unwrap();
+    assert!(at_mid < at_low, "mid pays strictly LESS collateral than the low spot ({at_mid} < {at_low})");
+
+    send(
+        &mut svm,
+        &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(100))],
+        &r.kp,
+        &[],
+    )
+    .expect("redeem");
+    assert_eq!(
+        token_balance(&svm, &r.coll_ata) as u128,
+        at_mid,
+        "redemption pays at MID, not the LOW spot (the confidence-band over-pay is removed)",
+    );
+}

@@ -68,9 +68,13 @@ pub fn handler<'info>(
     // shutdown moment, capping per-position interest in `realize`.
     accrual::accrue(&mut ctx.accounts.market, now)?;
     let spot = ctx.accounts.market.spot;
+    let debt_spot = ctx.accounts.market.debt_spot;
     // Face value at the LAST price — no staleness gate (a wind-down must proceed even on an oracle
-    // outage). A price must exist, though (a never-priced market has no debt to wind down anyway).
-    require!(spot > 0, FusdError::OracleUnavailable);
+    // outage). Pay at the MID (`(spot + debt_spot)/2`), same as ordered `redeem`, so the wind-down
+    // never over-pays at the conservative LOW `spot`. A price must exist (a never-priced market has no
+    // debt to wind down anyway).
+    require!(spot > 0 && debt_spot > 0, FusdError::OracleUnavailable);
+    let mid = (spot + debt_spot) / 2;
 
     let coll_mint = ctx.accounts.collateral_mint.key();
     let mut remaining = amount as u128;
@@ -108,7 +112,7 @@ pub fn handler<'info>(
         accrual::realize(&ctx.accounts.market, &mut pos, now)?;
 
         let debt = pos.recorded_debt;
-        let coll_value = ray_mul(pos.ink as u128, spot).ok_or(FusdError::MathOverflow)?;
+        let coll_value = ray_mul(pos.ink as u128, mid).ok_or(FusdError::MathOverflow)?;
         // Cap at the position's debt AND collateral value ⇒ never creates bad debt, never over-draws.
         let redeem_amt = remaining.min(debt).min(coll_value);
         if redeem_amt == 0 {
@@ -124,7 +128,7 @@ pub fn handler<'info>(
             pos.exit(&crate::ID)?;
             continue;
         }
-        let coll_total = mul_div_floor(redeem_amt, RAY, spot)
+        let coll_total = mul_div_floor(redeem_amt, RAY, mid)
             .ok_or(FusdError::MathOverflow)?
             .min(pos.ink as u128);
 

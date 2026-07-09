@@ -64,13 +64,22 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     let now = clock.unix_timestamp;
     accrual::accrue(&mut ctx.accounts.market, now)?;
     let spot = ctx.accounts.market.spot;
+    let debt_spot = ctx.accounts.market.debt_spot;
+    // Redemption pays at the MID oracle price, NOT the conservative LOW `spot`: dividing an outflow by
+    // the LOW price hands out MORE collateral than a dollar is worth, so during a wide-confidence spike
+    // redemption is profitable AT peg and drains the lowest-rate borrowers for no peg benefit. `spot =
+    // mid − k·σ` and `debt_spot = mid + k·σ` are symmetric about the mid, so `(spot + debt_spot)/2`
+    // reconstructs it (exact for a non-LST market; for an LST market it is the midpoint of the
+    // canonical-capped-low and raw-high — still un-skewed by the confidence band). BOLD/Liquity pay
+    // redemption at the single oracle price; this matches that.
+    let mid = (spot + debt_spot) / 2;
 
     // C9 dynamic redemption base-rate: when enabled (`redemption_base_rate_max_bps > 0`), the fee is
-    // the flat `redemption_fee_bps` FLOOR plus a decaying volume-spike base-rate, clamped to
-    // `MAX_REDEMPTION_FEE_BPS`. Decay the stored base-rate to `now` ONCE (the rate is fixed across
-    // this redemption, like Liquity); the post-redemption bump is applied below. When disabled
-    // (`max_bps == 0`) the base-rate stays inert at 0 and the fee is exactly the flat floor
-    // (byte-identical to pre-C9). `total_debt_before` (post-accrue, pre-redeem) is the bump denominator.
+    // the flat `redemption_fee_bps` FLOOR plus a volume-spike base-rate (decays over time), clamped to
+    // `MAX_REDEMPTION_FEE_BPS`. Decay the stored base-rate to `now` here; THIS redemption's volume bump
+    // and the fee itself are applied AFTER the loop, once `redeemed_fusd` is known — so the fee reflects
+    // this redemption's own size (BOLD-faithful: Liquity's `_updateBaseRateFromRedemption` runs before
+    // `_getRedemptionFee`). `total_debt_before` (post-accrue, pre-redeem) is the bump denominator.
     let base_rate_max_bps = ctx.accounts.market.redemption_base_rate_max_bps;
     let total_debt_before = ctx.accounts.market.agg_recorded_debt;
     let decayed_base_rate = if base_rate_max_bps > 0 {
@@ -81,16 +90,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     } else {
         0
     };
-    let fee_bps = rdm::effective_fee_bps(
-        decayed_base_rate,
-        ctx.accounts.market.redemption_fee_bps,
-        base_rate_max_bps,
-        MAX_REDEMPTION_FEE_BPS,
-    ) as u128;
 
-    // Redemption pays face value against a fresh oracle.
+    // Redemption pays face value against a fresh oracle. Both legs must be present for the mid.
     let slot = clock.slot;
-    require!(spot > 0, FusdError::OracleUnavailable);
+    require!(spot > 0 && debt_spot > 0, FusdError::OracleUnavailable);
     require!(
         slot.saturating_sub(ctx.accounts.market.spot_updated_slot) <= MAX_PRICE_STALENESS_SLOTS,
         FusdError::StalePrice
@@ -173,8 +176,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     order.sort_by(|a, b| rb::cmp_collateral_ratio(a.1, a.2, b.1, b.2));
 
     let mut remaining = amount as u128;
-    let mut redeemer_coll_total: u128 = 0;
-    let mut fee_coll_total: u128 = 0;
+    // Total collateral removed from positions; split into redeemer payout + protocol fee AFTER the
+    // loop, once `redeemed_fusd` is known and the base-rate has been bumped (BOLD-faithful fee).
+    let mut coll_drawn_total: u128 = 0;
 
     for (idx, _, _) in order.iter() {
         if remaining == 0 {
@@ -184,21 +188,20 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
         let mut pos = Account::<Position>::try_from(info)?;
 
         let debt = pos.recorded_debt; // already realized in the validation pass above
-        let coll_value = ray_mul(pos.ink as u128, spot).ok_or(FusdError::MathOverflow)?;
-        // Cap at the position's debt AND its collateral value, so redemption never creates bad
+        let coll_value = ray_mul(pos.ink as u128, mid).ok_or(FusdError::MathOverflow)?;
+        // Cap at the position's debt AND its collateral value (at mid), so redemption never creates bad
         // debt on an under-water position.
         let redeem_amt = remaining.min(debt).min(coll_value);
         if redeem_amt == 0 {
             continue;
         }
-        // Collateral removed at face value (floor against the redeemer), capped at `ink`.
-        let coll_total = mul_div_floor(redeem_amt, RAY, spot)
+        // Collateral removed at the MID price (floor), capped at `ink`. The fee is skimmed from the
+        // aggregate after the loop (post-bump); the position always loses exactly `coll_total`.
+        let coll_total = mul_div_floor(redeem_amt, RAY, mid)
             .ok_or(FusdError::MathOverflow)?
             .min(pos.ink as u128);
         // Recorded debt is in fUSD-native units: redeeming `redeem_amt` reduces it by exactly that
         // (full redemption zeroes it). `redeem_amt <= debt` by the cap above.
-        let fee_coll = coll_total.checked_mul(fee_bps).ok_or(FusdError::MathOverflow)? / 10_000;
-        let redeemer_coll = coll_total - fee_coll;
         let old_weighted = accrual::weighted(&pos)?;
 
         // Apply to the position + market aggregates.
@@ -216,12 +219,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
             .total_collateral
             .checked_sub(coll_total)
             .ok_or(FusdError::MathOverflow)?;
-        ctx.accounts.market.surplus_collateral = ctx
-            .accounts
-            .market
-            .surplus_collateral
-            .checked_add(fee_coll as u64)
-            .ok_or(FusdError::MathOverflow)?;
 
         // Drop the redeemed debt from the weighted sum and recompute the stake (ink reduced).
         accrual::reweight(&mut ctx.accounts.market, &pos, old_weighted)?;
@@ -238,24 +235,45 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
         // Persist the (manually-loaded) position back to its account.
         pos.exit(&crate::ID)?;
 
-        redeemer_coll_total = redeemer_coll_total
-            .checked_add(redeemer_coll)
+        coll_drawn_total = coll_drawn_total
+            .checked_add(coll_total)
             .ok_or(FusdError::MathOverflow)?;
-        fee_coll_total = fee_coll_total.checked_add(fee_coll).ok_or(FusdError::MathOverflow)?;
         remaining -= redeem_amt;
     }
 
     let redeemed_fusd = (amount as u128) - remaining;
     require!(redeemed_fusd > 0, FusdError::NothingToRedeem);
 
-    // C9: commit the dynamic base-rate — decayed value PLUS this redemption's volume bump
-    // (`+= (redeemed / pre-redemption debt) / BETA`), anchored at `now`. Only when enabled; disabled
-    // markets leave the base-rate inert at 0 (no state churn, byte-identical pre-C9 behavior).
+    // C9 (BOLD-faithful): bump the base-rate with THIS redemption's volume FIRST
+    // (`+= (redeemed / pre-redemption debt) / BETA`), then charge the fee at the POST-bump rate — so a
+    // large redemption pays the deterrent its own size triggers (Liquity updates the base-rate before
+    // computing the fee). Disabled markets keep the base-rate inert at 0 (flat-floor fee, unchanged).
+    let new_base_rate = if base_rate_max_bps > 0 {
+        rdm::bump_base_rate(decayed_base_rate, redeemed_fusd, total_debt_before)
+    } else {
+        0
+    };
     if base_rate_max_bps > 0 {
-        ctx.accounts.market.redemption_base_rate =
-            rdm::bump_base_rate(decayed_base_rate, redeemed_fusd, total_debt_before);
+        ctx.accounts.market.redemption_base_rate = new_base_rate;
         ctx.accounts.market.redemption_base_rate_ts = now;
     }
+    let fee_bps = rdm::effective_fee_bps(
+        new_base_rate,
+        ctx.accounts.market.redemption_fee_bps,
+        base_rate_max_bps,
+        MAX_REDEMPTION_FEE_BPS,
+    ) as u128;
+    // Skim the fee from the TOTAL collateral drawn (retained as protocol surplus); the redeemer gets the
+    // rest. Aggregating the fee rounds it UP by < 1 native unit/position vs the old per-position floor —
+    // the protocol-favoring direction (fees round up).
+    let fee_coll_total = coll_drawn_total.checked_mul(fee_bps).ok_or(FusdError::MathOverflow)? / 10_000;
+    let redeemer_coll_total = coll_drawn_total - fee_coll_total;
+    ctx.accounts.market.surplus_collateral = ctx
+        .accounts
+        .market
+        .surplus_collateral
+        .checked_add(fee_coll_total as u64)
+        .ok_or(FusdError::MathOverflow)?;
 
     // Burn the redeemed fUSD from the redeemer.
     token::burn(

@@ -125,19 +125,24 @@ fn back_to_back_redemptions_charge_a_rising_fee() {
     let _o = open_borrower_rate(&mut svm, &cma, &coll, 200, usd(1_000), 800);
     let r = open_borrower_rate(&mut svm, &cma, &coll, 400, usd(2_000), 2_000);
 
-    // First redemption: base_rate is 0 ⇒ fee is the flat 50 bps floor.
+    // First redemption: BOLD-faithful — the base-rate is bumped with THIS redemption's OWN volume
+    // BEFORE the fee is charged (Liquity updates the rate before `_getRedemptionFee`), so even the
+    // first redemption pays for its size. $200 of a $4000 market ⇒ bump (200/4000)/BETA(2) = 2.5% =
+    // 250 bps; fee = 50 floor + 250 = 300 bps (the old pre-bump ordering let the first redemption
+    // escape with just the flat 50 — exactly the arbitrage the dynamic fee exists to deter).
     let s0 = read_market(&svm, &market).surplus_collateral;
     send(&mut svm, &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(200))], &r.kp, &[]).expect("redeem 1");
     let s1 = read_market(&svm, &market).surplus_collateral;
     let fee1_per_tok = (s1 - s0) * 10_000 / whole_coll(2); // $200 = 2 tokens redeemed; fee bps recovered
-    assert_eq!(fee1_per_tok, 50, "first redemption pays the flat floor (base-rate was 0)");
+    assert_eq!(fee1_per_tok, 300, "first redemption pays floor + its own volume bump (post-bump fee)");
 
     // Second redemption, SAME minute (a 1s nudge avoids the identical-tx dedup but is < the 60s decay
-    // granularity, so the base-rate does NOT decay): base_rate is now > 0 ⇒ fee strictly exceeds the floor.
+    // granularity, so the base-rate does NOT decay): the accumulated base-rate makes the fee RISE above
+    // the first redemption's.
     warp_unix(&mut svm, 1);
     let s1b = read_market(&svm, &market).surplus_collateral;
     send(&mut svm, &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(200))], &r.kp, &[]).expect("redeem 2");
     let s2 = read_market(&svm, &market).surplus_collateral;
     let fee2_per_tok = (s2 - s1b) * 10_000 / whole_coll(2);
-    assert!(fee2_per_tok > 50, "second redemption charges the spiked fee (floor + base-rate): {fee2_per_tok} bps");
+    assert!(fee2_per_tok > fee1_per_tok, "back-to-back redemptions charge a rising fee: {fee2_per_tok} > {fee1_per_tok} bps");
 }
