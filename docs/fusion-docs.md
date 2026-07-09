@@ -10,6 +10,12 @@ Fusion is an overcollateralized, multi-collateral CDP stablecoin protocol in the
 
 *Reflects: current `master`.*
 
+> **Formal spec.** For the auditor-grade, implementation-independent specification — every
+> account and instruction with its exact preconditions, formula, guards, and invariants
+> cross-linked to source at `file:line` — see [`docs/fusd-spec-v1.md`](fusd-spec-v1.md)
+> (changelog: [`docs/fusd-spec-CHANGES.md`](fusd-spec-CHANGES.md)). This reference explains
+> *why*; the formal spec pins *what the code does*.
+
 ---
 
 ## Table of Contents

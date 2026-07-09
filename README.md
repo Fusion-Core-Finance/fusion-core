@@ -11,7 +11,9 @@ parameters and can never touch user funds.
 > interest, the liquidation waterfall + insurance buffer, rate-bucket redemption, the
 > oracle stack, and the bounded GovernanceGate are built and tested. See
 > [`docs/fusion-docs.md`](docs/fusion-docs.md) for the full technical reference (design,
-> invariants, and component status).
+> invariants, and component status), and [`docs/fusd-spec-v1.md`](docs/fusd-spec-v1.md) for
+> the auditor-grade formal spec (every account/instruction with guards + formulas + invariants
+> cross-linked to source at `file:line`).
 
 ## Layout
 
