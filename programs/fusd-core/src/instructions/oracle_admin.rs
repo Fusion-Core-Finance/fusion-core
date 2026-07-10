@@ -14,9 +14,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::Mint;
 
-use crate::constants::{CONFIG_SEED, MARKET_ORACLE_SEED};
+use crate::constants::{CONFIG_SEED, MARKET_ORACLE_SEED, MARKET_SEED, MAX_PRICE_STALENESS_SLOTS};
 use crate::errors::FusdError;
-use crate::state::{MarketOracle, ProtocolConfig};
+use crate::state::{Market, MarketOracle, ProtocolConfig};
 
 // ----------------------------------------- set_oracle_program_ids --------------------------------
 
@@ -100,6 +100,11 @@ pub struct RebindMarketOracleFeeds<'info> {
 
     pub collateral_mint: Box<Account<'info, Mint>>,
 
+    /// The market whose cached price is invalidated on rebind (fail-closed). Included so the rebind can
+    /// stale the cache atomically; no risk/accounting field is touched.
+    #[account(mut, seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
+    pub market: Box<Account<'info, Market>>,
+
     #[account(
         mut,
         seeds = [MARKET_ORACLE_SEED, collateral_mint.key().as_ref()],
@@ -139,6 +144,15 @@ pub fn rebind_feeds(ctx: Context<RebindMarketOracleFeeds>, args: RebindOracleFee
     o.switchboard_feed = args.switchboard_feed;
     o.orca_pool = args.orca_pool;
     o.raydium_pool = args.raydium_pool;
+
+    // Fail-closed on the cached price: the rebind does NOT re-run `update_price`, so `Market.spot` still
+    // reflects the OLD feed source. Back-date the freshness anchor past the staleness bound so the
+    // FRESH-gated paths (liquidate / ordered redeem / debt-bearing withdraw / borrow) pause until the
+    // next permissionless crank re-prices off the NEW binding. The next crank's `commit_fresh_spot` sees
+    // the large gap and arms the on-resume liquidation grace — the same conservative stall->resume
+    // handling, which is the right posture right after a feed-source change.
+    let slot = Clock::get()?.slot;
+    ctx.accounts.market.spot_updated_slot = slot.saturating_sub(MAX_PRICE_STALENESS_SLOTS + 1);
 
     emit_cpi!(crate::events::OracleFeedsRebound {
         collateral_mint: ctx.accounts.collateral_mint.key(),

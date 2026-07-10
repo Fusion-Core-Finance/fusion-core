@@ -299,3 +299,42 @@ fn gov_can_disable_and_reenable_the_alt_receiver() {
     send(&mut svm, &[update_price_ix(&gov.pubkey(), &coll, &h.pyth, None)], &gov, &[]).expect("alt re-accepted");
     assert_eq!(read_market(&svm, &market_pda(&coll)).spot, spot_for_usd(105));
 }
+
+#[test]
+fn rebind_stales_the_cached_price_until_the_next_crank() {
+    // Hubble-glean fix: rebind_market_oracle_feeds does NOT re-run update_price, so it back-dates the
+    // freshness anchor past the staleness bound. FRESH-gated paths (liquidate / ordered redeem /
+    // debt-bearing withdraw / borrow) then pause until the next crank re-prices off the NEW binding,
+    // instead of serving the OLD feed's now-unbound price for ~100s.
+    let (mut svm, gov, cma) = actors();
+    let coll = bootstrap_market(&mut svm, &gov, &cma);
+    let h = bootstrap_oracle(&mut svm, &gov, &coll, 300, 3, 300, false);
+    let market = market_pda(&coll);
+
+    // Advance the chain slot well past the staleness bound so the back-date is observable (mainnet runs
+    // at slot ~300M; a fresh test chain starts near 0), then crank a FRESH spot.
+    warp_slots(&mut svm, 1_000);
+    let now = now_unix(&svm);
+    set_pyth_price(&mut svm, &h.pyth, h.feed_id, pyth_usd(100), 0, PYTH_EXPO, now);
+    send(&mut svm, &[update_price_ix(&gov.pubkey(), &coll, &h.pyth, None)], &gov, &[]).expect("fresh crank");
+    let fresh = read_market(&svm, &market);
+    assert!(
+        current_slot(&svm).saturating_sub(fresh.spot_updated_slot) <= fusd_core::constants::MAX_PRICE_STALENESS_SLOTS,
+        "spot is fresh before the rebind"
+    );
+
+    // Rebind (same feeds re-supplied). The cached price must go stale.
+    let args = RebindOracleFeedsArgs {
+        pyth_feed_id: [9u8; 32],
+        switchboard_feed: h.sb,
+        orca_pool: h.orca_pool,
+        raydium_pool: h.raydium_pool,
+    };
+    send(&mut svm, &[rebind_market_oracle_feeds_ix(&gov.pubkey(), &coll, args)], &gov, &[]).expect("rebind");
+    let after = read_market(&svm, &market);
+    assert!(
+        current_slot(&svm).saturating_sub(after.spot_updated_slot) > fusd_core::constants::MAX_PRICE_STALENESS_SLOTS,
+        "rebind back-dates the freshness anchor so FRESH-gated paths pause until the next crank"
+    );
+    assert_eq!(after.spot, fresh.spot, "the cached spot VALUE is unchanged; only its freshness is invalidated");
+}

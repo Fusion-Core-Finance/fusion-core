@@ -1166,6 +1166,7 @@ pub fn rebind_market_oracle_feeds_ix(
             authority: *authority,
             config: config_pda(),
             collateral_mint: *coll,
+            market: market_pda(coll),
             market_oracle: market_oracle_pda(coll),
             event_authority: event_authority_pda(),
             program: fusd_core::ID,
