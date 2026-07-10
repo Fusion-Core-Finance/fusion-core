@@ -146,3 +146,40 @@ fn back_to_back_redemptions_charge_a_rising_fee() {
     let fee2_per_tok = (s2 - s1b) * 10_000 / whole_coll(2);
     assert!(fee2_per_tok > fee1_per_tok, "back-to-back redemptions charge a rising fee: {fee2_per_tok} > {fee1_per_tok} bps");
 }
+
+#[test]
+fn sub_minute_redemptions_do_not_reset_the_decay_anchor() {
+    // Regression for the Hubble-glean base-rate finding: decay_base_rate decays per WHOLE MINUTE, so the
+    // decay anchor (redemption_base_rate_ts) must advance ONLY when >=60s have elapsed. If every
+    // redemption reset the anchor to `now`, sub-minute-cadence redemptions would perpetually reset it
+    // without ever crossing a minute boundary — an elevated base rate would ratchet up on each bump and
+    // NEVER decay (Liquity's `_updateLastFeeOpTime` guard).
+    let (mut svm, gov, cma, coll) = setup();
+    let market = market_pda(&coll);
+    set_param(&mut svm, &gov, &coll, 0, MarketParam::RedemptionBaseRateMax, 500);
+    let b = open_borrower_rate(&mut svm, &cma, &coll, 100, usd(500), 100); // lowest bucket → redemption target
+    let _o = open_borrower_rate(&mut svm, &cma, &coll, 100, usd(500), 800);
+    let r = open_borrower_rate(&mut svm, &cma, &coll, 200, usd(1_000), 2_000);
+
+    // Redeem #1 elevates the base rate and sets the decay anchor.
+    send(&mut svm, &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(50))], &r.kp, &[]).expect("redeem 1");
+    let m1 = read_market(&svm, &market);
+    assert!(m1.redemption_base_rate > 0, "base rate elevated after redeem 1");
+    let anchor0 = m1.redemption_base_rate_ts;
+
+    // Redeem #2 only 30s later (sub-minute): the anchor must NOT move, so the elapsed time accumulates.
+    warp_unix(&mut svm, 30);
+    send(&mut svm, &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(50))], &r.kp, &[]).expect("redeem 2");
+    assert_eq!(
+        read_market(&svm, &market).redemption_base_rate_ts, anchor0,
+        "a sub-minute redemption must NOT reset the decay anchor (else the base rate never decays)"
+    );
+
+    // Redeem #3 once >=60s have accumulated from the anchor: it advances now (decay applies past a minute).
+    warp_unix(&mut svm, 40); // 70s total from anchor0
+    send(&mut svm, &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(50))], &r.kp, &[]).expect("redeem 3");
+    assert!(
+        read_market(&svm, &market).redemption_base_rate_ts > anchor0,
+        "a redemption >=60s after the anchor advances it"
+    );
+}

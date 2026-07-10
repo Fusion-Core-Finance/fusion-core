@@ -255,7 +255,15 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     };
     if base_rate_max_bps > 0 {
         ctx.accounts.market.redemption_base_rate = new_base_rate;
-        ctx.accounts.market.redemption_base_rate_ts = now;
+        // Advance the decay anchor ONLY when a whole minute has elapsed (Liquity `_updateLastFeeOpTime`).
+        // `rdm::decay_base_rate` quantizes decay to whole minutes, so resetting the anchor to `now` on
+        // every redemption would discard the sub-minute elapsed time before it ever decays — under
+        // sub-minute-cadence redemptions an elevated base rate would ratchet up on each bump and NEVER
+        // decay. Keeping the old anchor on a sub-minute gap lets the elapsed time accumulate to the next
+        // decay tick. The `60` must match the per-minute quantization in `redemption.rs::decay_base_rate`.
+        if now.saturating_sub(ctx.accounts.market.redemption_base_rate_ts) >= 60 {
+            ctx.accounts.market.redemption_base_rate_ts = now;
+        }
     }
     let fee_bps = rdm::effective_fee_bps(
         new_base_rate,
