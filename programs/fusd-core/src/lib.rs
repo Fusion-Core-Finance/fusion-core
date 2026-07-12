@@ -27,6 +27,7 @@ pub mod reconcile;
 pub mod redist;
 pub mod reactor;
 pub mod state;
+pub mod supply_transition;
 
 // Certora/CVLR verification harness — compiled ONLY under `--features certora` (the Certora cloud
 // build), NEVER in the production `.so` (scripts/check-no-certora.sh enforces it).

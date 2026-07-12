@@ -34,10 +34,16 @@ pub fn accrue(market: &mut Market, now: i64) -> Result<()> {
     let pending =
         fusd_math::interest::pending_aggregate_interest(market.agg_weighted_debt_sum, dt as u64)
             .ok_or(FusdError::MathOverflow)?;
-    market.agg_recorded_debt =
-        market.agg_recorded_debt.checked_add(pending).ok_or(FusdError::MathOverflow)?;
-    market.unminted_interest =
-        market.unminted_interest.checked_add(pending).ok_or(FusdError::MathOverflow)?;
+    // Book the pending interest through the shared supply transition (agg + unminted move in
+    // lockstep — the body certora.rs proves).
+    let d = crate::supply_transition::book_interest(
+        market.agg_recorded_debt,
+        market.unminted_interest,
+        pending,
+    )
+    .ok_or(FusdError::MathOverflow)?;
+    market.agg_recorded_debt = d.new_agg;
+    market.unminted_interest = d.new_unminted;
     market.last_update_ts = now;
     Ok(())
 }

@@ -205,15 +205,16 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
         // (full redemption zeroes it). `redeem_amt <= debt` by the cap above.
         let old_weighted = accrual::weighted(&pos)?;
 
-        // Apply to the position + market aggregates.
+        // Apply to the position + market aggregates. The burn/agg accounting is the shared
+        // `supply_transition::redeem_step` body certora.rs proves.
+        let d = crate::supply_transition::redeem_step(
+            ctx.accounts.market.agg_recorded_debt,
+            redeem_amt,
+        )
+        .ok_or(FusdError::MathOverflow)?;
         pos.recorded_debt -= redeem_amt;
         pos.ink -= coll_total as u64;
-        ctx.accounts.market.agg_recorded_debt = ctx
-            .accounts
-            .market
-            .agg_recorded_debt
-            .checked_sub(redeem_amt)
-            .ok_or(FusdError::MathOverflow)?;
+        ctx.accounts.market.agg_recorded_debt = d.new_agg;
         ctx.accounts.market.total_collateral = ctx
             .accounts
             .market
@@ -239,7 +240,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
         coll_drawn_total = coll_drawn_total
             .checked_add(coll_total)
             .ok_or(FusdError::MathOverflow)?;
-        remaining -= redeem_amt;
+        remaining -= d.burned;
     }
 
     let redeemed_fusd = (amount as u128) - remaining;

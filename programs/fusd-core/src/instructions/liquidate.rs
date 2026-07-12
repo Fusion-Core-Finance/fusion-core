@@ -222,6 +222,24 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
     };
     let split = recovery::absorb(debt, reactor_deposits, has_recipients, buffer_balance, global_available);
 
+    // The waterfall's supply-identity transition (the shared body certora.rs proves), applied in ONE
+    // step: the reactor/buffer/global tiers extinguish their debt from `agg_recorded_debt`, the
+    // un-homed remainder moves agg → `bad_debt`, and `split.redist` deliberately stays parked in agg
+    // (reassigned to survivors — supply-neutral). The tier branches below move the tokens and their
+    // own counters but no longer touch these two fields.
+    let sd = crate::supply_transition::liquidate(
+        ctx.accounts.market.agg_recorded_debt,
+        ctx.accounts.market.bad_debt,
+        split.reactor,
+        split.redist,
+        split.buffer,
+        split.global,
+        split.unhomed,
+    )
+    .ok_or(FusdError::MathOverflow)?;
+    ctx.accounts.market.agg_recorded_debt = sd.new_agg;
+    ctx.accounts.market.bad_debt = sd.new_bad;
+
     let offset_present = split.reactor;
     let coll_sp = mul_div_floor(distributable, offset_present, debt).ok_or(FusdError::MathOverflow)?;
     // Collateral backing the post-RP remainder (exact remainder so `coll_sp + coll_r == distributable`):
@@ -301,14 +319,9 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
                 coll_sp_u64,
             )?;
         }
-
-        // The offset debt is extinguished (recorded debt is native, so the RP's share is `split.reactor`).
-        ctx.accounts.market.agg_recorded_debt = ctx
-            .accounts
-            .market
-            .agg_recorded_debt
-            .checked_sub(offset_present)
-            .ok_or(FusdError::MathOverflow)?;
+        // The offset debt is extinguished (recorded debt is native, so the RP's share is
+        // `split.reactor`) — already dropped from `agg_recorded_debt` by the consolidated supply
+        // transition above.
     }
 
     // ---- Tier 2: redistribute the remainder to the other active positions ----
@@ -370,12 +383,7 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
                     buf_u64,
                 )?;
             }
-            ctx.accounts.market.agg_recorded_debt = ctx
-                .accounts
-                .market
-                .agg_recorded_debt
-                .checked_sub(split.buffer)
-                .ok_or(FusdError::MathOverflow)?;
+            // (`split.buffer` already left `agg_recorded_debt` via the consolidated transition.)
             ctx.accounts.insurance_buffer.total_absorbed = ctx
                 .accounts
                 .insurance_buffer
@@ -408,12 +416,7 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
                     glob_u64,
                 )?;
             }
-            ctx.accounts.market.agg_recorded_debt = ctx
-                .accounts
-                .market
-                .agg_recorded_debt
-                .checked_sub(split.global)
-                .ok_or(FusdError::MathOverflow)?;
+            // (`split.global` already left `agg_recorded_debt` via the consolidated transition.)
             // Per-market cumulative draw (enforces the cap across repeated draws — LOCAL write).
             ctx.accounts.market.global_drawn = ctx
                 .accounts
@@ -432,22 +435,11 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
         }
 
         // Tier 4: any residual is UN-HOMED bad debt — fUSD that stays in circulation with no backing
-        // debt. Realize the loss (drop it from `agg_recorded_debt`), record it, and trip the terminal
-        // shutdown so `urgent_redeem` winds the market down (the position is zeroed below, so it can
-        // never be re-liquidated into a stall). This replaces the old NoRedistributionRecipients revert.
+        // debt. The loss is already realized by the consolidated transition above (dropped from
+        // `agg_recorded_debt`, booked to `bad_debt`); here trip the terminal shutdown so
+        // `urgent_redeem` winds the market down (the position is zeroed below, so it can never be
+        // re-liquidated into a stall). This replaces the old NoRedistributionRecipients revert.
         if split.unhomed > 0 {
-            ctx.accounts.market.agg_recorded_debt = ctx
-                .accounts
-                .market
-                .agg_recorded_debt
-                .checked_sub(split.unhomed)
-                .ok_or(FusdError::MathOverflow)?;
-            ctx.accounts.market.bad_debt = ctx
-                .accounts
-                .market
-                .bad_debt
-                .checked_add(split.unhomed)
-                .ok_or(FusdError::MathOverflow)?;
             // First-set-wins: never clobber a reason already set by `shutdown` (SCR / oracle failure).
             if ctx.accounts.market.shutdown_reason == crate::constants::SHUTDOWN_REASON_NONE {
                 ctx.accounts.market.shutdown_reason = SHUTDOWN_REASON_UNHOMED_BAD_DEBT;

@@ -83,8 +83,9 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     // is preserved: circulating += amount, agg += amount + fee, unminted += fee. The MCR / ceiling /
     // CCR checks below all see the POST-fee debt (the borrower must collateralize what they owe).
     // TWIN: adjust_rate.rs's premature-adjustment fee folds the same debt+agg+unminted triple (there
-    // contiguously, post-realization). A change to either fee's accounting must be mirrored in the
-    // other; certora.rs's `supply_preserved_by_borrow_ghost` models THIS site's algebra.
+    // contiguously, post-realization, via `supply_transition::book_interest`). This site's algebra is
+    // `supply_transition::borrow` — the shared body certora.rs's `supply_preserved_by_borrow_ghost`
+    // executes at NativeInt.
     let fee = if ctx.accounts.market.borrow_fee_bps > 0 {
         fusd_math::mul_div_ceil(
             amount as u128,
@@ -95,14 +96,22 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     } else {
         0
     };
-    let debt_delta = (amount as u128).checked_add(fee).ok_or(FusdError::MathOverflow)?;
+    // The supply-identity transition (debt_delta / new_agg / new_unminted) — the shared body
+    // certora.rs proves; the checks below consume its outputs, the commit block assigns them.
+    let d = crate::supply_transition::borrow(
+        ctx.accounts.market.agg_recorded_debt,
+        ctx.accounts.market.unminted_interest,
+        amount as u128,
+        fee,
+    )
+    .ok_or(FusdError::MathOverflow)?;
 
     // `recorded_debt` is now realized present-value debt; the borrow adds `amount + fee` to it.
     let new_debt = ctx
         .accounts
         .position
         .recorded_debt
-        .checked_add(debt_delta)
+        .checked_add(d.debt_delta)
         .ok_or(FusdError::MathOverflow)?;
     let ink = ctx.accounts.position.ink;
     require!(cdp::is_healthy(ink, new_debt, spot, mcr), FusdError::BelowMinCollateralRatio);
@@ -112,14 +121,8 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     let min_debt = ctx.accounts.market.min_debt;
     require!(min_debt == 0 || new_debt >= min_debt as u128, FusdError::DebtBelowMinimum);
 
-    let new_agg = ctx
-        .accounts
-        .market
-        .agg_recorded_debt
-        .checked_add(debt_delta)
-        .ok_or(FusdError::MathOverflow)?;
     require!(
-        new_agg <= ctx.accounts.market.debt_ceiling as u128,
+        d.new_agg <= ctx.accounts.market.debt_ceiling as u128,
         FusdError::DebtCeilingExceeded
     );
 
@@ -129,7 +132,7 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     if ctx.accounts.market.ccr_bps > 0 {
         let m = &ctx.accounts.market;
         require!(
-            !cdp::tcr_below(m.total_collateral, new_agg, spot, m.ccr_bps),
+            !cdp::tcr_below(m.total_collateral, d.new_agg, spot, m.ccr_bps),
             FusdError::CcrRestricted
         );
     }
@@ -154,17 +157,11 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     // Commit the debt, update the two aggregates (the weighted sum by the realize + borrow delta),
     // recompute the stake (realize may have grown ink via redistribution), then mint.
     ctx.accounts.position.recorded_debt = new_debt;
-    ctx.accounts.market.agg_recorded_debt = new_agg;
+    ctx.accounts.market.agg_recorded_debt = d.new_agg;
     // C7: book the upfront fee as unminted interest — `refresh_market` mints it to the buffer. This
     // is the +fee half of `agg += amount + fee` that is NOT minted to the borrower (supply identity).
-    if fee > 0 {
-        ctx.accounts.market.unminted_interest = ctx
-            .accounts
-            .market
-            .unminted_interest
-            .checked_add(fee)
-            .ok_or(FusdError::MathOverflow)?;
-    }
+    // `d.new_unminted == unminted + fee` (unchanged when `fee == 0`).
+    ctx.accounts.market.unminted_interest = d.new_unminted;
     accrual::reweight(&mut ctx.accounts.market, &ctx.accounts.position, old_weighted)?;
     crate::redist::set_stake(&mut ctx.accounts.market, &mut ctx.accounts.position)?;
 

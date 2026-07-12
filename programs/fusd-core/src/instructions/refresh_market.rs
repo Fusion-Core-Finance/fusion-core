@@ -68,40 +68,17 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
     if pending == 0 {
         return Ok(());
     }
-    // Mint at most `u64::MAX` per crank. A backlog past u64 needs centuries of uncranked interest on a
-    // vast market; capping (instead of `try_from`-reverting) lets it drain over multiple cranks rather
-    // than bricking the buffer mint — pure liveness hardening, no invariant change (the surplus stays
-    // booked in `agg_recorded_debt`). Realistic per-crank interest is tiny.
-    let amount: u128 = pending.min(u64::MAX as u128);
-
     // Keeper reward: pay the cranker a `keeper_reward_bps` cut of the interest minted this
-    // call, ONLY when the reward is enabled AND the caller supplied an fUSD account. The cut floors
-    // (buffer-favoring), so the buffer always gets `amount - keeper_cut`. This is a SPLIT of interest
-    // the protocol already mints (booked in `agg_recorded_debt`), not a fresh mint — the supply
-    // invariant and credible neutrality hold. Spam-proof: a second immediate crank has `pending == 0`.
-    let keeper_bps = ctx.accounts.market.keeper_reward_bps as u128;
-    let keeper_cut: u128 = if keeper_bps > 0 && ctx.accounts.cranker_fusd_ata.is_some() {
-        amount.checked_mul(keeper_bps).ok_or(FusdError::MathOverflow)? / 10_000
+    // call, ONLY when the reward is enabled AND the caller supplied an fUSD account (collapsed here
+    // to an effective 0 bps when the account is absent). The cut floors (buffer-favoring), so the
+    // buffer always gets `amount - keeper_cut`. This is a SPLIT of interest the protocol already
+    // mints (booked in `agg_recorded_debt`), not a fresh mint — the supply invariant and credible
+    // neutrality hold. Spam-proof: a second immediate crank has `pending == 0`.
+    let keeper_bps_eff: u16 = if ctx.accounts.cranker_fusd_ata.is_some() {
+        ctx.accounts.market.keeper_reward_bps
     } else {
         0
     };
-    let post_keeper = amount - keeper_cut;
-
-    // C16 auto bad-debt paydown: when the market carries realized un-homed `bad_debt`, divert a
-    // governable fraction of the post-keeper interest to RETIRE it instead of minting it. Loss recovery
-    // takes priority over buffer/backstop growth, so this comes out of `post_keeper` FIRST. Capped at
-    // the outstanding `bad_debt` (never over-pays). Supply-preserving: the diverted slice is simply NOT
-    // minted (so `circulating` rises by `amount − paydown`) while `bad_debt` drops by `paydown` — the
-    // interest, already booked in `agg_recorded_debt` and consumed from `unminted_interest` below,
-    // back-fills previously-unbacked fUSD instead of funding the buffer. `0 = disabled`.
-    let paydown_bps = ctx.accounts.market.bad_debt_paydown_bps as u128;
-    let paydown: u128 = if paydown_bps > 0 && ctx.accounts.market.bad_debt > 0 {
-        let want = post_keeper.checked_mul(paydown_bps).ok_or(FusdError::MathOverflow)? / 10_000;
-        want.min(ctx.accounts.market.bad_debt)
-    } else {
-        0
-    };
-    let post_paydown = post_keeper - paydown;
 
     // Backstop cut (global second-loss capital): when the reserve +
     // its vault are supplied AND the reserve's `cut_bps > 0` AND it is below its cap, route a MINORITY
@@ -111,26 +88,38 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
     // byte-identical to pre-backstop behavior. Parallelism: the reserve PROGRAM account is read for
     // params (+ a cumulative bump); the cut mints into the SHARED reserve vault, so funded refresh
     // cranks serialize among THEMSELVES on that vault — never the hot user paths.
-    let backstop_cut: u128 =
+    // The vault-identity check stays INSIDE the match: it fires whenever the account pair is
+    // supplied, even when `cut_bps == 0`.
+    let (backstop_cut_bps_eff, backstop_headroom): (u16, u128) =
         match (ctx.accounts.backstop.as_ref(), ctx.accounts.backstop_fusd_vault.as_ref()) {
             (Some(bs), Some(vault)) => {
                 require_keys_eq!(vault.key(), bs.fusd_vault, FusdError::InvalidRecipient);
-                let cut_bps = bs.cut_bps as u128;
-                if cut_bps == 0 {
-                    0
-                } else {
-                    let want = post_paydown.checked_mul(cut_bps).ok_or(FusdError::MathOverflow)? / 10_000;
-                    let headroom = (bs.reserve_cap as u128).saturating_sub(vault.amount as u128);
-                    want.min(headroom)
-                }
+                (bs.cut_bps, (bs.reserve_cap as u128).saturating_sub(vault.amount as u128))
             }
-            _ => 0,
+            _ => (0, 0),
         };
-    let buffer_amount = post_paydown - backstop_cut;
+
+    // The supply-identity transition (the shared body certora.rs proves): consume `amount =
+    // min(pending, u64::MAX)` (capping — instead of `try_from`-reverting — lets a >u64 backlog drain
+    // over multiple cranks; the surplus stays booked in `agg_recorded_debt`), split it keeper →
+    // C16 bad-debt paydown → backstop → buffer. C16: when the market carries realized un-homed
+    // `bad_debt`, a governable fraction of the post-keeper interest RETIRES it instead of minting —
+    // loss recovery before buffer/backstop growth, capped at the outstanding `bad_debt`.
+    // Supply-preserving: the diverted slice is simply NOT minted (`circulating` rises by
+    // `amount − paydown`) while `bad_debt` drops by `paydown`.
+    let d = crate::supply_transition::refresh(
+        pending,
+        ctx.accounts.market.bad_debt,
+        keeper_bps_eff,
+        ctx.accounts.market.bad_debt_paydown_bps,
+        backstop_cut_bps_eff,
+        backstop_headroom,
+    )
+    .ok_or(FusdError::MathOverflow)?;
 
     let bump = MINT_AUTHORITY_BUMP;
     let signer: &[&[&[u8]]] = &[&[MINT_AUTHORITY_SEED, &[bump]]];
-    if buffer_amount > 0 {
+    if d.buffer_amount > 0 {
         token::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -141,10 +130,10 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
                 },
                 signer,
             ),
-            buffer_amount as u64,
+            d.buffer_amount as u64,
         )?;
     }
-    if keeper_cut > 0 {
+    if d.keeper_cut > 0 {
         // `cranker_fusd_ata` is Some here (keeper_cut > 0 requires it).
         let cranker_ata = ctx.accounts.cranker_fusd_ata.as_ref().unwrap();
         token::mint_to(
@@ -157,10 +146,10 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
                 },
                 signer,
             ),
-            keeper_cut as u64,
+            d.keeper_cut as u64,
         )?;
     }
-    if backstop_cut > 0 {
+    if d.backstop_cut > 0 {
         // Mint the cut into the global reserve vault (Some here — backstop_cut > 0 requires both accounts).
         let vault = ctx.accounts.backstop_fusd_vault.as_ref().unwrap();
         token::mint_to(
@@ -173,49 +162,47 @@ pub fn handler(ctx: Context<RefreshMarket>) -> Result<()> {
                 },
                 signer,
             ),
-            backstop_cut as u64,
+            d.backstop_cut as u64,
         )?;
         // Per-market cumulative contribution (LOCAL write — feeds the contribution-weighted draw cap).
         ctx.accounts.market.global_contributed = ctx
             .accounts
             .market
             .global_contributed
-            .checked_add(backstop_cut)
+            .checked_add(d.backstop_cut)
             .ok_or(FusdError::MathOverflow)?;
         // Reserve cumulative (the reserve-solvency invariant). `as_mut` is Some here.
         let bs = ctx.accounts.backstop.as_mut().unwrap();
         bs.total_contributed =
-            bs.total_contributed.checked_add(backstop_cut).ok_or(FusdError::MathOverflow)?;
+            bs.total_contributed.checked_add(d.backstop_cut).ok_or(FusdError::MathOverflow)?;
     }
 
     // C16: retire the diverted slice of `bad_debt`. The `paydown` interest was consumed from
     // `unminted_interest` (below) and NOT minted, so dropping `bad_debt` by the same amount keeps
-    // `circulating == agg_recorded_debt − unminted_interest + bad_debt` exact. `paydown <= bad_debt`
-    // by construction (the cap above), so this never underflows.
-    if paydown > 0 {
-        ctx.accounts.market.bad_debt -= paydown;
-    }
+    // `circulating == agg_recorded_debt − unminted_interest + bad_debt` exact.
+    // `d.new_bad == bad_debt − paydown` (unchanged when `paydown == 0`).
+    ctx.accounts.market.bad_debt = d.new_bad;
 
     // Subtract what was minted OR diverted to paydown (drains a hypothetical >u64 backlog over multiple
     // cranks; the common case consumes the whole `pending` and leaves 0). Both the minted `amount −
     // paydown` and the diverted `paydown` are interest realized out of `unminted_interest` this crank.
-    ctx.accounts.market.unminted_interest = pending - amount;
+    ctx.accounts.market.unminted_interest = d.new_unminted;
     // `total_funded` tracks the fUSD that entered the BUFFER (organic interest minus the keeper cut, the
     // backstop cut, and the C16 paydown diversion + external top-ups) for proof-of-reserves.
     ctx.accounts.insurance_buffer.total_funded = ctx
         .accounts
         .insurance_buffer
         .total_funded
-        .checked_add(buffer_amount)
+        .checked_add(d.buffer_amount)
         .ok_or(FusdError::MathOverflow)?;
 
     emit_cpi!(crate::events::InterestMinted {
         collateral_mint: ctx.accounts.collateral_mint.key(),
-        amount: amount as u64,
-        to_buffer: buffer_amount as u64,
-        to_backstop: backstop_cut as u64,
-        to_bad_debt_paydown: paydown as u64,
-        keeper_cut: keeper_cut as u64,
+        amount: d.amount as u64,
+        to_buffer: d.buffer_amount as u64,
+        to_backstop: d.backstop_cut as u64,
+        to_bad_debt_paydown: d.paydown as u64,
+        keeper_cut: d.keeper_cut as u64,
         unminted_remaining: ctx.accounts.market.unminted_interest,
     });
     Ok(())

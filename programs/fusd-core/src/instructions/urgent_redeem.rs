@@ -134,14 +134,16 @@ pub fn handler<'info>(
 
         // 0-fee: the redeemer receives the full `coll_total`; nothing is skimmed to surplus. Recorded
         // debt is native, so it reduces by exactly `redeem_amt` (`redeem_amt <= debt` by the cap).
+        // The burn/agg accounting is the shared `supply_transition::redeem_step` body certora.rs
+        // proves (one step per candidate, same as ordered `redeem`).
+        let d = crate::supply_transition::redeem_step(
+            ctx.accounts.market.agg_recorded_debt,
+            redeem_amt,
+        )
+        .ok_or(FusdError::MathOverflow)?;
         pos.recorded_debt -= redeem_amt;
         pos.ink -= coll_total as u64;
-        ctx.accounts.market.agg_recorded_debt = ctx
-            .accounts
-            .market
-            .agg_recorded_debt
-            .checked_sub(redeem_amt)
-            .ok_or(FusdError::MathOverflow)?;
+        ctx.accounts.market.agg_recorded_debt = d.new_agg;
         ctx.accounts.market.total_collateral = ctx
             .accounts
             .market
@@ -165,7 +167,7 @@ pub fn handler<'info>(
         redeemer_coll_total = redeemer_coll_total
             .checked_add(coll_total)
             .ok_or(FusdError::MathOverflow)?;
-        remaining -= redeem_amt;
+        remaining -= d.burned;
     }
 
     let redeemed_fusd = (amount as u128) - remaining;

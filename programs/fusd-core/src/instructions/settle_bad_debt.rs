@@ -64,7 +64,11 @@ pub fn handler(ctx: Context<SettleBadDebt>, amount: u64) -> Result<()> {
         ),
         amount,
     )?;
-    ctx.accounts.market.bad_debt -= amount as u128;
+    // The shared supply-transition body certora.rs proves; `None` is unreachable here (the require
+    // above pins `amount <= bad_debt`).
+    ctx.accounts.market.bad_debt =
+        crate::supply_transition::settle_bad_debt(ctx.accounts.market.bad_debt, amount as u128)
+            .ok_or(FusdError::MathOverflow)?;
 
     emit_cpi!(crate::events::BadDebtSettled {
         collateral_mint: ctx.accounts.collateral_mint.key(),

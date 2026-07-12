@@ -59,12 +59,19 @@ pub fn handler(ctx: Context<Repay>, amount: u64) -> Result<()> {
     }
 
     // Recorded debt is in fUSD-native units; repaying burns exactly `repay_amount` of it. Repaying the
-    // full debt zeroes `recorded_debt` (no dust — no `art*rate` normalization remains).
-    let repay_amount = (amount as u128).min(current_debt) as u64;
+    // full debt zeroes `recorded_debt` (no dust — no `art*rate` normalization remains). The burn/debt
+    // accounting is the shared `supply_transition::repay` body certora.rs proves.
+    let d = crate::supply_transition::repay(
+        ctx.accounts.market.agg_recorded_debt,
+        current_debt,
+        amount as u128,
+    )
+    .ok_or(FusdError::MathOverflow)?;
+    let repay_amount = d.burn as u64; // d.burn <= amount (a u64) by the min-cap
 
     // Dust floor: a partial repay must not leave the position below `min_debt` — repay fully
     // (to 0) or stay at/above the floor. Checked before the burn, so a rejected repay burns nothing.
-    let resulting_debt = current_debt - repay_amount as u128;
+    let resulting_debt = d.new_position_debt;
     let min_debt = ctx.accounts.market.min_debt;
     require!(
         min_debt == 0 || resulting_debt == 0 || resulting_debt >= min_debt as u128,
@@ -83,13 +90,8 @@ pub fn handler(ctx: Context<Repay>, amount: u64) -> Result<()> {
         repay_amount,
     )?;
 
-    ctx.accounts.position.recorded_debt = current_debt - repay_amount as u128;
-    ctx.accounts.market.agg_recorded_debt = ctx
-        .accounts
-        .market
-        .agg_recorded_debt
-        .checked_sub(repay_amount as u128)
-        .ok_or(FusdError::MathOverflow)?;
+    ctx.accounts.position.recorded_debt = d.new_position_debt;
+    ctx.accounts.market.agg_recorded_debt = d.new_agg;
     accrual::reweight(&mut ctx.accounts.market, &ctx.accounts.position, old_weighted)?;
     crate::redist::set_stake(&mut ctx.accounts.market, &mut ctx.accounts.position)?;
 
