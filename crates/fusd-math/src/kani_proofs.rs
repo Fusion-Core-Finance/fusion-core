@@ -56,6 +56,7 @@ fn mul_div_ceil_is_floor_plus_remainder_indicator() {
 }
 
 /// A zero denominator fails closed (returns `None`, never divides) for BOTH directions.
+// covers: none — unconditional asserts over fully-symbolic a,b; structurally non-vacuous (nothing gated to cover).
 // strength: STRONG — fully symbolic a,b; unconditional (non-gated) asserts prove the denom==0 fail-closed for both directions, so it is structurally non-vacuous without a cover!.
 #[kani::proof]
 fn mul_div_zero_denominator_is_none() {
@@ -69,6 +70,7 @@ fn mul_div_zero_denominator_is_none() {
 /// Wide SYMBOLIC inputs explode CBMC over the 256-bit divide, so this pins the boundary with CONCRETE
 /// witnesses on both sides (instant); `shim_matches_bnum` sweeps the overflow edge over 20k random
 /// inputs. Covers `floor` (the full product when `denom == 1`) and the `ceil` boundary.
+// covers: none — concrete-witness harness (UNIT_TEST); every assert is a single always-reached path.
 // strength: UNIT_TEST — concrete overflow witnesses only (wide symbolic inputs through the 256-bit divide are intractable, >2h); the symbolic overflow sweep lives in shim_matches_bnum. Honestly labeled.
 #[kani::proof]
 fn mul_div_fails_closed_on_overflow() {
@@ -141,6 +143,7 @@ fn apply_bps_never_exceeds_notional() {
 /// `ray_pow` interest-accumulator identities. `x^0 == 1.0` for ANY base (the `exp == 0` path returns
 /// `RAY` with no loop / no divide). The non-trivial cases use CONCRETE small exponents: a SYMBOLIC
 /// exponent makes CBMC unwind the binary-exp loop AND its nested divide for every `n` (intractable).
+// covers: none — unconditional identity asserts (symbolic base + concrete exponents); no gated branch to cover.
 // strength: WEAK — only the no-loop x^0==1 identity is symbolic (a symbolic exponent unwinds the binary-exp loop+divide per bit, intractable); the loop / odd-bit multiply / overflow `?` generality is swept by the ray_pow_matches_reference differential test.
 #[kani::proof]
 fn ray_pow_identities() {
@@ -521,6 +524,7 @@ fn aggregate_never_short_of_position() {
     kani::cover!(agg == pos + 1); // a one-unit protocol margin is reachable
 }
 
+// covers: none — unconditional boundary asserts over fully-symbolic inputs; structurally non-vacuous.
 // strength: STRONG — fully symbolic small inputs; unconditional asserts prove interest is zero at each of the three boundaries (no time / no rate / no debt), so it is structurally non-vacuous without a cover.
 #[kani::proof]
 fn accrued_zero_at_boundaries() {
@@ -532,6 +536,7 @@ fn accrued_zero_at_boundaries() {
     assert_eq!(interest::accrued_interest(0, r, p), Some(0)); // no debt ⇒ no interest
 }
 
+// covers: none — concrete-witness harness (UNIT_TEST); every assert is a single always-reached path.
 // strength: UNIT_TEST — concrete witnesses that the weighted-term overflow fails closed (None, never a wrap); the symbolic over-u128 sweep lives in matches_u256_reference. Honestly labeled.
 #[kani::proof]
 fn accrued_fails_closed_on_overflow() {

@@ -3,7 +3,9 @@ name: kani
 # The FULL Kani formal-verification pass over fusd-math (the multi-hour solver run that the fast
 # per-PR `ci` job only tag-gates). Run on demand and weekly, never on every push — cbmc is too slow
 # for the PR path. `scripts/kani-audit.sh` runs each harness in isolation, regenerates
-# crates/fusd-math/kani_audit.tsv, and fails on any non-PASS / TIMEOUT / untagged / VACUOUS harness.
+# crates/fusd-math/kani_audit.tsv — stamping it with the proof-inputs sha256 digest + kani/cbmc
+# versions that the per-PR `--gate` verifies — and fails on any non-PASS / TIMEOUT / untagged /
+# VACUOUS harness or any harness whose recorded covers aren't exactly the source-expected "N of N".
 on:
   workflow_dispatch:
   schedule:
