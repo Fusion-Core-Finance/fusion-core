@@ -22,12 +22,16 @@
  * payer funds each signing oracle (~0.0009 SOL/sig/update measured 2026-07-06). At the defaults
  * (1 signature, 90%-of-max_age cadence ≈ 320 updates/day) that is ≈ 0.3 SOL/day/market; the
  * original 3-sig/200s config burned ≈ 1.2 SOL/day and drained the keeper wallet in a day.
- * Knobs: sbNumSignatures, sbIntervalSecs (hard ceiling: the oracle max_age_secs, 300).
+ * Knobs: sbNumSignatures, sbIntervalSecs. An sbIntervalSecs ABOVE the oracle's max_age_secs is
+ * allowed and trades cost for mint availability: the SB leg goes stale between updates, so mints
+ * open only in the ~max_age window after each update (repay/withdraw/liquidation/redemption never
+ * gate on the secondary and keep running throughout).
  *
  * USAGE
  *   ANCHOR_PROVIDER_URL=<rpc> ANCHOR_WALLET=~/.config/solana/id.json \
  *     npx ts-node keepers/oracle-crank.ts [config.json]
- *   No config arg → the built-in WSOL default below.
+ *   No config arg → CRANK_CONFIG env (the systemd path, same pattern as MONITOR_CONFIG), else the
+ *   built-in WSOL default below.
  */
 import * as anchor from "@coral-xyz/anchor";
 import * as fs from "fs";
@@ -237,7 +241,7 @@ async function tick(program: any, me: Pk, wallet: anchor.Wallet, mc: MarketCrank
 }
 
 async function main() {
-  const cfgPath = process.argv[2];
+  const cfgPath = process.argv[2] || process.env.CRANK_CONFIG; // env: config without touching the systemd unit
   const cfg: CrankCfg = cfgPath ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : DEFAULT_CFG;
   validateConfig(cfg);
   const { program, provider, pid, me, url } = makeProgram();

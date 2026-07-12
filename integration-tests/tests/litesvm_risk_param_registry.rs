@@ -61,7 +61,7 @@ fn oracle_param_clamps_are_enforced() {
     let f = send(&mut svm, &[queue_param_change_oracle_ix(&gov.pubkey(), &coll, 0, MarketParam::OracleK, 5_000)], &gov, &[])
         .expect_err("k too low");
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);
-    // max_age above MAX_ORACLE_MAX_AGE_SECS (300) is rejected.
+    // max_age above MAX_ORACLE_MAX_AGE_SECS (3600) is rejected.
     let f = send(&mut svm, &[queue_param_change_oracle_ix(&gov.pubkey(), &coll, 0, MarketParam::OracleMaxAge, 9_999)], &gov, &[])
         .expect_err("age too high");
     assert_eq!(custom_code(&f), E_PARAM_OUT_OF_BOUNDS);

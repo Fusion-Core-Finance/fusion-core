@@ -410,8 +410,13 @@ pub const DEFAULT_ORACLE_DEVIATION_BPS: u16 = 100; // 1%
 pub const MAX_TWAP_DIVERGENCE_BPS: u16 = 1_000;
 pub const DEFAULT_TWAP_DIVERGENCE_BPS: u16 = 500; // 5% — wider than the feeds band: the
                                                   // TWAP lags by construction
-/// Feed staleness clamp (seconds).
-pub const MAX_ORACLE_MAX_AGE_SECS: i64 = 300;
+/// Feed staleness clamp (seconds). Raised 300 → 3600 (2026-07-12): the secondary (Switchboard
+/// On-Demand) charges an oracle fee per update (~0.0009 SOL), so this ceiling directly prices the
+/// mint gate's freshness — at 300s a market buys ~400 updates/day to keep mints continuously
+/// available. The clamp bounds GOVERNANCE, not the default: per-market `max_age_secs` stays a
+/// gov-tuned risk knob, and a wider window widens trust in the last secondary quote for the MINT
+/// gate only (repay/withdraw/liquidation/redemption never gate on the secondary).
+pub const MAX_ORACLE_MAX_AGE_SECS: i64 = 3_600;
 pub const DEFAULT_ORACLE_MAX_AGE_SECS: i64 = 60;
 /// Asymmetry factor k (bps of σ): collateral `−kσ`, debt `+kσ`. Clamped to [1σ, 3σ].
 pub const MIN_ORACLE_K_BPS: u16 = 10_000;
