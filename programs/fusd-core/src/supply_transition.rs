@@ -4,10 +4,15 @@
 //! * the handlers execute these functions monomorphized to `u128` (checked arithmetic, `None`
 //!   mapped to `FusdError::MathOverflow` at the call site);
 //! * the `certora.rs` supply rules execute the SAME bodies monomorphized to
-//!   `cvlr::mathint::NativeInt` (unbounded math-int), so a mutation of the shared algebra flips
-//!   the Certora proof AND the litesvm `assert_supply_invariant` oracle. Only a handler
-//!   call-site mutation (dropping the call or the assignment of the returned post-state) escapes
-//!   the prover — that residue is covered by the litesvm layer.
+//!   `cvlr::mathint::NativeInt` (unbounded math-int), so a mutation of the shared TRANSITION
+//!   algebra flips the Certora proof AND the litesvm `assert_supply_invariant` oracle.
+//!
+//! Two residues escape the prover (both litesvm-covered; the ledger in certora/README.md and
+//! certora/mutations.md classes them):
+//! * a handler CALL-SITE mutation (dropping the call or the assignment of the returned post-state);
+//! * a mutation inside `impl SupplyNum for u128` itself — the rules monomorphize the NativeInt
+//!   impl, so the u128 trait methods are outside every rule's cone. Their guards are the unit
+//!   tests below (each checked-op edge pinned) + the litesvm suites, NOT the prover.
 //!
 //! Constraints (prover frontiers — do not relax):
 //! * Everything here returns `Option`, NEVER `Result`/`FusdError`, and contains no `?`/`unwrap`/

@@ -14,7 +14,7 @@ verification-only `cvlr` deps never reach the deployable program.
 | Layer | What | Runs | Status |
 |---|---|---|---|
 | **Runnable** | `integration-tests/` litesvm fuzz — random/scripted transaction sequences over the live program, asserting the invariants after every tx. | locally (`cargo test`) | ✅ verified (with the `mutations.md` oracle) |
-| **Certora** | the CVLR `#[rule]`s in `programs/fusd-core/src/certora.rs` — inductive preservation over symbolic pre-states (the infinite tx space the fuzz only samples). | Certora cloud (license + `CERTORAKEY`) | per-conf ledger below — 6 rules cloud-VERIFIED, 10 authored/pending cloud, 1 retained-failing artifact |
+| **Certora** | the CVLR `#[rule]`s in `programs/fusd-core/src/certora.rs` — inductive preservation over symbolic pre-states (the infinite tx space the fuzz only samples). | Certora cloud (license + `CERTORAKEY`) | per-conf ledger below — 16 rules cloud-VERIFIED (incl. the smoke), 1 retained-failing artifact; S2–S8/C1 cloud mutation-flips pending |
 
 The runnable layer is the **mutation oracle** for the Certora layer: every invariant has a
 production-path break that must fail the runnable suite, and every Certora rule is additionally
@@ -29,18 +29,23 @@ mutation is vacuous.
 Every implemented rule **executes real code**: the bitmap and absorb rules call the exact production
 functions the handlers call, and the supply rules call the shared supply-transition functions
 extracted in the M-01 fix (`programs/fusd-core/src/supply_transition.rs`) — the same bodies the
-handlers run at `u128`, monomorphized to `NativeInt`. So a mutation inside a covered function flips
-both the Certora rule and the litesvm suite. What no rule covers: the handlers' CALL SITES — a
-handler that skips or bypasses the covered function leaves every rule green and is caught only by
-the litesvm mutation checks (`mutations.md`, class HANDLER).
+handlers run at `u128`, monomorphized to `NativeInt`. So a mutation of a covered function's
+TRANSITION ALGEBRA flips both the Certora rule and the litesvm suite. What no rule covers (both
+litesvm-only, `mutations.md` class HANDLER): the handlers' CALL SITES — a handler that skips or
+bypasses the covered function leaves every rule green — and the `impl SupplyNum for u128` trait
+methods themselves (`checked_add`/`checked_sub`/`min`/`bps_cut`): the rules monomorphize the
+NativeInt impl, so the u128 arithmetic primitives are outside every rule's cone and are guarded by
+the module's unit tests + litesvm, not the prover.
 
 Cloud-VERIFIED, with `rule_sanity: "basic"` on and the PROD-FN flip confirmed (`mutations.md`):
 
 | Invariant | Rule(s) | Conf | Mutation → VIOLATED |
 |---|---|---|---|
+| **#1 supply** — `circulating == agg_recorded_debt − unminted_interest + bad_debt` | all eight `supply_preserved_by_{borrow,repay,refresh_market,liquidate,redeem,urgent_redeem,settle_bad_debt,book_interest}_ghost` | `supply.conf` | `new_agg ← agg0` in `supply_transition::borrow` (the S1 PROD-FN break) → the borrow rule flips VIOLATED — cloud-confirmed post-M-01; the same class of shared-fn break exists per rule (`mutations.md` S1–S8) |
 | **#2a bitmap** — `words ⟺ counts` coupling (bit `k` set iff `counts[k] > 0`) | `bitmap_coupling_preserved_by_add_member` / `_remove_member` | `bitmap_helper.conf` | drop `rb::set`/`rb::clear` in `bucket.rs` |
 | **#3 liquidation** — full debt conserved across all 5 loss-absorption tiers | `absorb_conserves_debt` | `absorb.conf` | `let unhomed = 0;` in `recovery.rs` |
 | **#3 liquidation** — strict tier ordering (a tier fires only after higher ones drain) | `absorb_unhomed_iff_no_tier_covers` (+ `absorb_unhomed_reachable` witness) | `absorb.conf` | reorder the global tier ahead of the local buffer |
+| **C1 LST canonical cap** — `collateral_price ≤ canonical`, and the leg never RAISES collateral | `c1_canonical_caps_collateral` / `c1_canonical_never_raises_collateral` | `c1_canonical.conf` | drop the cap in `fusd_oracle::aggregate` (runnable-layer flip confirmed; the cloud flip is a pending acceptance item) |
 
 **Invariant #4 (Reactor-Pool P/S realizability) is deferred from the Certora pass on purpose:** the
 pool's `bnum` U256 division is intractable for the SMT backend (it times out). It stays covered by Kani +
@@ -50,23 +55,26 @@ silently dropped.
 The English/pseudocode specifications of the invariants live in `specs/*.rs` — spec-only pseudocode,
 never compiled or run (see §"What a green run proves").
 
-### Authored, pending cloud run
-
-| Invariant | Rule(s) | Conf | Mutation → VIOLATED |
-|---|---|---|---|
-| **#1 supply** — `circulating == agg_recorded_debt − unminted_interest + bad_debt` | all eight `supply_preserved_by_{borrow,repay,refresh_market,liquidate,redeem,urgent_redeem,settle_bad_debt,book_interest}_ghost` | `supply.conf` | break the shared transition fn (e.g. `new_agg ← agg0` in `supply_transition::borrow`) — flips the rule AND the litesvm suite; a handler call-site drop flips litesvm only (`mutations.md` S1–S8) |
-| **C1 LST canonical cap** — `collateral_price ≤ canonical`, and the leg never RAISES collateral | `c1_canonical_caps_collateral` / `c1_canonical_never_raises_collateral` | `c1_canonical.conf` | drop the cap in `fusd_oracle::aggregate` (`Some(c) => chosen.price.min(c)` → `chosen.price`) |
-
 The supply family executes the shared transitions extracted by M-01 and covers every
 supply-touching writer (the seven mint/burn handlers plus the interest-booking twin
-`accrual::accrue` / `adjust_rate`'s fee). The pre-M-01 borrow rule — which replayed a hand-written
-delta over `NativeInt` ghosts — was cloud-VERIFIED, but M-01 rewrote every supply rule body to
-execute the shared fns, so the whole family (borrow included) awaits a cloud re-run
-(`certoraSolanaProver certora/supply.conf`). Note the pre-M-01 rule's cone made a `borrow.rs` flip
-impossible: the flip recorded for the old S1 tick validated the in-rule model, not production code
-(`mutations.md` S1).
+`accrual::accrue` / `adjust_rate`'s fee). All eight rules VERIFIED on the cloud post-M-01
+(non-vacuous per `rule_sanity`), and the S1 PROD-FN acceptance flip is cloud-confirmed: with
+`new_agg ← agg0` mutated into `supply_transition::borrow`, the borrow rule reports FAIL — a
+production-code mutation now flips the proof, which the pre-M-01 ghost architecture could not do
+(its recorded S1 flip validated the in-rule model; `mutations.md` S1). The remaining S2–S8
+shared-fn cloud flips are pending acceptance items (each is the same one-line break class).
 
-C1 drives the real `fusd_oracle::aggregate` over symbolic u128 prices, in the same pure-arithmetic regime as the VERIFIED `absorb_*` rules (`k_bps = 0` folds the orthogonal −k·σ haircut to 0, keeping the proof off the u128 mul/div frontier). It compiles under `cargo check -p fusd-core --features certora`, and its mutation is confirmed at the runnable layer (`mutations.md` row C1 — the host test `canonical_caps_collateral_but_not_debt` FAILs under it), but it has **not** been run on the Certora cloud yet (needs `CERTORAKEY`). Run `certoraSolanaProver certora/c1_canonical.conf` to promote it to the VERIFIED table.
+C1 drives the real `fusd_oracle::aggregate` over symbolic u128 prices, in the same pure-arithmetic
+regime as the `absorb_*` rules (`k_bps = 0` folds the orthogonal −k·σ haircut to 0, keeping the
+proof off the u128 mul/div frontier). Both rules VERIFIED on the cloud; the runnable-layer mutation
+flip is confirmed (`mutations.md` row C1), the cloud-side flip is a pending acceptance item.
+
+**Operational gotcha (cost a failed run):** `certoraSolanaProver` reuses
+`target/sbpf-solana-solana/release/fusd_core.so` when it looks fresh, and an `anchor build` (e.g.
+`ci-checks.sh`) writes a PRODUCTION `.so` — no `#[rule]` symbols — to the same path. A run submitted
+after an anchor build then fails every rule with "Cannot find <rule>". Never interleave anchor
+builds with prover submissions; when in doubt, force the build first:
+`cargo certora-sbf --manifest-path programs/fusd-core/Cargo.toml --tools-version v1.53 --features certora`.
 
 ## What a green run proves — and what it does not
 
@@ -84,8 +92,9 @@ rung above where it sits.
    never compiled into any build, never run.
 4. **Characterized-failing artifacts** (`bitmap.conf`): never coverage; retained for the frontier
    writeup only.
-5. **Pending cloud**: authored rules with no (or no post-rewrite) cloud run — `supply.conf`'s eight
-   rules and `c1_canonical.conf`'s two.
+5. **Pending cloud**: authored rules with no (or no post-rewrite) cloud run. Currently EMPTY —
+   every authored rule is cloud-VERIFIED; the open acceptance items are the S2–S8/C1 cloud-side
+   mutation flips (each rule's shared-fn break class is cloud-proven via S1).
 
 A green dashboard means the listed rules hold of the code in their cones under these caveats — it
 does not mean the program is verified.
@@ -172,7 +181,7 @@ may be an on-chain bug with funds implications. Do not weaken the rule to make i
 - `specs/*.rs` — the English/pseudocode specification of each invariant (spec-only pseudocode; never
   compiled or run).
 - `supply.conf` · `bitmap_helper.conf` · `absorb.conf` · `round_trip.conf` — the run configs (build +
-  rules + flags). `c1_canonical.conf` — the C1 LST-cap rules (authored, pending cloud). `bitmap.conf`
+  rules + flags). `c1_canonical.conf` — the C1 LST-cap rules (cloud-VERIFIED). `bitmap.conf`
   — the superseded characterized-frontier attempt.
 - `cvlr_inlining.txt` · `cvlr_summaries.txt` — the Solana memory-model inlining/summary directives.
 - `mutations.md` — the non-vacuity acceptance matrix (the production break each rule must fail on).

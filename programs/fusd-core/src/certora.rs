@@ -5,9 +5,9 @@
 //!   * PRODUCTION-LINKED, cloud-VERIFIED: `bitmap_coupling_preserved_by_{add,remove}_member` (drive
 //!     `bucket::add_member`/`remove_member`; bitmap_helper.conf), the three `absorb_*` rules (drive
 //!     `fusd_math::recovery::absorb`; absorb.conf), and the `round_trip_smoke` pipeline check.
-//!   * PRODUCTION-LINKED, authored / pending cloud: the two `c1_*` rules (drive the real
+//!   * PRODUCTION-LINKED, cloud-VERIFIED: the two `c1_*` rules (drive the real
 //!     `fusd_oracle::aggregate`; c1_canonical.conf).
-//!   * SHARED-TRANSITION, authored / pending cloud re-run: the eight `supply_preserved_by_*_ghost`
+//!   * SHARED-TRANSITION, cloud-VERIFIED (S1 shared-fn mutation flip cloud-confirmed): the eight `supply_preserved_by_*_ghost`
 //!     rules EXECUTE `crate::supply_transition` — the same bodies the handlers run at `u128`,
 //!     monomorphized to `NativeInt` (audit M-01; supply.conf). The pre-M-01 replay-the-delta borrow
 //!     rule was cloud-VERIFIED; the rewritten bodies need a re-run.
@@ -563,7 +563,7 @@ pub fn absorb_unhomed_reachable() {
 
 // ===================== Invariant C1 (LST canonical-rate cap) — oracle aggregate =====================
 //
-// AUTHORED, PENDING CLOUD RUN (no CERTORAKEY locally). These drive the REAL `fusd_oracle::aggregate`
+// CLOUD-VERIFIED (both rules, non-vacuous). These drive the REAL `fusd_oracle::aggregate`
 // over nondet prices, in the SAME blocker-free pure-arithmetic regime as `absorb_conserves_debt`:
 // no Anchor `Context`, no account memory, no CPI, no summaries — `aggregate` is a pure fn over plain
 // structs. `k_bps = 0` makes the −k·σ haircut fold to 0 (it is orthogonal to C1 and would otherwise
