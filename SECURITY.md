@@ -2,8 +2,8 @@
 
 Fusion is a trustless, permissionless protocol issuing the Fusion Dollar (FUSD), a Solana-native
 overcollateralized CDP stablecoin. Its safety story rests on code, not policy — but responsible
-disclosure of vulnerabilities still matters, especially while the protocol is pre-deployment and
-hardening toward audit. (The program and crates keep their `fusd` names — code identity is
+disclosure of vulnerabilities still matters, especially while the protocol runs as a small-value
+guarded beta on mainnet and hardens toward audit. (The program and crates keep their `fusd` names — code identity is
 unchanged by branding.)
 
 ## Reporting a vulnerability
@@ -37,15 +37,16 @@ upgrade authority key (those trust assumptions are documented in `docs/fusion-do
 
 ## Status & bounty
 
-The protocol is **pre-deployment** and pre-audit (`docs/fusion-docs.md` §11). There is no formal bug
-bounty yet; a program will be established before a guarded mainnet launch. Until then, disclosures
+The protocol is deployed on mainnet-beta as a **small-value guarded beta** (unaudited — funds at
+risk, disclosed in the frontend) and is pre-audit (`docs/fusion-docs.md` §11). There is no formal
+bug bounty yet; a program will be established before scaling past the beta. Until then, disclosures
 are handled on a best-effort, good-faith basis, and meaningful reports will be credited (with your
 permission).
 
 ## Verifying what is deployed
 
-Once deployed, the on-chain program is built reproducibly (`scripts/verifiable-build.sh` via
-`solana-verify`). Confirm an on-chain program matches this source by comparing hashes:
+The on-chain program is built reproducibly (`scripts/verifiable-build.sh` via
+`solana-verify`). Confirm the deployed program matches this source by comparing hashes:
 
 ```
 solana-verify get-executable-hash target/deploy/fusd_core.so
