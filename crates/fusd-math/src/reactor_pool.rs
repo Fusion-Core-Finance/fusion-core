@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(st.total_deposits, 1_000_000 - rounds);
         let gain = collateral_gain(&g, STRIDE, 1_000_000, &snap).unwrap();
         // total collateral added = 3 * 1000 = 3000; sole depositor should get ~all of it.
-        assert!(gain >= 3000 - 2 && gain <= 3000, "no drift: got {} expected ~3000", gain);
+        assert!((3000 - 2..=3000).contains(&gain), "no drift: got {} expected ~3000", gain);
     }
 
     /// The Liquity error-feedback term must be the EXACT floor-division residual carried forward

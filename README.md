@@ -54,6 +54,14 @@ cargo test -p fusd-integration-tests
 ./scripts/verifiable-build.sh
 ```
 
+> **Clean checkout:** no keys are required — `anchor build` generates a throwaway program keypair
+> under `target/deploy/` that will NOT match `declare_id!`; the build, tests, and release gates
+> never read it (never run `anchor keys sync`; it rewrites `declare_id!`). The litesvm suite loads
+> `target/deploy/fusd_core.so`, so a bare `cargo test --workspace --all-targets` fails until the
+> `anchor build -- --features dev-oracle` line above has run — and `./scripts/ci-checks.sh`
+> intentionally leaves a *production* `.so` behind, so re-run that build line before going back to
+> bare `cargo test`. `./scripts/ci-checks.sh` needs no setup beyond the toolchain (plus `jq`).
+
 ## Key invariants (enforced in code, not policy)
 
 FUSD mint freeze authority = `None`; mint authority = a program PDA (legacy SPL Token).

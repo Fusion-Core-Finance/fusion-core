@@ -333,7 +333,7 @@ mod tests {
             let d = (next() % (u64::MAX as u128)) + 1; // non-zero
             let prod = a * b; // fits by construction
             assert_eq!(mul_div_floor(a, b, d), Some(prod / d));
-            let expect_ceil = prod / d + if prod % d != 0 { 1 } else { 0 };
+            let expect_ceil = prod / d + if !prod.is_multiple_of(d) { 1 } else { 0 };
             assert_eq!(mul_div_ceil(a, b, d), Some(expect_ceil));
         }
     }

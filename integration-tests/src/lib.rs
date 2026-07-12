@@ -135,8 +135,25 @@ fn load_upgradeable_program(svm: &mut LiteSVM, so_path: &str, upgrade_authority:
     use solana_sdk::account::Account;
     use solana_sdk::bpf_loader_upgradeable::{self, UpgradeableLoaderState};
 
-    let elf = std::fs::read(so_path)
-        .expect("read fusd_core.so (built with `anchor build -- --features dev-oracle`)");
+    // Fail fast with an actionable message: a clean checkout has no .so, and scripts/ci-checks.sh
+    // deliberately leaves a PRODUCTION .so behind (step 7), which lacks dev_set_price.
+    let elf = std::fs::read(so_path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {so_path}: {e}\n\
+             the litesvm suite loads the compiled program — build it first:\n\
+                 anchor build -- --features dev-oracle\n\
+             (scripts/ci-checks.sh step 3 does this automatically; bare \
+             `cargo test --workspace` on a clean checkout always hits this)"
+        )
+    });
+    // Anchor codegen embeds `msg!("Instruction: DevSetPrice")` in every dev-oracle build — the same
+    // marker scripts/check-no-dev-oracle.sh asserts is ABSENT from production builds.
+    const DEV_ORACLE_MARKER: &[u8] = b"Instruction: DevSetPrice";
+    assert!(
+        elf.windows(DEV_ORACLE_MARKER.len()).any(|w| w == DEV_ORACLE_MARKER),
+        "{so_path} is a PRODUCTION build (no dev-oracle feature) — ci-checks.sh intentionally \
+         leaves one after step 7; rebuild with: anchor build -- --features dev-oracle"
+    );
     let pd_addr = programdata_pda();
 
     let meta = UpgradeableLoaderState::ProgramData {

@@ -5,7 +5,7 @@
 //!   2. **redistribution** to the other active positions (Liquity tier 2; all-or-nothing on whether
 //!      any recipient exists, since a single reward-per-unit bump spreads the whole remainder),
 //!   3. the per-market **local insurance buffer** (this market's FIRST-LOSS capital, fail-closed haircut),
-//!   3.5 the **global backstop reserve** (shared SECOND-LOSS capital, fail-closed haircut — the caller
+//!      3.5 the **global backstop reserve** (shared SECOND-LOSS capital, fail-closed haircut — the caller
 //!      passes the already-CAPPED amount available to THIS draw: `min(reserve balance, per-market draw
 //!      cap)`, so this tier needs no knowledge of the cap logic),
 //!   4. **un-homed** — the residual no tier could extinguish *now*, which is the terminal signal to

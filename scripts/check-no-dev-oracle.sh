@@ -34,6 +34,23 @@ else
   fi
 fi
 
+# The gate is KEYPAIR-INDEPENDENT: cargo-build-sbf generates a random throwaway
+# target/deploy/fusd_core-keypair.json on a fresh clone (the real deploy key lives outside the
+# repo; keys/ is gitignored) and nothing here reads it. The IDL `address` below is printed from
+# the program's own `declare_id!`, so this assert proves the scanned bytecode was built from the
+# canonical mainnet source — and catches the one keypair-related footgun: `anchor keys sync`,
+# which REWRITES declare_id!/Anchor.toml to the random local key. NEVER run `anchor keys sync`.
+expected_id="FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud"  # = declare_id! (programs/fusd-core/src/lib.rs)
+if command -v jq >/dev/null 2>&1; then
+  got_id="$(jq -r '.address' "$idl")"
+else
+  got_id="$(grep -o '"address": *"[1-9A-HJ-NP-Za-km-z]*"' "$idl" | head -1 | tr -d '" ' | cut -d: -f2)"
+fi
+if [ "$got_id" != "$expected_id" ]; then
+  echo "FAIL: IDL address '$got_id' != declared mainnet program id '$expected_id' — was 'anchor keys sync' run? Restore declare_id! and Anchor.toml before scanning." >&2
+  fail=1
+fi
+
 # The compiled program must carry no DevSetPrice symbol/string. Guard against a fail-open pass: if
 # `strings` is missing or produces no output, the grep below would match nothing and spuriously look
 # "clean". Require `strings` present and a non-empty scan before concluding the .so is clean.

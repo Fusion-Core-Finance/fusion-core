@@ -23,9 +23,10 @@ step "1/7  Pure-crate host tests (fusd-math + fusd-oracle + fusd-core unit tests
 # litesvm lane.
 cargo test -p fusd-math -p fusd-oracle -p fusd-core
 
-step "2/7  Clippy lint gate (fusd-oracle, both feature configs; warnings are errors)"
+step "2/7  Clippy lint gate (fusd-oracle both feature configs + fusd-math; warnings are errors)"
 cargo clippy -p fusd-oracle --all-targets -- -D warnings
 cargo clippy -p fusd-oracle --all-targets --features pod -- -D warnings
+cargo clippy -p fusd-math --all-targets -- -D warnings
 
 step "3/7  Build the dev-oracle .so (needed by the litesvm integration tests)"
 anchor build -- --features dev-oracle

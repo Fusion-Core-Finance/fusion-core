@@ -192,7 +192,7 @@ mod tests {
         };
         for _ in 0..20_000 {
             // debt up to ~1e15 native ($1B), rate up to 2550 bps, period up to ~20 years.
-            let debt = (next() % 1_000_000_000_000_000) as u128;
+            let debt = next() % 1_000_000_000_000_000;
             let rate = (next() % 2_551) as u16;
             let period = (next() % 631_152_000) as u64; // 0..~20y
 

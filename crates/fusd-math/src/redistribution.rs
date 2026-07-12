@@ -254,8 +254,8 @@ mod tests {
             redistribute(&mut st, stake, 3, 1).unwrap();
         }
         let (coll, art) = pending(stake, &st, &snap).unwrap();
-        assert!(coll >= 3000 - 2 && coll <= 3000, "coll no drift: {coll}");
-        assert!(art >= 1000 - 2 && art <= 1000, "art no drift: {art}");
+        assert!((3000 - 2..=3000).contains(&coll), "coll no drift: {coll}");
+        assert!((1000 - 2..=1000).contains(&art), "art no drift: {art}");
     }
 
     #[test]

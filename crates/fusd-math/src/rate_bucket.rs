@@ -74,9 +74,9 @@ pub fn first_set_from(words: &[u64], from: usize) -> Option<usize> {
     if first_word != 0 {
         return Some(start_word * 64 + first_word.trailing_zeros() as usize);
     }
-    for i in (start_word + 1)..words.len() {
-        if words[i] != 0 {
-            return Some(i * 64 + words[i].trailing_zeros() as usize);
+    for (i, &w) in words.iter().enumerate().skip(start_word + 1) {
+        if w != 0 {
+            return Some(i * 64 + w.trailing_zeros() as usize);
         }
     }
     None
