@@ -65,6 +65,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     accrual::accrue(&mut ctx.accounts.market, now)?;
     let spot = ctx.accounts.market.spot;
     let debt_spot = ctx.accounts.market.debt_spot;
+    // Both legs must be present for the mid — validated BEFORE it is computed (audit L-01).
+    require!(spot > 0 && debt_spot > 0, FusdError::OracleUnavailable);
     // Redemption pays at the MID oracle price, NOT the conservative LOW `spot`: dividing an outflow by
     // the LOW price hands out MORE collateral than a dollar is worth, so during a wide-confidence spike
     // redemption is profitable AT peg and drains the lowest-rate borrowers for no peg benefit. `spot =
@@ -72,7 +74,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
     // reconstructs it (exact for a non-LST market; for an LST market it is the midpoint of the
     // canonical-capped-low and raw-high — still un-skewed by the confidence band). BOLD/Liquity pay
     // redemption at the single oracle price; this matches that.
-    let mid = (spot + debt_spot) / 2;
+    let mid = spot.checked_add(debt_spot).ok_or(FusdError::MathOverflow)? / 2;
 
     // C9 dynamic redemption base-rate: when enabled (`redemption_base_rate_max_bps > 0`), the fee is
     // the flat `redemption_fee_bps` FLOOR plus a volume-spike base-rate (decays over time), clamped to
@@ -91,9 +93,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
         0
     };
 
-    // Redemption pays face value against a fresh oracle. Both legs must be present for the mid.
+    // Redemption pays face value against a fresh oracle (audit L-01).
     let slot = clock.slot;
-    require!(spot > 0 && debt_spot > 0, FusdError::OracleUnavailable);
     require!(
         slot.saturating_sub(ctx.accounts.market.spot_updated_slot) <= MAX_PRICE_STALENESS_SLOTS,
         FusdError::StalePrice

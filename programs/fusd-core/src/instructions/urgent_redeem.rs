@@ -74,7 +74,7 @@ pub fn handler<'info>(
     // never over-pays at the conservative LOW `spot`. A price must exist (a never-priced market has no
     // debt to wind down anyway).
     require!(spot > 0 && debt_spot > 0, FusdError::OracleUnavailable);
-    let mid = (spot + debt_spot) / 2;
+    let mid = spot.checked_add(debt_spot).ok_or(FusdError::MathOverflow)? / 2;
 
     let coll_mint = ctx.accounts.collateral_mint.key();
     let mut remaining = amount as u128;

@@ -308,6 +308,41 @@ fn urgent_redeem_winds_down_a_debt_free_recipient_of_parked_redistribution() {
     assert_eq!(read_position(&svm, &r.position).recorded_debt, 0, "R fully wound down");
 }
 
+/// Audit L-01 regression (urgent path): with both price legs planted at `u128::MAX`, the mid
+/// computation `spot + debt_spot` overflows u128. Pre-fix this was an unchecked add — under the
+/// workspace's `overflow-checks = true` release profile it panic-aborted the instruction
+/// (`ProgramFailedToComplete`) instead of returning a controlled error. Post-fix `checked_add`
+/// fails closed with `MathOverflow` (6013). urgent_redeem has no staleness gate and the zero-leg
+/// require passes (`u128::MAX > 0`), so the checked add is the first failure point. Legs this
+/// large are unreachable through the production crank (`usd_ray_to_spot` fails closed) — only the
+/// dev-oracle `dev_set_price` (no bounds check, no shutdown gate) can plant them.
+#[test]
+fn urgent_redeem_mid_overflow_fails_closed_not_panic() {
+    let (mut svm, gov, cma, coll) = setup();
+    let a = open_borrower(&mut svm, &cma, &coll, 10, usd(600)); // target
+    let b = open_borrower(&mut svm, &cma, &coll, 20, usd(600)); // redeemer (holds $600 fUSD)
+
+    // Oracle dies, then shutdown — the standard last-price wind-down trigger.
+    warp_slots(&mut svm, oracle_staleness() + 1);
+    send(&mut svm, &[shutdown_ix(&gov.pubkey(), &coll)], &gov, &[]).expect("shutdown");
+
+    // Plant the overflowing legs post-shutdown: spot = debt_spot = u128::MAX.
+    send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll, u128::MAX)], &gov, &[]).expect("plant MAX");
+
+    let f = send(
+        &mut svm,
+        &[urgent_redeem_ix(&b.kp.pubkey(), &coll, &b.fusd_ata, &b.coll_ata, &[a.position], usd(300))],
+        &b.kp,
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        custom_code(&f),
+        E_MATH_OVERFLOW,
+        "mid overflow must fail closed with MathOverflow, not panic-abort"
+    );
+}
+
 // ============================ the open side stays open ============================
 
 #[test]

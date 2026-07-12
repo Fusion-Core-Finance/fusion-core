@@ -322,3 +322,40 @@ fn redeem_unreached_candidate_keeps_consistent_stake() {
         [x.position, y.position, r.position].iter().map(|p| read_position(&svm, p).stake).sum();
     assert_eq!(m.total_stakes, sum);
 }
+
+/// Audit L-01 regression: with both price legs planted at `u128::MAX`, the mid computation
+/// `spot + debt_spot` overflows u128. Pre-fix this was an unchecked add — under the workspace's
+/// `overflow-checks = true` release profile it panic-aborted the instruction
+/// (`ProgramFailedToComplete`) instead of returning a controlled error. Post-fix `checked_add`
+/// fails closed with `MathOverflow` (6013): the hoisted zero-leg require passes (`u128::MAX > 0`)
+/// and the overflow trips before the staleness gate or any candidate processing. Legs this large
+/// are unreachable through the production crank (`usd_ray_to_spot` fails closed) — only the
+/// dev-oracle `dev_set_price` (no bounds check) can plant them.
+#[test]
+fn redeem_mid_overflow_fails_closed_not_panic() {
+    let mut svm = new_svm();
+    let gov = Keypair::new();
+    airdrop_sol(&mut svm, &gov.pubkey(), 1_000);
+    let cma = Keypair::new();
+    let coll = bootstrap_market(&mut svm, &gov, &cma);
+
+    send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll, spot_for_usd(100))], &gov, &[]).expect("p100");
+    let b = open_borrower_rate(&mut svm, &cma, &coll, 10, usd(300), 300);
+    let r = open_borrower_rate(&mut svm, &cma, &coll, 10, usd(300), 500);
+
+    // Plant the overflowing legs: spot = debt_spot = u128::MAX (dev_set_price has no bounds check).
+    send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll, u128::MAX)], &gov, &[]).expect("plant MAX");
+
+    let f = send(
+        &mut svm,
+        &[redeem_ix(&r.kp.pubkey(), &coll, &r.fusd_ata, &r.coll_ata, &[b.position], usd(300))],
+        &r.kp,
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        custom_code(&f),
+        E_MATH_OVERFLOW,
+        "mid overflow must fail closed with MathOverflow, not panic-abort"
+    );
+}
