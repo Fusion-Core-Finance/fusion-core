@@ -14,7 +14,7 @@ verification-only `cvlr` deps never reach the deployable program.
 | Layer | What | Runs | Status |
 |---|---|---|---|
 | **Runnable** | `integration-tests/` litesvm fuzz — random/scripted transaction sequences over the live program, asserting the invariants after every tx. | locally (`cargo test`) | ✅ verified (with the `mutations.md` oracle) |
-| **Certora** | the CVLR `#[rule]`s in `programs/fusd-core/src/certora.rs` — inductive preservation over symbolic pre-states (the infinite tx space the fuzz only samples). | Certora cloud (license + `CERTORAKEY`) | per-conf ledger below — 16 rules cloud-VERIFIED (incl. the smoke), 1 retained-failing artifact; S2–S8/C1 cloud mutation-flips pending |
+| **Certora** | the CVLR `#[rule]`s in `programs/fusd-core/src/certora.rs` — inductive preservation over symbolic pre-states (the infinite tx space the fuzz only samples). | Certora cloud (license + `CERTORAKEY`) | per-conf ledger below — 16 rules cloud-VERIFIED (incl. the smoke), 1 retained-failing artifact; every S1–S8 PROD-FN mutation flip cloud-confirmed, C1 cloud flip pending |
 
 The runnable layer is the **mutation oracle** for the Certora layer: every invariant has a
 production-path break that must fail the runnable suite, and every Certora rule is additionally
@@ -41,7 +41,7 @@ Cloud-VERIFIED, with `rule_sanity: "basic"` on and the PROD-FN flip confirmed (`
 
 | Invariant | Rule(s) | Conf | Mutation → VIOLATED |
 |---|---|---|---|
-| **#1 supply** — `circulating == agg_recorded_debt − unminted_interest + bad_debt` | all eight `supply_preserved_by_{borrow,repay,refresh_market,liquidate,redeem,urgent_redeem,settle_bad_debt,book_interest}_ghost` | `supply.conf` | `new_agg ← agg0` in `supply_transition::borrow` (the S1 PROD-FN break) → the borrow rule flips VIOLATED — cloud-confirmed post-M-01; the same class of shared-fn break exists per rule (`mutations.md` S1–S8) |
+| **#1 supply** — `circulating == agg_recorded_debt − unminted_interest + bad_debt` | all eight `supply_preserved_by_{borrow,repay,refresh_market,liquidate,redeem,urgent_redeem,settle_bad_debt,book_interest}_ghost` | `supply.conf` | every row S1–S8 cloud-confirmed: each shared-fn break (skip the cadd/csub — incl. the S3 C16 retire-skip and the single redeem_step break flipping BOTH S6 and S7 rules) drove its rule to FAIL, and the reverted tree re-VERIFIED (`mutations.md`) |
 | **#2a bitmap** — `words ⟺ counts` coupling (bit `k` set iff `counts[k] > 0`) | `bitmap_coupling_preserved_by_add_member` / `_remove_member` | `bitmap_helper.conf` | drop `rb::set`/`rb::clear` in `bucket.rs` |
 | **#3 liquidation** — full debt conserved across all 5 loss-absorption tiers | `absorb_conserves_debt` | `absorb.conf` | `let unhomed = 0;` in `recovery.rs` |
 | **#3 liquidation** — strict tier ordering (a tier fires only after higher ones drain) | `absorb_unhomed_iff_no_tier_covers` (+ `absorb_unhomed_reachable` witness) | `absorb.conf` | reorder the global tier ahead of the local buffer |
@@ -61,8 +61,10 @@ supply-touching writer (the seven mint/burn handlers plus the interest-booking t
 (non-vacuous per `rule_sanity`), and the S1 PROD-FN acceptance flip is cloud-confirmed: with
 `new_agg ← agg0` mutated into `supply_transition::borrow`, the borrow rule reports FAIL — a
 production-code mutation now flips the proof, which the pre-M-01 ghost architecture could not do
-(its recorded S1 flip validated the in-rule model; `mutations.md` S1). The remaining S2–S8
-shared-fn cloud flips are pending acceptance items (each is the same one-line break class).
+(its recorded S1 flip validated the in-rule model; `mutations.md` S1). The S2–S8 flips are
+cloud-confirmed too — all seven runs (incl. the S3 C16 sub-mutation and the shared redeem_step
+break that flips S6 AND S7 from one line) reported FAIL, and the clean tree re-VERIFIED all
+eight rules afterwards.
 
 C1 drives the real `fusd_oracle::aggregate` over symbolic u128 prices, in the same pure-arithmetic
 regime as the `absorb_*` rules (`k_bps = 0` folds the orthogonal −k·σ haircut to 0, keeping the
@@ -93,8 +95,8 @@ rung above where it sits.
 4. **Characterized-failing artifacts** (`bitmap.conf`): never coverage; retained for the frontier
    writeup only.
 5. **Pending cloud**: authored rules with no (or no post-rewrite) cloud run. Currently EMPTY —
-   every authored rule is cloud-VERIFIED; the open acceptance items are the S2–S8/C1 cloud-side
-   mutation flips (each rule's shared-fn break class is cloud-proven via S1).
+   every authored rule is cloud-VERIFIED and every S1–S8 PROD-FN flip is cloud-confirmed; the one
+   open acceptance item is C1's cloud-side mutation flip (runnable-layer flip confirmed).
 
 A green dashboard means the listed rules hold of the code in their cones under these caveats — it
 does not mean the program is verified.
