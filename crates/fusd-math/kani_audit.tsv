@@ -1,27 +1,27 @@
-# inputs_sha256=6c2043df9226bac811a37d27fa55f6cae044ec899fab81798385ae66a90ca042	kani=0.67.0	cbmc=6.8.0	generated=2026-07-12T04:57:07Z
+# inputs_sha256=189c42d869b70a9421636ed696ec29ccc23e99d31d68106f5a11a0f3f5b631db	kani=0.67.0	cbmc=6.8.0	generated=2026-07-12T06:20:37Z
 proof	cbmc_s	wall_s	status	covers	strength
-mul_div_floor_matches_reference	5.1605597	8	PASS	2 of 2 cover properties satisfied	STRONG
-mul_div_ceil_is_floor_plus_remainder_indicator	58.32553	60	PASS	2 of 2 cover properties satisfied	STRONG
-mul_div_zero_denominator_is_none	0.103986844	2	PASS	no-cover	STRONG
-mul_div_fails_closed_on_overflow	0.8732721	2	PASS	no-cover	UNIT_TEST
-present_debt_rounds_up_against_borrower	4.005879	6	PASS	1 of 1 cover properties satisfied	STRONG
-ray_mul_up_is_floor_or_one_more	90.97932	93	PASS	1 of 1 cover properties satisfied	STRONG
-apply_bps_never_exceeds_notional	0.2582267	1	PASS	2 of 2 cover properties satisfied	STRONG
-ray_pow_identities	2.46372	5	PASS	no-cover	WEAK
-s_idx_none_iff_cell_out_of_range	0.4403831	2	PASS	3 of 3 cover properties satisfied	STRONG
-compute_stake_identity_before_first_liquidation	0.12579957	2	PASS	1 of 1 cover properties satisfied	WEAK
-compute_stake_never_over_stakes	3.2511296	4	PASS	2 of 2 cover properties satisfied	STRONG
-offset_full_drain_rolls_epoch_and_resets	1.7332916	6	PASS	1 of 1 cover properties satisfied	STRONG
-offset_partial_keeps_pool_solvent	25.063482	27	PASS	2 of 2 cover properties satisfied	STRONG
-update_product_rescales_above_floor	2.0640607	3	PASS	2 of 2 cover properties satisfied	STRONG
-accumulate_is_proper_division	16.973959	18	PASS	2 of 2 cover properties satisfied	STRONG
-redistribute_single_recipient_conserves	7.403964	10	PASS	2 of 2 cover properties satisfied	STRONG
-redistribute_two_recipients_conserve	29.025885	31	PASS	2 of 2 cover properties satisfied	STRONG
-offset_partial_conserves_collateral	25.866056	27	PASS	2 of 2 cover properties satisfied	STRONG
-absorb_conserves_debt_exactly	2.061041	5	PASS	5 of 5 cover properties satisfied	STRONG
-absorb_is_fail_closed_and_ordered	1.8454366	3	PASS	4 of 4 cover properties satisfied	STRONG
-accrued_one_year_is_debt_times_rate	3.4434314	5	PASS	2 of 2 cover properties satisfied	STRONG
-pending_aggregate_one_year_rounds_up	2.7044625	4	PASS	2 of 2 cover properties satisfied	STRONG
-aggregate_never_short_of_position	5.723214	7	PASS	2 of 2 cover properties satisfied	STRONG
-accrued_zero_at_boundaries	0.2478035	2	PASS	no-cover	STRONG
-accrued_fails_closed_on_overflow	0.17636888	2	PASS	no-cover	UNIT_TEST
+mul_div_floor_matches_reference	5.715351	7	PASS	2 of 2 cover properties satisfied	STRONG
+mul_div_ceil_is_floor_plus_remainder_indicator	61.3068	61	PASS	2 of 2 cover properties satisfied	STRONG
+mul_div_zero_denominator_is_none	0.11336913	2	PASS	no-cover	STRONG
+mul_div_fails_closed_on_overflow	0.8891364	3	PASS	no-cover	UNIT_TEST
+present_debt_rounds_up_against_borrower	4.2353563	6	PASS	1 of 1 cover properties satisfied	STRONG
+ray_mul_up_is_floor_or_one_more	94.70142	94	PASS	1 of 1 cover properties satisfied	STRONG
+apply_bps_never_exceeds_notional	0.31310016	4	PASS	2 of 2 cover properties satisfied	STRONG
+ray_pow_identities	2.4917004	5	PASS	no-cover	WEAK
+s_idx_none_iff_cell_out_of_range	0.4467925	2	PASS	3 of 3 cover properties satisfied	STRONG
+compute_stake_identity_before_first_liquidation	0.18798082	2	PASS	1 of 1 cover properties satisfied	WEAK
+compute_stake_never_over_stakes	3.4875383	4	PASS	2 of 2 cover properties satisfied	STRONG
+offset_full_drain_rolls_epoch_and_resets	1.691793	4	PASS	1 of 1 cover properties satisfied	STRONG
+offset_partial_keeps_pool_solvent	23.650648	24	PASS	2 of 2 cover properties satisfied	STRONG
+update_product_rescales_above_floor	2.2600212	4	PASS	2 of 2 cover properties satisfied	STRONG
+accumulate_is_proper_division	16.080452	18	PASS	2 of 2 cover properties satisfied	STRONG
+redistribute_single_recipient_conserves	7.3187346	8	PASS	2 of 2 cover properties satisfied	STRONG
+redistribute_two_recipients_conserve	28.457504	31	PASS	2 of 2 cover properties satisfied	STRONG
+offset_partial_conserves_collateral	23.888264	25	PASS	2 of 2 cover properties satisfied	STRONG
+absorb_conserves_debt_exactly	2.0476224	4	PASS	5 of 5 cover properties satisfied	STRONG
+absorb_is_fail_closed_and_ordered	1.7905862	3	PASS	4 of 4 cover properties satisfied	STRONG
+accrued_one_year_is_debt_times_rate	3.277858	5	PASS	2 of 2 cover properties satisfied	STRONG
+pending_aggregate_one_year_rounds_up	2.6632488	5	PASS	2 of 2 cover properties satisfied	STRONG
+aggregate_never_short_of_position	5.5621724	6	PASS	2 of 2 cover properties satisfied	STRONG
+accrued_zero_at_boundaries	0.27693275	2	PASS	no-cover	STRONG
+accrued_fails_closed_on_overflow	0.23671655	2	PASS	no-cover	UNIT_TEST

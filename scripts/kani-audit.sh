@@ -71,12 +71,27 @@ compute_digest() {
   local deps
   # Locked dep versions of the kani lib build (normal deps only — dev-deps never enter the proof).
   # `sed 's/ (.*//'` strips cargo tree's machine-specific absolute-path suffix on path deps —
-  # required, or local and CI digests diverge.
+  # required, or local and CI digests diverge. Source identity is NOT carried by this line (the
+  # strip also removes git/registry annotations); it is bound by the Cargo.lock stanzas below.
   deps="$(cargo tree -p "$PKG" -e normal --prefix none --locked 2>/dev/null | sed 's/ (.*//' | LC_ALL=C sort -u)"
   if [ -z "$deps" ]; then
     echo "GATE FAIL: cargo tree -p $PKG --locked failed — Cargo.lock stale?" >&2
     return 1
   fi
+  # The Cargo.lock [[package]] stanzas for every dep in the kani lib build (name/version/source/
+  # checksum). This is what pins the dep SOURCES: a same-version repoint (a [patch.crates-io] fork
+  # of bnum, registry -> git/path) changes the stanza (source/checksum move or vanish) even though
+  # the cargo-tree line above is unchanged after the path strip.
+  local names lock_stanzas
+  names="$(printf '%s\n' "$deps" | awk '{print $1}')"
+  lock_stanzas="$(awk -v names="$names" '
+    BEGIN { n = split(names, arr, "\n"); for (i = 1; i <= n; i++) want[arr[i]] = 1 }
+    /^\[\[package\]\]/ { inpkg = 1; buf = ""; keep = 0; next }
+    inpkg && /^name = / { pkg = $3; gsub(/"/, "", pkg); keep = (pkg in want) }
+    inpkg && /^$/ { if (keep) print buf; inpkg = 0; next }
+    inpkg { buf = buf $0 "\n" }
+    END { if (inpkg && keep) print buf }
+  ' Cargo.lock)"
   local -a src_files
   mapfile -t src_files < <(find crates/fusd-math/src -name '*.rs' -type f | LC_ALL=C sort)
   {
@@ -85,7 +100,11 @@ compute_digest() {
     # force a re-prove. The window runs to the next '[' section line (or EOF); deleting the block
     # yields an empty extraction, which changes the digest — fail closed.
     sed -n '/^\[\[workspace\.metadata\.kani\.proof\]\]/,/^\[/p' Cargo.toml
+    # Any [patch] section of the workspace manifest: a path-fork patch never reaches Cargo.lock's
+    # source field, but it must live here — so hashing the section catches it.
+    sed -n '/^\[patch/,/^\[/p' Cargo.toml
     printf '%s\n' "$deps"
+    printf '%s\n' "$lock_stanzas"
   } | sha256 | awk '{print $1}'
 }
 
@@ -98,20 +117,25 @@ compute_digest() {
 # kani::cover! (and commented-out covers) must not count, so covers must live inline on code lines.
 parse_tags() {
   awk '
-    /^[[:space:]]*\/\/[[:space:]]*covers:[[:space:]]*none/ { cn_pend=1; next }
+    # The exemption marker is honored ONLY when the very next line is the strength line (the
+    # documented "directly above" contract) — cn_prev carries it across exactly one line, and every
+    # other rule clears it, so a prose "covers: none" elsewhere in a harness body cannot exempt the
+    # NEXT harness.
+    /^[[:space:]]*\/\/[[:space:]]*covers:[[:space:]]*none/ { cn_prev=1; next }
     /^[[:space:]]*\/\/[[:space:]]*strength:/ {
-      t=$0; sub(/.*strength:[[:space:]]*/, "", t); sub(/[[:space:]].*/, "", t); tag=t; have=1; next
+      t=$0; sub(/.*strength:[[:space:]]*/, "", t); sub(/[[:space:]].*/, "", t); tag=t; have=1;
+      cn_tag=cn_prev; cn_prev=0; next
     }
-    /^[[:space:]]*\/\// { next }
-    /#\[kani::proof\]/ { pend=1; next }
+    /^[[:space:]]*\/\// { cn_prev=0; next }
+    /#\[kani::proof\]/ { pend=1; cn_prev=0; next }
     pend==1 && $1=="fn" {
       if (cur != "") printf "%s\t%s\t%d\t%d\n", cur, curtag, nc, cexempt;
       cur=$2; sub(/\(.*/, "", cur);
       curtag=(have ? tag : "MISSING");
-      nc=0; cexempt=cn_pend;
-      pend=0; have=0; tag=""; cn_pend=0; next
+      nc=0; cexempt=cn_tag;
+      pend=0; have=0; tag=""; cn_tag=0; cn_prev=0; next
     }
-    { nc += gsub(/kani::cover!/, "&") }
+    { nc += gsub(/kani::cover!/, "&"); cn_prev=0 }
     END { if (cur != "") printf "%s\t%s\t%d\t%d\n", cur, curtag, nc, cexempt }
   ' "$SRC"
 }
@@ -238,13 +262,16 @@ for row in "${ROWS[@]}"; do
   rm -f "$log"
 done
 
-mv "$tmp" "$ARTIFACT"
-# The artifact must correspond to ONE source state: reject it if the proof inputs drifted mid-run
-# (a real failure mode for a multi-hour solver pass; the check itself is cheap).
+# The artifact must correspond to ONE source state: reject it BEFORE installation if the proof
+# inputs drifted mid-run (a real failure mode for a multi-hour solver pass; the check itself is
+# cheap). Checking before the mv means a drifted run never leaves a poisoned TSV — stamped with the
+# PRE-run digest but proven against a mix of source states — on disk where it could be committed.
 if [ "$(compute_digest)" != "$digest" ]; then
-  echo "GATE FAIL: proof inputs changed while the audit was running — the artifact does not correspond to a single source state; re-run." >&2
-  fail=1
+  echo "GATE FAIL: proof inputs changed while the audit was running — the artifact does not correspond to a single source state and was NOT installed (kept at $tmp for inspection); re-run." >&2
+  column -t -s$'\t' "$tmp"
+  exit 1
 fi
+mv "$tmp" "$ARTIFACT"
 echo "========================================================================"
 column -t -s$'\t' "$ARTIFACT"
 echo "========================================================================"
