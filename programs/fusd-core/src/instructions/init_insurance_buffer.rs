@@ -1,7 +1,10 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
-use crate::constants::{BUFFER_FUSD_VAULT_SEED, BUFFER_SEED, CONFIG_SEED, FUSD_MINT_SEED, MARKET_SEED};
+use crate::constants::{
+    BUFFER_FUSD_VAULT_SEED, BUFFER_SEED, CONFIG_SEED, FUSD_MINT_SEED, LIQ_INFRA_INSURANCE_BUFFER,
+    MARKET_SEED,
+};
 use crate::errors::FusdError;
 use crate::state::{InsuranceBuffer, Market, ProtocolConfig};
 
@@ -23,7 +26,7 @@ pub struct InitInsuranceBuffer<'info> {
     #[account(seeds = [FUSD_MINT_SEED], bump)]
     pub fusd_mint: Box<Account<'info, Mint>>,
 
-    #[account(seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
+    #[account(mut, seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
     pub market: Box<Account<'info, Market>>,
 
     #[account(
@@ -56,6 +59,10 @@ pub fn handler(ctx: Context<InitInsuranceBuffer>) -> Result<()> {
         ctx.accounts.config.gov_authority,
         FusdError::Unauthorized
     );
+
+    // L-02 borrow gate: record that the insurance buffer now exists. Unconditional OR — on a
+    // legacy 0-flag market this starts converging it onto the gated encoding.
+    ctx.accounts.market.liq_infra_flags |= LIQ_INFRA_INSURANCE_BUFFER;
 
     let b = &mut ctx.accounts.insurance_buffer;
     b.collateral_mint = ctx.accounts.collateral_mint.key();

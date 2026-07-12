@@ -202,6 +202,8 @@ fn guardian_pause_is_per_market() {
     )
     .expect("init market Y");
     send(&mut svm, &[init_reactor_pool_ix(&gov.pubkey(), &coll_y)], &gov, &[]).expect("init RP Y");
+    send(&mut svm, &[init_insurance_buffer_ix(&gov.pubkey(), &coll_y)], &gov, &[])
+        .expect("init buffer Y");
     send(&mut svm, &[dev_set_price_ix(&gov.pubkey(), &coll_y, spot_for_usd(100))], &gov, &[])
         .expect("price Y");
 

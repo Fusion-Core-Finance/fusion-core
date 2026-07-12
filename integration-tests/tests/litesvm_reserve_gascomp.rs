@@ -163,6 +163,7 @@ fn init_market_clamps_incentives_and_close_requires_empty() {
     )
     .expect("within bounds ok");
     send(&mut svm, &[init_reactor_pool_ix(&gov.pubkey(), &coll)], &gov, &[]).expect("init rp");
+    send(&mut svm, &[init_insurance_buffer_ix(&gov.pubkey(), &coll)], &gov, &[]).expect("init buffer");
     let m = read_market(&svm, &market_pda(&coll));
     assert_eq!(m.reserve_lamports, RESERVE_LAMPORTS);
     assert_eq!(m.liq_gas_comp_bps, GAS_COMP_BPS);

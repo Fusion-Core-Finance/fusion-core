@@ -1,5 +1,6 @@
 //! In-process litesvm integration test for the fUSD CDP flow (open → deposit → borrow → repay →
-//! withdraw) plus the four guard reverts. Loads the real `.so` (built with `--features dev-oracle`)
+//! withdraw) plus the guard reverts, including the L-02 liq-infra borrow-gate progression
+//! (flags 1 → 3 → 7). Loads the real `.so` (built with `--features dev-oracle`)
 //! and drives it through the shared harness (`fusd_integration_tests`).
 //!
 //!     anchor build -- --features dev-oracle
@@ -66,6 +67,7 @@ fn full_cdp_flow() {
         assert_eq!(mk.spot, 0);
         assert_eq!(mk.agg_recorded_debt, 0);
         assert_eq!(mk.agg_weighted_debt_sum, 0);
+        assert_eq!(mk.liq_infra_flags, 1, "born LIQ_INFRA_GATED (bit 0)");
     }
 
     // The borrower is `gov` here for simplicity.
@@ -94,8 +96,30 @@ fn full_cdp_flow() {
         assert_eq!(token_balance(&svm, &user_coll_ata), 0);
     }
 
+    // ======================= L-02 liq-infra borrow gate (fires before the oracle gates) =======================
+    // The market has neither ReactorPool nor InsuranceBuffer yet, so borrow rejects
+    // LiquidationInfraNotReady; one infra account alone is not enough; flags walk 1 → 3 → 7.
+    {
+        let ix = borrow_ix(&user.pubkey(), &coll, &user_fusd_ata, 1);
+        let f = send(&mut svm, &[ix], user, &[]).expect_err("borrow without liq infra must fail");
+        assert_eq!(custom_code(&f), E_LIQ_INFRA_NOT_READY);
+
+        send(&mut svm, &[init_reactor_pool_ix(&gov.pubkey(), &coll)], &gov, &[])
+            .expect("init_reactor_pool failed");
+        assert_eq!(read_market(&svm, &market).liq_infra_flags, 1 | 2, "GATED | REACTOR_POOL");
+        svm.expire_blockhash(); // the prior (failed) borrow tx is otherwise byte-identical
+        let ix = borrow_ix(&user.pubkey(), &coll, &user_fusd_ata, 1);
+        let f = send(&mut svm, &[ix], user, &[]).expect_err("RP alone must not open borrowing");
+        assert_eq!(custom_code(&f), E_LIQ_INFRA_NOT_READY);
+
+        send(&mut svm, &[init_insurance_buffer_ix(&gov.pubkey(), &coll)], &gov, &[])
+            .expect("init_insurance_buffer failed");
+        assert_eq!(read_market(&svm, &market).liq_infra_flags, 1 | 2 | 4, "GATED | RP | BUFFER");
+    }
+
     // ======================= revert: borrow with NO price set =======================
     {
+        svm.expire_blockhash(); // the prior (failed) borrow tx is otherwise byte-identical
         let ix = borrow_ix(&user.pubkey(), &coll, &user_fusd_ata, 1);
         let f = send(&mut svm, &[ix], user, &[]).expect_err("borrow without a price must fail");
         assert_eq!(custom_code(&f), E_ORACLE_UNAVAILABLE);

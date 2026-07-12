@@ -250,13 +250,21 @@ pub struct Market {
     /// the per-market draw cap across repeated draws (a market in slow decline can't re-draw past its bound).
     pub global_drawn: u128,
 
+    /// Liquidation-infrastructure readiness bitfield (`LIQ_INFRA_*`, constants.rs): bit 0 set at
+    /// `init_market` (born gated), bit 1 OR'd in by `init_reactor_pool`, bit 2 by
+    /// `init_insurance_buffer`. `borrow` requires `flags == 0 || (flags & LIQ_INFRA_READY_MASK) ==
+    /// LIQ_INFRA_READY_MASK` — debt is never mintable before the RP + buffer accounts `liquidate`
+    /// hard-requires exist (audit L-02). `0` = LEGACY sentinel: a market created before this field
+    /// existed decodes 0 and borrow passes (live behavior preserved). Carved from `_reserved`.
+    pub liq_infra_flags: u8,
+
     /// Forward-compat reserve (RP pointers, oracle refinements, ...). WIDENED 4 → 64 bytes
     /// pre-launch: the carve-from-`_reserved` additive-upgrade path (used for
     /// `mint_frozen`, `shutdown`, `keeper_reward_bps`) must survive the upgradeable Phases 1–3 —
     /// post-launch a Borsh account cannot grow without realloc, so headroom is free now and
     /// impossible later. Carve new fields from the HEAD of this reserve; old accounts' zeroed
     /// bytes must decode as the new field's documented `0 = disabled/none` sentinel.
-    pub _reserved: [u8; 10],
+    pub _reserved: [u8; 9],
 }
 
 impl Market {
@@ -316,6 +324,8 @@ impl Market {
         + 16 + 8 + 2                // redemption_base_rate, _ts, _max_bps (C9 — carved from _reserved)
         + 8                         // protocol_collateral (un-homed retained collateral)
         + 16 + 16                   // global_contributed, global_drawn (global backstop; widen, not carve)
-        + 10; // reserved (base 64 − 24 debt_spot+liq_divergence_until − 2 borrow_fee − 2 bad_debt_paydown
-              // − 26 C9 base-rate fields; the +32 global-backstop fields are a widen, so net SPACE = base + 32)
+        + 1                         // liq_infra_flags (L-02 — carved from _reserved)
+        + 9;  // reserved (base 64 − 24 debt_spot+liq_divergence_until − 2 borrow_fee − 2 bad_debt_paydown
+              // − 26 C9 base-rate fields − 1 liq_infra_flags; the +32 global-backstop fields are a widen,
+              // so net SPACE = base + 32)
 }

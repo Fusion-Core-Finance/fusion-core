@@ -106,4 +106,6 @@ pub enum FusdError {
     InvalidStakePool,
     #[msg("Metadata account is not the canonical Metaplex metadata PDA for the fUSD mint (mis-built transaction)")]
     InvalidMetadataAccount,
+    #[msg("Market's liquidation infrastructure (ReactorPool + InsuranceBuffer) is not initialized — borrowing opens once governance runs init_reactor_pool + init_insurance_buffer")]
+    LiquidationInfraNotReady,
 }

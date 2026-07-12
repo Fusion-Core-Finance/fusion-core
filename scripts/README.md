@@ -20,7 +20,10 @@ ANCHOR_PROVIDER_URL=<rpc> ANCHOR_WALLET=~/.config/solana/id.json \
 ```
 
 `bootstrap.ts` runs the on-chain-enforced init order — `init_protocol` → `init_governance_gate` →
-per-market `init_market` → `init_market_oracle` → `init_reactor_pool` → `init_insurance_buffer`. With no
+per-market `init_market` → `init_market_oracle` → `init_reactor_pool` → `init_insurance_buffer`. The
+reactor-pool/buffer-before-borrow leg is itself on-chain enforced (L-02): `borrow` is gated by
+`Market.liq_infra_flags` and rejects `LiquidationInfraNotReady` until both infra inits have run, so a
+new market cannot borrow until bootstrap.ts completes. With no
 config arg it uses the built-in WSOL/USDC defaults (mainnet-fork values); pass a JSON file (same shape as
 `DEFAULT_CFG` in the script) to override authorities + per-market params/oracle feeds for devnet/mainnet.
 The wallet must be the program's **upgrade authority** (`init_protocol` is gated to it). For a real demo,

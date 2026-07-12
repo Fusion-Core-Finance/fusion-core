@@ -4,8 +4,8 @@ use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 use crate::accrual;
 use crate::cdp;
 use crate::constants::{
-    FUSD_MINT_SEED, MARKET_SEED, MAX_PRICE_STALENESS_SLOTS, MINT_AUTHORITY_BUMP, MINT_AUTHORITY_SEED,
-    POSITION_SEED,
+    FUSD_MINT_SEED, LIQ_INFRA_READY_MASK, MARKET_SEED, MAX_PRICE_STALENESS_SLOTS,
+    MINT_AUTHORITY_BUMP, MINT_AUTHORITY_SEED, POSITION_SEED,
     RATELIMIT_WINDOW_SECS, REDEMPTION_BITMAP_SEED,
 };
 use crate::errors::FusdError;
@@ -66,7 +66,16 @@ pub fn handler(ctx: Context<Borrow>, amount: u64) -> Result<()> {
     // guard the cache; `mint_frozen` is the oracle aggregate's mode (set by `update_price`);
     // `guardian_paused_until` is the independent guardian de-risk brake. All three freeze NEW MINTS
     // only — repay, withdraw, liquidation, and redemption ignore them and keep using `spot`.
+    // New debt additionally requires the liquidation infrastructure (RP + insurance buffer) to
+    // exist (L-02): `liquidate` hard-requires both accounts, so debt must never be mintable before
+    // they do. `liq_infra_flags == 0` = legacy grandfathered market (pre-field; its infra predates
+    // the gate).
     require!(!ctx.accounts.market.shutdown, FusdError::MarketShutdown);
+    require!(
+        ctx.accounts.market.liq_infra_flags == 0
+            || ctx.accounts.market.liq_infra_flags & LIQ_INFRA_READY_MASK == LIQ_INFRA_READY_MASK,
+        FusdError::LiquidationInfraNotReady
+    );
     require!(spot > 0, FusdError::OracleUnavailable);
     require!(!ctx.accounts.market.mint_frozen, FusdError::MintFrozen);
     require!(now >= ctx.accounts.market.guardian_paused_until, FusdError::GuardianPaused);

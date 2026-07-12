@@ -176,6 +176,18 @@ pub const SHUTDOWN_REASON_SCR: u8 = 1; // TCR fell below SCR
 pub const SHUTDOWN_REASON_ORACLE_FAILURE: u8 = 2; // sustained oracle staleness
 pub const SHUTDOWN_REASON_UNHOMED_BAD_DEBT: u8 = 3; // a liquidation could not be fully absorbed (RP+redist+buffer)
 
+/// Liquidation-infrastructure readiness bits (`Market.liq_infra_flags`) — the L-02 borrow gate.
+/// `liquidate` hard-requires the market's `ReactorPool` + `InsuranceBuffer` as non-optional
+/// accounts, so `borrow` refuses to create debt until both exist. Sentinel: 0 (all bits clear) =
+/// LEGACY market created before the field existed — grandfathered, borrow passes (the live WSOL
+/// market: its RP + buffer already exist and the `init` PDAs can never be re-run, so its flags
+/// stay 0 forever).
+pub const LIQ_INFRA_GATED: u8 = 1 << 0; // written by init_market — a post-upgrade market, borrow-gated until ready
+pub const LIQ_INFRA_REACTOR_POOL: u8 = 1 << 1; // OR'd in by init_reactor_pool
+pub const LIQ_INFRA_INSURANCE_BUFFER: u8 = 1 << 2; // OR'd in by init_insurance_buffer
+/// Both infra bits. `borrow` requires `flags == 0 || flags & LIQ_INFRA_READY_MASK == LIQ_INFRA_READY_MASK`.
+pub const LIQ_INFRA_READY_MASK: u8 = LIQ_INFRA_REACTOR_POOL | LIQ_INFRA_INSURANCE_BUFFER;
+
 // --- Net-outflow rate limiter (the bank-run / mint-exploit damper; fusion-docs.md) ---------
 // A per-market leaky bucket on NET fUSD issuance: `borrow` consumes capacity, `repay` restores it,
 // and the bucket refills fully over `RATELIMIT_WINDOW_SECS`. The cap (`Market.rl_cap`) is a

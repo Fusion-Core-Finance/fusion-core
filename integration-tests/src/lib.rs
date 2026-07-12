@@ -106,6 +106,7 @@ pub const E_INVALID_RECIPIENT: u32 = 6043;
 pub const E_INSUFFICIENT_BACKSTOP_EXCESS: u32 = 6044;
 pub const E_ORACLE_DIVERGENT: u32 = 6045; // B3 — liquidation paused under oracle divergence (consolidation: 6044→6045 behind the backstop's 6044)
 pub const E_INVALID_STAKE_POOL: u32 = 6046; // C1 — wrong SPL stake-pool account on an LST update_price
+pub const E_LIQ_INFRA_NOT_READY: u32 = 6048; // L-02 — borrow gated until init_reactor_pool + init_insurance_buffer (6047 = InvalidMetadataAccount, unpinned)
 
 // ============================ svm / tx helpers ============================
 

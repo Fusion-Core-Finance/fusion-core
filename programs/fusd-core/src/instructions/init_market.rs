@@ -1,23 +1,25 @@
 //! `init_market` — create a collateral market's `Market` + collateral vault + redemption bitmap.
 //!
-//! ORDERING INVARIANT (audit #24): a market's `ReactorPool` and `InsuranceBuffer` must be initialized
-//! (`init_reactor_pool` + `init_insurance_buffer`, both gov_authority-gated) BEFORE the market is
-//! opened for borrowing. `borrow` deliberately does NOT require those accounts (they're off the hot
-//! mint path), but `liquidate` requires BOTH as non-optional accounts — so a market that mints debt
-//! before they exist would be un-liquidatable (`AccountNotInitialized`) until governance inits them.
-//! This is NOT enforced on-chain (an on-chain `borrow`-time guard would cost the hot path a flag +
-//! read for an ordering the bootstrap already controls); it is guaranteed by the deploy sequence —
-//! `scripts/bootstrap.ts` inits market → oracle → reactor_pool → insurance_buffer per market before
-//! any position opens. Keep that order load-bearing.
+//! ORDERING INVARIANT (audit #24, ENFORCED ON-CHAIN since L-02): a market's `ReactorPool` and
+//! `InsuranceBuffer` must be initialized (`init_reactor_pool` + `init_insurance_buffer`, both
+//! gov_authority-gated) BEFORE the market is opened for borrowing — `liquidate` requires BOTH as
+//! non-optional accounts, so debt minted before they exist would be un-liquidatable
+//! (`AccountNotInitialized`) until governance inits them. Enforcement: the market is born
+//! `LIQ_INFRA_GATED` and `borrow` rejects `LiquidationInfraNotReady` until both infra inits have
+//! OR'd their `Market.liq_infra_flags` bits in (one u8 compare on the hot path).
+//! `scripts/bootstrap.ts`'s market → oracle → reactor_pool → insurance_buffer sequence remains the
+//! operational order, but a mis-sequenced deploy now fails safe instead of minting unliquidatable
+//! debt. Markets created before the field existed read `liq_infra_flags == 0` and are
+//! grandfathered (their infra predates the gate; see `constants::LIQ_INFRA_GATED`).
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::constants::{
-    COLLATERAL_VAULT_SEED, CONFIG_SEED, DEFAULT_SCR_BPS, MARKET_SEED, MAX_BUCKET_WIDTH_BPS,
-    MAX_LIQ_BONUS_BPS, MAX_LIQ_GAS_COMP_BPS, MAX_MCR_BPS, MAX_REDEMPTION_FEE_BPS,
-    MAX_RESERVE_LAMPORTS, MAX_USER_RATE_BPS, MIN_BUCKET_WIDTH_BPS, MIN_MCR_BPS, NUM_RATE_BUCKETS,
-    REDEMPTION_BITMAP_SEED,
+    COLLATERAL_VAULT_SEED, CONFIG_SEED, DEFAULT_SCR_BPS, LIQ_INFRA_GATED, MARKET_SEED,
+    MAX_BUCKET_WIDTH_BPS, MAX_LIQ_BONUS_BPS, MAX_LIQ_GAS_COMP_BPS, MAX_MCR_BPS,
+    MAX_REDEMPTION_FEE_BPS, MAX_RESERVE_LAMPORTS, MAX_USER_RATE_BPS, MIN_BUCKET_WIDTH_BPS,
+    MIN_MCR_BPS, NUM_RATE_BUCKETS, REDEMPTION_BITMAP_SEED,
 };
 use crate::errors::FusdError;
 use crate::state::{Market, ProtocolConfig, RedemptionBitmap};
@@ -214,7 +216,11 @@ pub fn handler(ctx: Context<InitMarket>, args: InitMarketArgs) -> Result<()> {
     m.protocol_collateral = 0;
     m.global_contributed = 0;
     m.global_drawn = 0;
-    m._reserved = [0u8; 10];
+    // L-02 borrow gate: new markets are born GATED — `borrow` rejects `LiquidationInfraNotReady`
+    // until `init_reactor_pool` + `init_insurance_buffer` OR their readiness bits in. Legacy
+    // pre-field markets read 0 = grandfathered (their infra predates the gate).
+    m.liq_infra_flags = LIQ_INFRA_GATED;
+    m._reserved = [0u8; 9];
 
     emit_cpi!(crate::events::MarketInitialized {
         collateral_mint: m.collateral_mint,

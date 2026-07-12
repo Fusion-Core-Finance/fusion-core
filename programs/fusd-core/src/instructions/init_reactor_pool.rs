@@ -3,8 +3,8 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 use fusd_math::reactor_pool::DECIMAL_PRECISION;
 
 use crate::constants::{
-    CONFIG_SEED, ESS_SEED, FUSD_MINT_SEED, MARKET_SEED, REACTOR_COLL_VAULT_SEED, REACTOR_FUSD_VAULT_SEED,
-    REACTOR_POOL_SEED,
+    CONFIG_SEED, ESS_SEED, FUSD_MINT_SEED, LIQ_INFRA_REACTOR_POOL, MARKET_SEED,
+    REACTOR_COLL_VAULT_SEED, REACTOR_FUSD_VAULT_SEED, REACTOR_POOL_SEED,
 };
 use crate::errors::FusdError;
 use crate::state::{EpochToScaleToSum, Market, ProtocolConfig, ReactorPool};
@@ -24,7 +24,7 @@ pub struct InitReactorPool<'info> {
     #[account(seeds = [FUSD_MINT_SEED], bump)]
     pub fusd_mint: Box<Account<'info, Mint>>,
 
-    #[account(seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
+    #[account(mut, seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
     pub market: Box<Account<'info, Market>>,
 
     #[account(
@@ -76,6 +76,10 @@ pub fn handler(ctx: Context<InitReactorPool>) -> Result<()> {
         ctx.accounts.config.gov_authority,
         FusdError::Unauthorized
     );
+
+    // L-02 borrow gate: record that the ReactorPool now exists. Unconditional OR — on a legacy
+    // 0-flag market this starts converging it onto the gated encoding.
+    ctx.accounts.market.liq_infra_flags |= LIQ_INFRA_REACTOR_POOL;
 
     // Zero-initialize the grid (all S sums start at 0) + set its discriminator.
     ctx.accounts.epoch_to_scale_to_sum.load_init()?;

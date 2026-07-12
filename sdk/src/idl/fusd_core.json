@@ -2497,6 +2497,7 @@
         },
         {
           "name": "market",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -3210,6 +3211,7 @@
         },
         {
           "name": "market",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -7919,6 +7921,11 @@
       "code": 6047,
       "name": "InvalidMetadataAccount",
       "msg": "Metadata account is not the canonical Metaplex metadata PDA for the fUSD mint (mis-built transaction)"
+    },
+    {
+      "code": 6048,
+      "name": "LiquidationInfraNotReady",
+      "msg": "Market's liquidation infrastructure (ReactorPool + InsuranceBuffer) is not initialized — borrowing opens once governance runs init_reactor_pool + init_insurance_buffer"
     }
   ],
   "types": [
@@ -9598,6 +9605,18 @@
             "type": "u128"
           },
           {
+            "name": "liq_infra_flags",
+            "docs": [
+              "Liquidation-infrastructure readiness bitfield (`LIQ_INFRA_*`, constants.rs): bit 0 set at",
+              "`init_market` (born gated), bit 1 OR'd in by `init_reactor_pool`, bit 2 by",
+              "`init_insurance_buffer`. `borrow` requires `flags == 0 || (flags & LIQ_INFRA_READY_MASK) ==",
+              "LIQ_INFRA_READY_MASK` — debt is never mintable before the RP + buffer accounts `liquidate`",
+              "hard-requires exist (audit L-02). `0` = LEGACY sentinel: a market created before this field",
+              "existed decodes 0 and borrow passes (live behavior preserved). Carved from `_reserved`."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "_reserved",
             "docs": [
               "Forward-compat reserve (RP pointers, oracle refinements, ...). WIDENED 4 → 64 bytes",
@@ -9610,7 +9629,7 @@
             "type": {
               "array": [
                 "u8",
-                10
+                9
               ]
             }
           }
