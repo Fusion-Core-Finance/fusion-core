@@ -27,7 +27,10 @@
 //! cross-epoch, full-drain, then every depositor claims + withdraws (no lock-out), Σwithdrawn ≤
 //! Σprovided, vaults drain to ≤ P/S dust. See `mutations.md` rows R1/R3.
 //!
-//! STATUS: spec scaffold — CVLR API confirmed (cvlr 0.6); remaining `// CONFIRM` = harness glue (see supply_invariant.rs header).
+//! STATUS: SPEC-ONLY PSEUDOCODE — not compiled, not run (see supply_invariant.rs header). No Certora
+//! rule is implemented for invariant #4: it is DEFERRED from the Certora pass on purpose (the pool's
+//! `bnum` U256 division is intractable for the SMT backend — certora/README.md). Coverage stays with
+//! Kani + proptest + `litesvm_reactor_realizability` (mutations.md rows R1–R3).
 #![cfg(feature = "certora")]
 #![allow(unused)]
 

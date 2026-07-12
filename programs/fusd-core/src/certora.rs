@@ -1,15 +1,22 @@
 //! Certora/CVLR verification harness — compiled ONLY under `--features certora` (via
 //! `cargo certora-sbf`), NEVER in the production `.so` (scripts/check-no-certora.sh enforces it).
 //!
-//! BRING-UP STATE: the round-trip smoke rule is VERIFIED on the cloud (pipeline proven). This file is
-//! now growing the REAL rules. The first, `bitmap_coherence_preserved_by_reconcile`, drives the actual
-//! `crate::bucket::reconcile` over symbolic state — the single-touch / inductive core of Invariant #2
-//! (the spec logic in `<repo>/certora/specs/bitmap_find_first_set.rs`). It deliberately needs NO Anchor
-//! `Context`, token CPI, or summaries: `certora.rs` is an in-crate `mod`, so it calls
-//! `crate::bucket::reconcile` directly over nondet structs. The handler-driven rules (supply, the full
-//! bitmap set over `borrow`/`redeem`/…) still need the Anchor-account glue (cvlr_summaries.txt entries
-//! for the token CPI / `invoke_signed` / `Clock` + the Anchor inlining block + `cvlr_solana_init!()`) —
-//! that is the next, separate piece (see certora/README.md §Bring-up).
+//! STATUS by rule family (the assurance ladder is certora/README.md §"What a green run proves"):
+//!   * PRODUCTION-LINKED, cloud-VERIFIED: `bitmap_coupling_preserved_by_{add,remove}_member` (drive
+//!     `bucket::add_member`/`remove_member`; bitmap_helper.conf), the three `absorb_*` rules (drive
+//!     `fusd_math::recovery::absorb`; absorb.conf), and the `round_trip_smoke` pipeline check.
+//!   * PRODUCTION-LINKED, authored / pending cloud: the two `c1_*` rules (drive the real
+//!     `fusd_oracle::aggregate`; c1_canonical.conf).
+//!   * SHARED-TRANSITION, authored / pending cloud re-run: the eight `supply_preserved_by_*_ghost`
+//!     rules EXECUTE `crate::supply_transition` — the same bodies the handlers run at `u128`,
+//!     monomorphized to `NativeInt` (audit M-01; supply.conf). The pre-M-01 replay-the-delta borrow
+//!     rule was cloud-VERIFIED; the rewritten bodies need a re-run.
+//!   * RETAINED-FAILING artifact: `bitmap_coherence_preserved_by_reconcile` (bitmap.conf) — spurious
+//!     counterexample (skipped-callx havoc), superseded by bitmap_helper.conf; kept for the writeup.
+//!
+//! Residual gap (every family): a rule verifies the functions in its cone; the handlers' CALL SITES
+//! into those functions are covered only by the litesvm mutation oracle (certora/mutations.md,
+//! class HANDLER).
 
 use cvlr::prelude::*;
 use cvlr_solana::cvlr_nondet_account_info;

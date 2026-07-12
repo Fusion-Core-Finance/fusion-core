@@ -12,14 +12,14 @@
 //! Mutation that must break BOTH this rule and that suite: drop `agg_recorded_debt = new_agg` in
 //! `borrow` (verified at the runnable layer — see `certora/mutations.md` row S1).
 //!
-//! ┌─ STATUS: spec scaffold ────────────────────────────────────────────────────────────────────┐
-//! │ The CVLR API used here is CONFIRMED against docs.certora.com (Solana speclanguage + usage,     │
-//! │ 2026-06): `cvlr::prelude::*`, `cvlr_assert!`/`cvlr_assume!`/`cvlr_satisfy!`, `#[rule]`,         │
-//! │ `nondet()`, `clog!`. The remaining `// CONFIRM` markers are the HARNESS GLUE only — the         │
-//! │ `*_context_nondet()` builders + the Anchor `handler(ctx: Context<…>)` invocation — which the    │
-//! │ Certora Solana spec template supplies (README §"Bring-up" step 4). Trust the proof obligation   │
-//! │ in each rule's doc comment; the glue symbols are placeholders for the template's scaffolding.   │
-//! │ Round-trip-first: get a trivial `assert(true)` rule green BEFORE porting these.                 │
+//! ┌─ STATUS: SPEC-ONLY PSEUDOCODE ─────────────────────────────────────────────────────────────┐
+//! │ Never compiled into any build and never run: the `*_context_nondet()` / `*_handler()`          │
+//! │ symbols do not exist, and `#![cfg(feature = "certora")]` on a file outside src/ keeps it out    │
+//! │ of every target. The IMPLEMENTED rules live in programs/fusd-core/src/certora.rs and verify     │
+//! │ the SHARED SUPPLY-TRANSITION functions (audit M-01,                                             │
+//! │ programs/fusd-core/src/supply_transition.rs), not these handler-driven forms. Driving the       │
+//! │ full Anchor handlers under CVLR (token CPI + account glue) remains future work and is the       │
+//! │ assurance gap between this spec and the shipped proofs.                                         │
 //! └────────────────────────────────────────────────────────────────────────────────────────────┘
 #![cfg(feature = "certora")]
 #![allow(unused)]

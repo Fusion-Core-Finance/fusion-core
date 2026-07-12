@@ -23,7 +23,11 @@
 //! `_buffer.rs` / `_backstop.rs`. Mutation oracle: drop the `bad_debt += unhomed` book OR the
 //! `shutdown = true` set in the un-homed branch (`mutations.md` rows L1/L2).
 //!
-//! STATUS: spec scaffold — CVLR API confirmed (cvlr 0.6); remaining `// CONFIRM` = harness glue (see supply_invariant.rs header).
+//! STATUS: SPEC-ONLY PSEUDOCODE — not compiled, not run (see supply_invariant.rs header). T1/T2 as
+//! stated (handler-level) are NOT implemented as Certora rules. Implemented artifacts:
+//! `absorb_conserves_debt` + `absorb_unhomed_iff_no_tier_covers` (+ witness) — FUNCTION-level over
+//! `fusd_math::recovery::absorb`, cloud-VERIFIED (absorb.conf); the handler-level
+//! reach/commit/shutdown coupling (rows L1 handler-path / L2) is litesvm-covered only.
 #![cfg(feature = "certora")]
 #![allow(unused)]
 

@@ -12,13 +12,19 @@
 //! write-lock** (Sealevel serializes any two txs that write the same market), NOT by Certora modeling
 //! parallelism. So the Certora property is the per-tx one: *each* instruction atomically preserves
 //! coherence; serialization composes it across concurrent txs. The B8 stateful BTreeSet proptest proved
-//! the *bit math* (`fusd_math::rate_bucket`); this proves the *handlers maintain the coupling*.
+//! the *bit math* (`fusd_math::rate_bucket`); this SPEC's goal is handler-level coupling
+//! preservation — the IMPLEMENTED Certora rules prove it for the `bucket::add_member`/
+//! `remove_member` helpers at a concrete representative bucket (programs/fusd-core/src/certora.rs),
+//! while the handlers' calls into `bucket::reconcile` are covered by the litesvm mutation oracle,
+//! not by a Certora rule.
 //!
 //! Runnable counterpart (the mutation oracle): `assert_bitmap_coherent` (`integration-tests/src/lib.rs`),
 //! asserted after every tx by `litesvm_invariants_fuzz.rs`. Mutation that must break BOTH this rule and
 //! that suite: skip a `bucket::reconcile` call (verified at the runnable layer — `mutations.md` row B1).
 //!
-//! STATUS: spec scaffold — CVLR API confirmed (cvlr 0.6); remaining `// CONFIRM` = harness glue (see supply_invariant.rs header).
+//! STATUS: SPEC-ONLY PSEUDOCODE — not compiled, not run (see supply_invariant.rs header).
+//! Implemented artifacts: `bitmap_coupling_preserved_by_{add,remove}_member` (cloud-VERIFIED,
+//! bitmap_helper.conf) + the retained-FAILING bitmap.conf attempt.
 #![cfg(feature = "certora")]
 #![allow(unused)]
 

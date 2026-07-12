@@ -45,6 +45,9 @@ jobs:
           # The SBF platform-tools (v1.53) are fetched on demand by cargo-certora-sbf via each conf's
           # `cargo_tools_version`.
 
+      # A green lane means the rules in these confs verified under their documented caveats
+      # (certora/README.md §"What a green run proves") — it is not a whole-program verification
+      # claim. bitmap.conf is a retained FAILING artifact and is deliberately not run here.
       - name: Verify the core invariants
         if: steps.gate.outputs.provisioned == 'true'
         env:
@@ -55,3 +58,4 @@ jobs:
           certoraSolanaProver certora/supply.conf          # invariant #1
           certoraSolanaProver certora/bitmap_helper.conf   # invariant #2a
           certoraSolanaProver certora/absorb.conf          # invariant #3
+          certoraSolanaProver certora/c1_canonical.conf    # invariant C1 (promotes it from pending)
