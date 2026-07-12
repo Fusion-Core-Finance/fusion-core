@@ -14,7 +14,7 @@ verification-only `cvlr` deps never reach the deployable program.
 | Layer | What | Runs | Status |
 |---|---|---|---|
 | **Runnable** | `integration-tests/` litesvm fuzz — random/scripted transaction sequences over the live program, asserting the invariants after every tx. | locally (`cargo test`) | ✅ verified (with the `mutations.md` oracle) |
-| **Certora** | the CVLR `#[rule]`s in `programs/fusd-core/src/certora.rs` — inductive preservation over symbolic pre-states (the infinite tx space the fuzz only samples). | Certora cloud (license + `CERTORAKEY`) | per-conf ledger below — 16 rules cloud-VERIFIED (incl. the smoke), 1 retained-failing artifact; every S1–S8 PROD-FN mutation flip cloud-confirmed, C1 cloud flip pending |
+| **Certora** | the CVLR `#[rule]`s in `programs/fusd-core/src/certora.rs` — inductive preservation over symbolic pre-states (the infinite tx space the fuzz only samples). | Certora cloud (license + `CERTORAKEY`) | per-conf ledger below — 16 rules cloud-VERIFIED (incl. the smoke), 1 retained-failing artifact; every PROD-FN mutation flip (S1–S8 + both C1 mutations) cloud-confirmed |
 
 The runnable layer is the **mutation oracle** for the Certora layer: every invariant has a
 production-path break that must fail the runnable suite, and every Certora rule is additionally
@@ -45,7 +45,7 @@ Cloud-VERIFIED, with `rule_sanity: "basic"` on and the PROD-FN flip confirmed (`
 | **#2a bitmap** — `words ⟺ counts` coupling (bit `k` set iff `counts[k] > 0`) | `bitmap_coupling_preserved_by_add_member` / `_remove_member` | `bitmap_helper.conf` | drop `rb::set`/`rb::clear` in `bucket.rs` |
 | **#3 liquidation** — full debt conserved across all 5 loss-absorption tiers | `absorb_conserves_debt` | `absorb.conf` | `let unhomed = 0;` in `recovery.rs` |
 | **#3 liquidation** — strict tier ordering (a tier fires only after higher ones drain) | `absorb_unhomed_iff_no_tier_covers` (+ `absorb_unhomed_reachable` witness) | `absorb.conf` | reorder the global tier ahead of the local buffer |
-| **C1 LST canonical cap** — `collateral_price ≤ canonical`, and the leg never RAISES collateral | `c1_canonical_caps_collateral` / `c1_canonical_never_raises_collateral` | `c1_canonical.conf` | drop the cap in `fusd_oracle::aggregate` (runnable-layer flip confirmed; the cloud flip is a pending acceptance item) |
+| **C1 LST canonical cap** — `collateral_price ≤ canonical`, and the leg never RAISES collateral | `c1_canonical_caps_collateral` / `c1_canonical_never_raises_collateral` | `c1_canonical.conf` | both mutations cloud-confirmed: drop-cap → caps rule FAIL (monotone stays VERIFIED, the documented asymmetry); min→max → BOTH rules FAIL |
 
 **Invariant #4 (Reactor-Pool P/S realizability) is deferred from the Certora pass on purpose:** the
 pool's `bnum` U256 division is intractable for the SMT backend (it times out). It stays covered by Kani +
@@ -68,8 +68,9 @@ eight rules afterwards.
 
 C1 drives the real `fusd_oracle::aggregate` over symbolic u128 prices, in the same pure-arithmetic
 regime as the `absorb_*` rules (`k_bps = 0` folds the orthogonal −k·σ haircut to 0, keeping the
-proof off the u128 mul/div frontier). Both rules VERIFIED on the cloud; the runnable-layer mutation
-flip is confirmed (`mutations.md` row C1), the cloud-side flip is a pending acceptance item.
+proof off the u128 mul/div frontier). Both rules VERIFIED on the cloud, and both PROD-FN
+mutations are cloud-confirmed with the documented asymmetry (drop-cap fails only the caps rule —
+both legs collapse to `price`, so monotone survives; min→max fails both; `mutations.md` row C1).
 
 **Operational gotcha (cost a failed run):** `certoraSolanaProver` reuses
 `target/sbpf-solana-solana/release/fusd_core.so` when it looks fresh, and an `anchor build` (e.g.
@@ -95,8 +96,8 @@ rung above where it sits.
 4. **Characterized-failing artifacts** (`bitmap.conf`): never coverage; retained for the frontier
    writeup only.
 5. **Pending cloud**: authored rules with no (or no post-rewrite) cloud run. Currently EMPTY —
-   every authored rule is cloud-VERIFIED and every S1–S8 PROD-FN flip is cloud-confirmed; the one
-   open acceptance item is C1's cloud-side mutation flip (runnable-layer flip confirmed).
+   every authored rule is cloud-VERIFIED and every S1–S8 PROD-FN flip is cloud-confirmed; every
+   PROD-FN mutation flip in the matrix (S1–S8 and both C1 mutations) is cloud-confirmed.
 
 A green dashboard means the listed rules hold of the code in their cones under these caveats — it
 does not mean the program is verified.
