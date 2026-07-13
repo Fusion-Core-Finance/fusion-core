@@ -42,7 +42,7 @@ describe("gov-common helpers", () => {
     assert.match(clampWarning("Cut", 5000n, GLOBAL_CLAMPS)!, /> documented max/); // backstop cut max 3000
     // RiskParamRegistry additions
     assert.match(clampWarning("Scr", 10000n, MARKET_CLAMPS)!, /< documented min/); // scr min 10500
-    assert.match(clampWarning("OracleMaxAge", 301n, MARKET_CLAMPS)!, /> documented max/);
+    assert.match(clampWarning("OracleMaxAge", 3601n, MARKET_CLAMPS)!, /> documented max/); // clamp is 3600 (db57635)
     assert.equal(clampWarning("OracleK", 15000n, MARKET_CLAMPS), null);
   });
 
@@ -57,7 +57,7 @@ describe("gov-common helpers", () => {
     const me = PublicKey.default;
     const other = PID; // any pubkey ≠ me
     assert.ok(authorityOf(flags([]), me, false).equals(me));
-    assert.ok(authorityOf(flags(["--authority", other.toBase58()]), me, false).equals(other)); // Squads dry-run
+    assert.ok(authorityOf(flags(["--authority", other.toBase58()]), me, false).equals(other)); // external signer/PDA dry-run
     assert.ok(authorityOf(flags(["--authority", me.toBase58()]), me, true).equals(me)); // matching override + --send ok
     assert.throws(() => authorityOf(flags(["--authority", other.toBase58()]), me, true), /dry-run proposals only/);
   });
