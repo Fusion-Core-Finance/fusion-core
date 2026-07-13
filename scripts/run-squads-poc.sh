@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Run the MetaDAO -> Squads -> fUSD governance PoC on a DEDICATED local validator.
+# This document describes an optional governance integration explored during development. Fusion
+# Core does not depend on MetaDAO, futarchy or Squads. Any compatible signer or signer PDA may
+# serve as the GovernanceGate inbound authority.
+#
+# Run the Squads -> fUSD governance PoC (optional integration; not required by any release gate)
+# on a DEDICATED local validator. It demonstrates ONE possible external governance stack — the core
+# validates only the signer/PDA at the GovernanceGate.
 #
 # Isolated from `anchor test` on purpose: the PoC sets the singleton `config.gov_authority` to a
 # Squads vault PDA, which would collide with tests/fusd-core.ts in a shared validator. This script

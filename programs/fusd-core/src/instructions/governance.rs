@@ -1,11 +1,11 @@
 //! The bounded `GovernanceGate` + the fUSD-owned timelock (fusion-docs.md).
 //!
-//! Param changes are TWO-SPEED: the gate's migratable `inbound_authority` (a launch multisig →
-//! the MetaDAO Squads vault PDA) QUEUES a clamped change; after the gate's
+//! Param changes are TWO-SPEED: the gate's migratable `inbound_authority` (any authorized
+//! signer or PDA — a guarded-launch signer at first) QUEUES a clamped change; after the gate's
 //! `timelock_secs` elapse, ANYONE may EXECUTE it. There is no un-timelocked immediate setter —
 //! the queue→delay→execute path is the only way a market parameter moves (the planned de-risk
-//! guardian is a separate, monotonic, emergency-only path). Squads runs `time_lock = 0`, which is
-//! exactly why fUSD supplies its own delay.
+//! guardian is a separate, monotonic, emergency-only path). The delay is enforced HERE, so it
+//! never depends on whatever timelock (if any) the upstream authority runs.
 
 use anchor_lang::prelude::*;
 
@@ -386,7 +386,7 @@ pub fn init_gate(
 #[derive(Accounts)]
 pub struct MigrateInboundAuthority<'info> {
     /// MUST equal the CURRENT `gov_gate.inbound_authority` — governance proposes its own successor
-    /// (e.g. launch multisig → MetaDAO Squads vault).
+    /// (e.g. guarded-launch signer → successor signer or PDA).
     pub authority: Signer<'info>,
 
     #[account(mut, seeds = [GOV_GATE_SEED], bump = gov_gate.bump)]

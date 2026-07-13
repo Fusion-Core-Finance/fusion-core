@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Fetch the Squads V4 program + its ProgramConfig account, the test fixtures for the
-# MetaDAO -> Squads -> fUSD localnet PoC. Both are gitignored (fetched, not
+# This document describes an optional governance integration explored during development. Fusion
+# Core does not depend on MetaDAO, futarchy or Squads. Any compatible signer or signer PDA may
+# serve as the GovernanceGate inbound authority.
+#
+# Fetch the Squads V4 program + its ProgramConfig account, the test fixtures for the optional
+# Squads -> fUSD localnet PoC (not required by any release gate). Both are gitignored (fetched, not
 # committed); re-run to (re)create them. Optional arg: an RPC URL (defaults to mainnet-beta).
 #
 #   scripts/fetch-squads.sh [RPC_URL]

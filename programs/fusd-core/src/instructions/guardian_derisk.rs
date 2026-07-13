@@ -1,7 +1,8 @@
 //! `guardian_derisk` — the independent emergency brake (fusion-docs §7.2).
 //!
-//! A guardian role that is **independent of futarchy/Squads** (so a frozen or buggy MetaDAO DAO
-//! cannot also freeze fUSD's emergency response) can pause NEW borrowing on a market without the
+//! A guardian role that is **independent of the governance authority** (so a frozen or
+//! compromised governance system cannot also freeze fUSD's emergency response) can pause NEW
+//! borrowing on a market without the
 //! governance timelock. This is the protocol's single discretionary emergency lever, and its
 //! envelope is constitutional and deliberately tiny:
 //!

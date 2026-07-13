@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "fUSD — Solana-native, futarchy-governed overcollateralized CDP stablecoin",
+  "description": "fUSD — Solana-native overcollateralized CDP stablecoin (Fusion Core)",
   "engines": {
     "node": ">=20"
   },

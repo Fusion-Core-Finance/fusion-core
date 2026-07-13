@@ -1,6 +1,6 @@
 //! `guardian_derisk` — the independent emergency brake (fusion-docs §7.2).
 //!
-//! The guardian (independent of futarchy/Squads) can pause NEW borrowing on a market without the
+//! The guardian (independent of the governance authority) can pause NEW borrowing on a market without the
 //! governance timelock. The envelope is constitutional: it pauses ONLY `borrow`, auto-lifts, and
 //! can never touch existing positions, user funds, repay, withdraw, liquidation, or redemption.
 //! These tests pin both the gate and that de-risk-only guarantee. Requires the dev-oracle `.so`.

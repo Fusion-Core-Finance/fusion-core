@@ -6,10 +6,11 @@
  *   - the two-step gov_authority handoff (migrate_gov_authority → accept_gov_authority);
  *   - the two-step gov-gate inbound authority handoff (migrate_inbound_authority → accept_inbound_authority).
  *
- * SAFETY: every mutating action is DRY-RUN by default — prints the instruction (Squads-proposal ready)
- * and only signs + submits on --send. set-oracle-ids + migrate-gov are signed by the current
- * gov_authority; migrate-inbound by the current inbound_authority; the accept-* steps by the NEW key
- * itself. Use --authority <pubkey> in dry-run to emit an instruction whose signer is your Squads vault.
+ * SAFETY: every mutating action is DRY-RUN by default — prints the instruction as
+ * governance-proposal-ready JSON (e.g. for a multisig) and only signs + submits on --send.
+ * set-oracle-ids + migrate-gov are signed by the current gov_authority; migrate-inbound by the current
+ * inbound_authority; the accept-* steps by the NEW key itself. Use --authority <pubkey> in dry-run to
+ * emit an instruction whose signer is an external signer/PDA (e.g. a multisig vault).
  *
  * USAGE
  *   ANCHOR_PROVIDER_URL=<rpc> ANCHOR_WALLET=<authority.json> npx ts-node keepers/keys-sync.ts <cmd> [flags]
@@ -81,7 +82,7 @@ async function main() {
       return sendOrPrint(b, `migrate-gov → ${to.toBase58()}`, send);
     }
     case "accept-gov": {
-      const who = authorityOf(f, me, send); // --authority: dry-run the accept for a Squads vault PDA
+      const who = authorityOf(f, me, send); // --authority: dry-run the accept for an external signer/PDA (e.g. a multisig vault)
       const b = program.methods.acceptGovAuthority().accounts({ newAuthority: who, config: g.config });
       return sendOrPrint(b, `accept-gov as ${who.toBase58()}`, send);
     }
@@ -91,7 +92,7 @@ async function main() {
       return sendOrPrint(b, `migrate-inbound → ${to.toBase58()}`, send);
     }
     case "accept-inbound": {
-      const who = authorityOf(f, me, send); // --authority: dry-run the accept for a Squads vault PDA
+      const who = authorityOf(f, me, send); // --authority: dry-run the accept for an external signer/PDA (e.g. a multisig vault)
       const b = program.methods.acceptInboundAuthority().accounts({ newAuthority: who, govGate: g.govGate });
       return sendOrPrint(b, `accept-inbound as ${who.toBase58()}`, send);
     }

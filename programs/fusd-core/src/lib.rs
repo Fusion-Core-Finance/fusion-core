@@ -1,7 +1,8 @@
 //! fUSD core — the CDP engine.
 //!
 //! A trustless, permissionless, Solana-native overcollateralized CDP stablecoin
-//! (Liquity/Maker-inspired), governed by MetaDAO futarchy within hard bounds.
+//! (Liquity/Maker-inspired), with bounded, implementation-agnostic governance
+//! confined to hard parameter clamps.
 //! Shared math/oracle logic lives in `crates/fusd-math` and `crates/fusd-oracle`.
 //! See `docs/fusion-docs.md` for the full technical reference.
 //!
@@ -41,7 +42,8 @@ declare_id!("FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud");
 // On-chain disclosure contact (Neodyme `security.txt`). Embedded in the deployable program only
 // (`not(no-entrypoint)`), so CPI/lib consumers don't carry it. The disclosure CHANNEL is GitHub's
 // private vulnerability reporting + the policy in `SECURITY.md`; no email/key is invented here.
-// Branding: Fusion = protocol, Fusion Dollar (FUSD) = stablecoin, FUSION = ownership token. The
+// Branding: Fusion = protocol, Fusion Dollar (FUSD) = stablecoin, FUSION = the protocol token
+// (no on-chain role in this program; governance runs through the bounded authority keys). The
 // `security.txt` is frozen forever once the program is made immutable.
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
@@ -130,7 +132,7 @@ pub mod fusd_core {
     }
 
     /// Governance: STEP 1 of the two-step inbound-authority handoff — the current authority
-    /// PROPOSES a successor (e.g. launch multisig → MetaDAO Squads vault). The live authority does
+    /// PROPOSES a successor (e.g. guarded-launch signer → successor signer or PDA). The live authority does
     /// not change until the successor calls `accept_inbound_authority`. Pass `Pubkey::default()`
     /// to cancel a pending handoff. Gated on the CURRENT inbound authority.
     pub fn migrate_inbound_authority(
@@ -148,7 +150,8 @@ pub mod fusd_core {
     }
 
     /// Governance: QUEUE a clamped market-parameter change behind the timelock. Gated on the
-    /// gate's inbound authority (the MetaDAO → Squads → fUSD CPI target).
+    /// gate's inbound authority (any authorized signer or PDA; an external governance system
+    /// may CPI as this authority).
     pub fn queue_param_change(
         ctx: Context<QueueParamChange>,
         param: MarketParam,
@@ -239,7 +242,7 @@ pub mod fusd_core {
         instructions::global_backstop::cancel(ctx)
     }
 
-    /// Guardian (independent of futarchy): pause NEW borrowing on a market for `pause_secs`
+    /// Guardian (independent of the governance authority): pause NEW borrowing on a market for `pause_secs`
     /// (clamped to `GUARDIAN_MAX_PAUSE_SECS`; auto-lifts; `0` lifts early). Monotonic de-risk only —
     /// never touches existing positions, funds, repay, liquidation, or redemption.
     pub fn guardian_derisk(ctx: Context<GuardianDerisk>, pause_secs: i64) -> Result<()> {

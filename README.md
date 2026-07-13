@@ -1,9 +1,9 @@
 # Fusion
 
 **Fusion** is a trustless, permissionless protocol issuing the **Fusion Dollar (FUSD)** —
-a **Solana-native overcollateralized CDP stablecoin** in the Liquity lineage, governed by
-**MetaDAO futarchy** (via the **FUSION** ownership token) within hard, code-enforced bounds.
-Goal: "unstoppable cash" — no issuer custody, no freeze authority, no privileged
+a **Solana-native overcollateralized CDP stablecoin** in the Liquity lineage, with
+**bounded, implementation-agnostic governance** confined to hard, code-enforced parameter
+clamps. Goal: "unstoppable cash" — no issuer custody, no freeze authority, no privileged
 redemption gate, fully permissionless liquidations; governance tunes only *bounded* risk
 parameters and can never touch user funds.
 
@@ -24,7 +24,7 @@ crates/fusd-oracle   Pyth + Switchboard + DEX-TWAP validation, asymmetric pricin
 sdk                  TypeScript client (PDA derivation, decoders, ix builders)
 keepers              permissionless off-chain bots (liquidator, redeemer, oracle-poster, ...)
 integration-tests    in-process litesvm test suite (the primary tests)
-tests                TS e2e (surfpool mainnet-fork, Squads PoC)
+tests                TS e2e (surfpool mainnet-fork; optional governance-integration PoC)
 scripts              deploy / init / verifiable-build / governance
 migrations           Anchor deploy migration
 runbooks             operational runbooks

@@ -103,7 +103,7 @@ pub const MAX_PRICE_STALENESS_SLOTS: u64 = 250;
 /// down get a fair window to cure before a stale-then-fresh price can trigger a liquidation cascade at
 /// the resume trough (fusion-docs.md; the Solana-halt breaker, mirroring the Chainlink-L2
 /// sequencer-uptime-feed grace pattern). ~5 min at 400 ms/slot — 3× the staleness gate. Placeholder
-/// pending fast-crash-sim + futarchy calibration: it trades borrower fairness against the bad debt
+/// pending fast-crash-sim + governance calibration: it trades borrower fairness against the bad debt
 /// that can accrue while genuinely-underwater positions wait out the window.
 pub const LIQ_RESUME_GRACE_SLOTS: u64 = 750;
 
@@ -131,19 +131,19 @@ pub const MCR_RAISE_GRACE_SLOTS: u64 = 9_000;
 /// Placeholder pending the same fast-crash-sim calibration as the other grace constants.
 pub const LIQ_DIVERGENCE_GRACE_SLOTS: u64 = 750;
 
-// --- Governance timelock (the fUSD-owned two-speed; Squads runs time_lock=0) -----------------
+// --- Governance timelock (the fUSD-owned two-speed; independent of any upstream delay) --------
 // The `GovernanceGate`'s inbound authority QUEUES a clamped param change; after `timelock_secs`
 // elapse, ANYONE may EXECUTE it (permissionless execution after the delay). The delay is itself a
 // bounded gov param, fixed within these clamps at gate init: it can never be set to lock changes
 // forever (MAX bounds it), and the queue→execute split gives users an exit window before any
-// change lands (the non-retroactivity intent). See fusion-docs.md. An earlier PoC proved the
-// MetaDAO→Squads→fUSD path that QUEUES through this gate.
+// change lands (the non-retroactivity intent). See fusion-docs.md. An earlier PoC proved a
+// program-signed PDA can serve as the inbound authority that QUEUES through this gate.
 pub const MIN_GOV_TIMELOCK_SECS: i64 = 0; // 0 permitted for a trusted guarded launch / tests
 pub const MAX_GOV_TIMELOCK_SECS: i64 = 2_592_000; // 30 days — bounds the maximum enforced delay
 pub const DEFAULT_GOV_TIMELOCK_SECS: i64 = 172_800; // 48h recommended for production
 
 // --- Guardian de-risk (the independent emergency brake; fusion-docs §7.2) ----
-// `guardian_derisk` (gated on `ProtocolConfig.guardian`, INDEPENDENT of futarchy/Squads) pauses NEW
+// `guardian_derisk` (gated on `ProtocolConfig.guardian`, INDEPENDENT of the governance authority) pauses NEW
 // borrowing on a market for at most this long, then it auto-lifts. The single power is the harmless
 // borrow pause — it never touches existing positions, user funds, repay, liquidation, or redemption.
 // The cap is the "buys time, not control" bound: ≥ the 48h gov timelock so governance can coordinate

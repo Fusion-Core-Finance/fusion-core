@@ -100,13 +100,13 @@ pub enum MarketParam {
 
 /// The bounded governance gate. PDA `[b"gov_gate"]`. The sole authorizer of timelocked param
 /// changes (`queue_param_change`). `inbound_authority` is MIGRATABLE — repoint from a guarded-
-/// launch multisig to the MetaDAO DAO's Squads vault PDA later (an earlier PoC proved that path).
-/// fusion-docs.md.
+/// launch signer to any successor signer or PDA later (an earlier PoC proved a program-signed
+/// PDA can hold the seat). fusion-docs.md.
 #[account]
 #[derive(Debug)]
 pub struct GovernanceGate {
-    /// The authority allowed to QUEUE param changes — a launch multisig at first, the MetaDAO
-    /// Squads vault PDA in production. Migratable via the TWO-STEP handshake
+    /// The authority allowed to QUEUE param changes — any authorized signer or PDA (a guarded-
+    /// launch signer at first, a successor authority later). Migratable via the TWO-STEP handshake
     /// (`migrate_inbound_authority` proposes → `accept_inbound_authority` the new key signs).
     pub inbound_authority: Pubkey,
     /// The proposed next inbound authority, pending its own acceptance. `Pubkey::default()` ⇒ no
@@ -115,8 +115,8 @@ pub struct GovernanceGate {
     /// (it simply can never be accepted, and the current authority can re-propose).
     pub pending_inbound_authority: Pubkey,
     /// The fUSD-owned timelock delay (seconds) between queue and execute. Bounded by
-    /// `[MIN_GOV_TIMELOCK_SECS, MAX_GOV_TIMELOCK_SECS]`; Squads itself runs `time_lock = 0`,
-    /// which is exactly why fUSD supplies its own.
+    /// `[MIN_GOV_TIMELOCK_SECS, MAX_GOV_TIMELOCK_SECS]`; enforced HERE so the delay never
+    /// depends on whatever timelock (if any) the upstream authority runs.
     pub timelock_secs: i64,
     /// Monotonic counter assigning each queued op its own `TimelockedParam` PDA.
     pub queue_nonce: u64,

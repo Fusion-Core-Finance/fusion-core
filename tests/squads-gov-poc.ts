@@ -1,15 +1,21 @@
+// This document describes an optional governance integration explored during development. Fusion
+// Core does not depend on MetaDAO, futarchy or Squads. Any compatible signer or signer PDA may
+// serve as the GovernanceGate inbound authority.
 /**
- * MetaDAO → Squads → fUSD governance PoC.
+ * Squads → fUSD governance PoC (optional integration).
  *
- * Proves the gating question against the bounded GovernanceGate + timelock: a **Squads V4 vault
- * PDA** (the gate's migratable `inbound_authority`) can QUEUE a clamped fUSD parameter change via
- * `vault_transaction_execute`, fUSD's `require_keys_eq!(authority, gate.inbound_authority)` accepts
- * it, and the change then applies via the permissionless `execute_param_change`. This locks the
- * cross-program account ordering (the Squads SDK compiles the message + execute remaining-accounts;
- * fUSD accepts the vault-PDA signature). The MetaDAO futarchy layer sits ON TOP of Squads
- * (`finalize_proposal` just CPIs `proposal_approve`), so this Squads→fUSD leg is the part fUSD
- * depends on. (Timelock TIMING is covered host-side in `integration-tests/litesvm_governance.rs`;
- * here the gate runs `timelock = 0` so the PoC stays a single validator session.)
+ * Demonstrates ONE possible external governance stack end-to-end against the bounded
+ * GovernanceGate + timelock: a **Squads V4 vault PDA** (the gate's migratable `inbound_authority`)
+ * can QUEUE a clamped fUSD parameter change via `vault_transaction_execute`, fUSD's
+ * `require_keys_eq!(authority, gate.inbound_authority)` accepts it, and the change then applies via
+ * the permissionless `execute_param_change`. This exercises the cross-program account ordering (the
+ * Squads SDK compiles the message + execute remaining-accounts; fUSD accepts the vault-PDA
+ * signature). The core validates only the signer/PDA — any upstream decision mechanism that
+ * resolves to a compatible signer works identically; e.g. a futarchy layer such as MetaDAO's sits
+ * ON TOP of Squads (`finalize_proposal` just CPIs `proposal_approve`) and is never visible to fUSD,
+ * which only ever sees the vault-PDA signature at the gate. (Timelock TIMING is covered host-side
+ * in `integration-tests/litesvm_governance.rs`; here the gate runs `timelock = 0` so the PoC stays
+ * a single validator session.)
  *
  * Runs on its OWN validator via `scripts/run-squads-poc.sh` (the shared `config` singleton would
  * otherwise collide with `tests/fusd-core.ts`). Squads V4 (.so) + its ProgramConfig account come
@@ -27,7 +33,7 @@ const { PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, TransactionMessag
 const BN = anchor.BN;
 const RAY = new BN("1000000000000000000000000000"); // 1e27 = 0% per-second interest
 
-describe("MetaDAO→Squads→fUSD governance PoC", () => {
+describe("Squads→fUSD governance PoC (optional integration)", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
   const program = anchor.workspace.fusdCore as Program<FusdCore>;
@@ -146,7 +152,7 @@ describe("MetaDAO→Squads→fUSD governance PoC", () => {
     assert.ok(gate.inboundAuthority.equals(vaultPda), "gate inbound authority is the vault PDA");
   });
 
-  it("queues a param change via a Squads proposal, then executes it (the core proof)", async () => {
+  it("queues a param change via a Squads proposal, then executes it (the end-to-end proof)", async () => {
     const queueIx = await program.methods
       .queueParamChange({ redemptionFee: {} }, new BN(123))
       .accounts({

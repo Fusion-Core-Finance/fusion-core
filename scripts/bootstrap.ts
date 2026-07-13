@@ -62,7 +62,8 @@ interface MarketCfg {
   oracle: OracleCfg;
 }
 interface BootstrapCfg {
-  // Authorities — default to the deploying wallet for a single-key demo; point at a Squads vault for prod.
+  // Authorities — default to the deploying wallet for a single-key demo; point at your governance
+  // authority (e.g. a multisig vault) for prod.
   govAuthority?: string;
   guardian?: string;
   inboundAuthority?: string;

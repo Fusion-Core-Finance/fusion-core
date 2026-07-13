@@ -2,7 +2,8 @@
  * Shared helpers for the governance client scripts (set-param.ts, keys-sync.ts) — a tiny flag parser,
  * the governance PDAs, the param enum/clamp tables, and the safety-first "build then dry-run unless
  * --send" submitter. These scripts MUTATE protocol params + authority, so the default is to PRINT the
- * instruction (Squads-proposal-ready) and only sign+submit on an explicit --send.
+ * instruction as governance-proposal-ready JSON (e.g. for a multisig) and only sign+submit on an
+ * explicit --send.
  */
 import * as fs from "fs";
 import * as anchor from "@coral-xyz/anchor";
@@ -119,12 +120,13 @@ export function clampWarning(name: string, value: bigint, table: Record<string, 
   return null;
 }
 
-/** Build the instruction; PRINT it (Squads-proposal-ready) unless `send`, in which case sign + submit. */
+/** Build the instruction; PRINT it as governance-proposal-ready JSON (e.g. for a multisig) unless
+ * `send`, in which case sign + submit. */
 export async function sendOrPrint(methodBuilder: any, label: string, send: boolean): Promise<void> {
   const ix = await methodBuilder.instruction();
   if (!send) {
     log(`DRY-RUN: ${label}`);
-    log("  re-run with --send to submit, or propose this instruction via the Squads vault:");
+    log("  re-run with --send to submit, or propose this instruction via your governance process (e.g. a Squads multisig vault):");
     console.log(JSON.stringify({
       programId: ix.programId.toBase58(),
       keys: ix.keys.map((k: anchor.web3.AccountMeta) => ({ pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable })),

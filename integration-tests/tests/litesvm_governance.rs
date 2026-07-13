@@ -1,6 +1,7 @@
 //! `GovernanceGate` + the fUSD-owned timelock: QUEUE → delay → EXECUTE (and migrate / cancel /
-//! clamps). Keypair-gated here (the Squads-vault-PDA path that QUEUES through this gate is
-//! `tests/squads-gov-poc.ts`). The timing is exercised by warping the SVM clock.
+//! clamps). Keypair-gated here (a signer-PDA inbound authority QUEUING through this gate is
+//! exercised by the optional governance-integration PoC under `tests/`). The timing is
+//! exercised by warping the SVM clock.
 
 use anchor_lang::{InstructionData, ToAccountMetas};
 use fusd_core::instructions::init_market::InitMarketArgs;

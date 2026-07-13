@@ -1,6 +1,6 @@
 //! Oracle infrastructure admin: the bounded-updatable oracle PROGRAM IDs and the
 //! per-market feed REBIND path, both gated on `ProtocolConfig.gov_authority` (the deliberative
-//! futarchy/Squads-controlled authority — the same gate as `init_market_oracle`).
+//! governance authority — the same gate as `init_market_oracle`).
 //!
 //! Motivation: Pyth's core program migration (~2026-07-31) changes the receiver program ID, and
 //! Fusion's endgame is an IMMUTABLE program. Hard-coded oracle program IDs would be a time bomb — a

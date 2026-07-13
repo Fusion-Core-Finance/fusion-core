@@ -71,7 +71,7 @@ pub fn debt_price(p: &PriceView, k_bps: u128) -> u128 {
     p.price.saturating_add(markup)
 }
 
-/// Per-collateral validation thresholds (futarchy-tunable within compile-time clamps
+/// Per-collateral validation thresholds (governance-tunable within compile-time clamps
 /// later — see fusion-docs.md).
 #[derive(Clone, Copy, Debug)]
 pub struct OracleConfig {

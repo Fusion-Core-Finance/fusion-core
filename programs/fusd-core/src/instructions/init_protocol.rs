@@ -12,9 +12,9 @@ pub const FUSD_DECIMALS: u8 = 6;
 /// Inputs to `init_protocol`.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitProtocolArgs {
-    /// Migratable inbound governance authority (e.g. the MetaDAO Squads vault PDA).
+    /// Migratable inbound governance authority (any authorized signer or PDA).
     pub gov_authority: Pubkey,
-    /// Guardian — de-risk only, independent of futarchy/Squads.
+    /// Guardian — de-risk only, independent of the governance authority.
     pub guardian: Pubkey,
 }
 

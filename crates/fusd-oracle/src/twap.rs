@@ -33,8 +33,8 @@ pub struct Observation {
     pub ts: Timestamp,
 }
 
-/// Guards on `twap()`; lives in per-collateral params (futarchy-tunable within clamps),
-/// not in the ring account itself.
+/// Guards on `twap()`; lives in per-collateral params (governance-tunable within compile-time
+/// clamps), not in the ring account itself.
 #[derive(Clone, Copy, Debug)]
 pub struct TwapConfig {
     /// Minimum number of retained observations required to compute a TWAP.

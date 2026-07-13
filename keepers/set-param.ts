@@ -5,10 +5,11 @@
  * guardian de-risk lever. The valid params + their encoding come from the loaded IDL, so the tool
  * always matches the deployed program.
  *
- * SAFETY: every mutating action is DRY-RUN by default — it prints the instruction (Squads-proposal
- * ready) and only signs + submits when you pass --send. queue/cancel must be signed by the gov gate's
- * inbound_authority; execute is permissionless once the timelock elapses; guardian-derisk by the guardian.
- * Use --authority <pubkey> in dry-run to emit an instruction whose signer is your Squads vault PDA.
+ * SAFETY: every mutating action is DRY-RUN by default — it prints the instruction as
+ * governance-proposal-ready JSON (e.g. for a multisig) and only signs + submits when you pass --send.
+ * queue/cancel must be signed by the gov gate's inbound_authority; execute is permissionless once the
+ * timelock elapses; guardian-derisk by the guardian. Use --authority <pubkey> in dry-run to emit an
+ * instruction whose signer is an external signer/PDA (e.g. a multisig vault).
  *
  * USAGE
  *   ANCHOR_PROVIDER_URL=<rpc> ANCHOR_WALLET=<authority.json> npx ts-node keepers/set-param.ts <cmd> [flags]

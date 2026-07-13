@@ -2,9 +2,9 @@
 //!
 //! The bootstrap/admin authority (gates `init_market`, `init_market_oracle`,
 //! `init_reactor_pool`, `init_insurance_buffer`, `init_governance_gate`, `set_guardian`)
-//! previously had NO transfer path; the Phase-3 roadmap requires migrating it to the MetaDAO
-//! Squads vault. The handoff is propose/accept: the live key moves only when the proposed
-//! successor itself signs, so a typo'd / unheld proposal can never strand the role.
+//! previously had NO transfer path; the roadmap's governance-minimization path requires handing
+//! it to a successor signer or PDA. The handoff is propose/accept: the live key moves only when
+//! the proposed successor itself signs, so a typo'd / unheld proposal can never strand the role.
 //! Requires the dev-oracle `.so`.
 
 use fusd_integration_tests::*;

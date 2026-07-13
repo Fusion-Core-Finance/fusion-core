@@ -4,9 +4,10 @@
 //!
 //! Mirrors the `GovernanceGate` inbound-authority handshake (governance.rs): the live key moves
 //! ONLY when the proposed successor itself signs the accept, so a handoff to a dead/mistyped key
-//! can never strand the role — the Phase-3 roadmap requires migrating this authority to the
-//! MetaDAO Squads vault, and before this instruction existed there was NO transfer path at all
-//! (a lost admin key would have permanently frozen market onboarding and guardian rotation).
+//! can never strand the role — the roadmap's governance-minimization path requires handing this
+//! authority to a successor signer or PDA, and before this instruction existed there was NO
+//! transfer path at all (a lost admin key would have permanently frozen market onboarding and
+//! guardian rotation).
 //!
 //! Deliberately NOT two-step: `set_guardian` (fast revocation of a compromised guardian is
 //! load-bearing, and a typo'd guardian is benign — equivalent to revoke, recoverable).

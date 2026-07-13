@@ -1982,7 +1982,7 @@
     {
       "name": "guardian_derisk",
       "docs": [
-        "Guardian (independent of futarchy): pause NEW borrowing on a market for `pause_secs`",
+        "Guardian (independent of the governance authority): pause NEW borrowing on a market for `pause_secs`",
         "(clamped to `GUARDIAN_MAX_PAUSE_SECS`; auto-lifts; `0` lifts early). Monotonic de-risk only —",
         "never touches existing positions, funds, repay, liquidation, or redemption."
       ],
@@ -3776,7 +3776,7 @@
       "name": "migrate_inbound_authority",
       "docs": [
         "Governance: STEP 1 of the two-step inbound-authority handoff — the current authority",
-        "PROPOSES a successor (e.g. launch multisig → MetaDAO Squads vault). The live authority does",
+        "PROPOSES a successor (e.g. guarded-launch signer → successor signer or PDA). The live authority does",
         "not change until the successor calls `accept_inbound_authority`. Pass `Pubkey::default()`",
         "to cancel a pending handoff. Gated on the CURRENT inbound authority."
       ],
@@ -3795,7 +3795,7 @@
           "name": "authority",
           "docs": [
             "MUST equal the CURRENT `gov_gate.inbound_authority` — governance proposes its own successor",
-            "(e.g. launch multisig → MetaDAO Squads vault)."
+            "(e.g. guarded-launch signer → successor signer or PDA)."
           ],
           "signer": true
         },
@@ -4368,7 +4368,8 @@
       "name": "queue_param_change",
       "docs": [
         "Governance: QUEUE a clamped market-parameter change behind the timelock. Gated on the",
-        "gate's inbound authority (the MetaDAO → Squads → fUSD CPI target)."
+        "gate's inbound authority (any authorized signer or PDA; an external governance system",
+        "may CPI as this authority)."
       ],
       "discriminator": [
         140,
@@ -8595,8 +8596,8 @@
       "docs": [
         "The bounded governance gate. PDA `[b\"gov_gate\"]`. The sole authorizer of timelocked param",
         "changes (`queue_param_change`). `inbound_authority` is MIGRATABLE — repoint from a guarded-",
-        "launch multisig to the MetaDAO DAO's Squads vault PDA later (an earlier PoC proved that path).",
-        "fusion-docs.md."
+        "launch signer to any successor signer or PDA later (an earlier PoC proved a program-signed",
+        "PDA can hold the seat). fusion-docs.md."
       ],
       "type": {
         "kind": "struct",
@@ -8604,8 +8605,8 @@
           {
             "name": "inbound_authority",
             "docs": [
-              "The authority allowed to QUEUE param changes — a launch multisig at first, the MetaDAO",
-              "Squads vault PDA in production. Migratable via the TWO-STEP handshake",
+              "The authority allowed to QUEUE param changes — any authorized signer or PDA (a guarded-",
+              "launch signer at first, a successor authority later). Migratable via the TWO-STEP handshake",
               "(`migrate_inbound_authority` proposes → `accept_inbound_authority` the new key signs)."
             ],
             "type": "pubkey"
@@ -8624,8 +8625,8 @@
             "name": "timelock_secs",
             "docs": [
               "The fUSD-owned timelock delay (seconds) between queue and execute. Bounded by",
-              "`[MIN_GOV_TIMELOCK_SECS, MAX_GOV_TIMELOCK_SECS]`; Squads itself runs `time_lock = 0`,",
-              "which is exactly why fUSD supplies its own."
+              "`[MIN_GOV_TIMELOCK_SECS, MAX_GOV_TIMELOCK_SECS]`; enforced HERE so the delay never",
+              "depends on whatever timelock (if any) the upstream authority runs."
             ],
             "type": "i64"
           },
@@ -8918,14 +8919,14 @@
           {
             "name": "gov_authority",
             "docs": [
-              "Migratable inbound governance authority (e.g. the MetaDAO Squads vault PDA)."
+              "Migratable inbound governance authority (any authorized signer or PDA)."
             ],
             "type": "pubkey"
           },
           {
             "name": "guardian",
             "docs": [
-              "Guardian — de-risk only, independent of futarchy/Squads."
+              "Guardian — de-risk only, independent of the governance authority."
             ],
             "type": "pubkey"
           }
@@ -10401,8 +10402,8 @@
           {
             "name": "gov_authority",
             "docs": [
-              "Migratable inbound governance authority — the MetaDAO DAO's Squads vault PDA",
-              "(`[b\"multisig\", multisig, b\"vault\", 0]`). The `GovernanceGate` is the sole",
+              "Migratable inbound governance authority — any authorized signer or PDA (e.g. a",
+              "multisig vault PDA or a governance-program PDA). The `GovernanceGate` is the sole",
               "writer of bounded params; this is the authority it checks. fusion-docs.md."
             ],
             "type": "pubkey"
@@ -10410,8 +10411,9 @@
           {
             "name": "guardian",
             "docs": [
-              "Guardian: de-risk-only and INDEPENDENT of futarchy/Squads, so a frozen DAO",
-              "cannot freeze fUSD's emergency response. fusion-docs.md."
+              "Guardian: de-risk-only and INDEPENDENT of the governance authority, so a frozen",
+              "or compromised governance system cannot also freeze fUSD's emergency response.",
+              "fusion-docs.md."
             ],
             "type": "pubkey"
           },

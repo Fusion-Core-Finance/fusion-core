@@ -7,12 +7,13 @@ use anchor_lang::prelude::*;
 #[account]
 #[derive(Debug)]
 pub struct ProtocolConfig {
-    /// Migratable inbound governance authority — the MetaDAO DAO's Squads vault PDA
-    /// (`[b"multisig", multisig, b"vault", 0]`). The `GovernanceGate` is the sole
+    /// Migratable inbound governance authority — any authorized signer or PDA (e.g. a
+    /// multisig vault PDA or a governance-program PDA). The `GovernanceGate` is the sole
     /// writer of bounded params; this is the authority it checks. fusion-docs.md.
     pub gov_authority: Pubkey,
-    /// Guardian: de-risk-only and INDEPENDENT of futarchy/Squads, so a frozen DAO
-    /// cannot freeze fUSD's emergency response. fusion-docs.md.
+    /// Guardian: de-risk-only and INDEPENDENT of the governance authority, so a frozen
+    /// or compromised governance system cannot also freeze fUSD's emergency response.
+    /// fusion-docs.md.
     pub guardian: Pubkey,
     /// Deployer that ran `init_protocol` (informational).
     pub deployer: Pubkey,
