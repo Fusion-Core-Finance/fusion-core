@@ -89,7 +89,7 @@ export const MARKET_CLAMPS: Record<string, Clamp> = {
   OracleMaxDeviation: { unit: "bps", min: 1, max: 500 },
   OracleTwapDivergence: { unit: "bps", min: 1, max: 1000, note: "must stay <= oracleLiqDivergence" },
   OracleLiqDivergence: { unit: "bps", max: 10_000, note: "0 disables; must stay >= oracleTwapDivergence" },
-  OracleMaxAge: { unit: "secs", min: 1, max: 300 },
+  OracleMaxAge: { unit: "secs", min: 1, max: 3_600 },
   OracleK: { unit: "bps", min: 10_000, max: 30_000 },
   OracleTwapStaleness: { unit: "secs", min: 1, max: 3600 },
   Scr: { unit: "bps", min: 10_500, max: 15_000, note: "must stay <= mcr" },
