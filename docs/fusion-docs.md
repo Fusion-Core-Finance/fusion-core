@@ -689,7 +689,7 @@ Clamps (`constants.rs` — futarchy-tunable *within* these hard bounds; defaults
 | `max_conf_bps` | > 0 | 500 (5%) | 200 (2%) |
 | `max_deviation_bps` | > 0 | 500 | 100 (1%) |
 | `twap_max_divergence_bps` | > 0 | 1_000 | 500 (5%, wider than the feed band — the TWAP lags by construction) |
-| `max_age_secs` | > 0 | 300 | 60 |
+| `max_age_secs` | > 0 | 3600 | 60 |
 | `k_bps` | 10_000 | 30_000 | 21_200 (2.12σ) |
 | `twap_window_secs` | 300 | 86_400 | 1_800 (30 min) |
 | `twap_min_samples` | 3 | 64 (`TWAP_RING_CAPACITY`) | 10 |
@@ -808,7 +808,7 @@ All defaults and clamps below are the literal constants in `programs/fusd-core/s
 | Pyth conf cap | `max_conf_bps` | `DEFAULT_ORACLE_CONF_BPS` = 200 (2%) | `(0, MAX_ORACLE_CONF_BPS = 500]` (≤5%) | [Built] init-time |
 | Pyth↔Switchboard band | `max_deviation_bps` | `DEFAULT_ORACLE_DEVIATION_BPS` = 100 (1%) | `(0, MAX_ORACLE_DEVIATION_BPS = 500]` | [Built] init-time |
 | DEX-TWAP divergence corridor | `twap_max_divergence_bps` | `DEFAULT_TWAP_DIVERGENCE_BPS` = 500 (5%) | `(0, MAX_TWAP_DIVERGENCE_BPS = 1000]` | [Built] init-time |
-| Feed staleness cutoff | `max_age_secs` | `DEFAULT_ORACLE_MAX_AGE_SECS` = 60 | `(0, MAX_ORACLE_MAX_AGE_SECS = 300]` | [Built] init-time |
+| Feed staleness cutoff | `max_age_secs` | `DEFAULT_ORACLE_MAX_AGE_SECS` = 60 | `(0, MAX_ORACLE_MAX_AGE_SECS = 3600]` | [Built] init-time |
 | Asymmetry factor *k* | `k_bps` | `DEFAULT_ORACLE_K_BPS` = 21_200 (2.12σ) | `[MIN_ORACLE_K_BPS = 10_000 (1σ), MAX_ORACLE_K_BPS = 30_000 (3σ)]` | [Built] init-time |
 | TWAP window | `twap_window_secs` | `DEFAULT_TWAP_WINDOW_SECS` = 1_800 (30m) | `[MIN = 300 (5m), MAX = 86_400 (24h)]` | [Built] init-time |
 | TWAP min samples | `twap_min_samples` | `DEFAULT_TWAP_MIN_SAMPLES` = 10 | `[MIN_TWAP_MIN_SAMPLES = 3, TWAP_RING_CAPACITY = 64]` (a target the 64-slot ring can never reach would freeze mints forever) | [Built] init-time |

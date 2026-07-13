@@ -461,7 +461,7 @@ The four surplus/collateral fields above satisfy the market's proof-of-reserves 
   - `require!(args.max_conf_bps > 0 && args.max_conf_bps <= MAX_ORACLE_CONF_BPS, FusdError::ParamOutOfBounds)` — `MAX = 500`. `programs/fusd-core/src/instructions/init_market_oracle.rs:121`, `programs/fusd-core/src/constants.rs:385`.
   - `require!(args.max_deviation_bps > 0 && args.max_deviation_bps <= MAX_ORACLE_DEVIATION_BPS, FusdError::ParamOutOfBounds)` — `MAX = 500`. `programs/fusd-core/src/instructions/init_market_oracle.rs:125`, `programs/fusd-core/src/constants.rs:388`.
   - `require!(args.twap_max_divergence_bps > 0 && args.twap_max_divergence_bps <= MAX_TWAP_DIVERGENCE_BPS, FusdError::ParamOutOfBounds)` — `MAX = 1_000`. `programs/fusd-core/src/instructions/init_market_oracle.rs:129`, `programs/fusd-core/src/constants.rs:391`.
-  - `require!(args.max_age_secs > 0 && args.max_age_secs <= MAX_ORACLE_MAX_AGE_SECS, FusdError::ParamOutOfBounds)` — `MAX = 300`. `programs/fusd-core/src/instructions/init_market_oracle.rs:134`, `programs/fusd-core/src/constants.rs:395`.
+  - `require!(args.max_age_secs > 0 && args.max_age_secs <= MAX_ORACLE_MAX_AGE_SECS, FusdError::ParamOutOfBounds)` — `MAX = 3600`. `programs/fusd-core/src/instructions/init_market_oracle.rs:134`, `programs/fusd-core/src/constants.rs:395`.
   - `require!(args.k_bps >= MIN_ORACLE_K_BPS && args.k_bps <= MAX_ORACLE_K_BPS, FusdError::ParamOutOfBounds)` — `MIN = 10_000`, `MAX = 30_000` (the `k` in spot = mid−k·σ / debt_spot = mid+k·σ). `programs/fusd-core/src/instructions/init_market_oracle.rs:138`, `programs/fusd-core/src/constants.rs:398`.
   - `require!(args.twap_window_secs >= MIN_TWAP_WINDOW_SECS && args.twap_window_secs <= MAX_TWAP_WINDOW_SECS, FusdError::ParamOutOfBounds)` — `MIN = 300`, `MAX = 86_400`. `programs/fusd-core/src/instructions/init_market_oracle.rs:142`, `programs/fusd-core/src/constants.rs:402`.
   - `require!(args.twap_min_samples >= MIN_TWAP_MIN_SAMPLES && (args.twap_min_samples as usize) <= TWAP_RING_CAPACITY, FusdError::ParamOutOfBounds)` — `MIN = 3`, `TWAP_RING_CAPACITY = 64` (an unreachable min would freeze mints forever). `programs/fusd-core/src/instructions/init_market_oracle.rs:151`, `programs/fusd-core/src/constants.rs:406`, `programs/fusd-core/src/constants.rs:382`.
@@ -862,7 +862,7 @@ The four surplus/collateral fields above satisfy the market's proof-of-reserves 
     - `OracleMaxDeviation`: `value > 0 && value <= MAX_ORACLE_DEVIATION_BPS as u64` (1–500) (`:90`).
     - `OracleTwapDivergence`: `value > 0 && value <= MAX_TWAP_DIVERGENCE_BPS as u64` (1–1_000) (`:93`).
     - `OracleLiqDivergence`: `value <= MAX_LIQ_DIVERGENCE_BPS as u64` (≤10_000; 0 disables) (`:97`).
-    - `OracleMaxAge`: `value > 0 && value <= MAX_ORACLE_MAX_AGE_SECS as u64` (1–300 s) (`:100`).
+    - `OracleMaxAge`: `value > 0 && value <= MAX_ORACLE_MAX_AGE_SECS as u64` (1–3600 s) (`:100`).
     - `OracleK`: `value >= MIN_ORACLE_K_BPS as u64 && value <= MAX_ORACLE_K_BPS as u64` (10_000–30_000; this is the k·σ spot/debt_spot spread factor) (`:103`).
     - `OracleTwapStaleness`: `value > 0 && value <= MAX_TWAP_STALENESS_SECS as u64` (1–3_600 s) (`:108`).
     - `Scr`: `value >= MIN_SCR_BPS as u64 && value <= MAX_SCR_BPS as u64` (10_500–15_000; also relationally `<= mcr_bps`, below) (`:114`).
