@@ -18,6 +18,12 @@ name = "fusd_integration_tests"
 anchor-lang = { workspace = true }
 fusd-math = { workspace = true }
 fusd-core = { path = "../programs/fusd-core", default-features = false, features = ["no-entrypoint", "dev-oracle"] }
+# The fuSOL Allocation Controller, consumed exactly like fusd-core (no-entrypoint lib; its
+# dev-oracle feature is INERT — the program has no dev instructions, so no marker assert applies).
+fusion-stake-controller = { path = "../programs/fusion-stake-controller", default-features = false, features = ["no-entrypoint"] }
+# Byte parsers for the stake-pool-side accounts (StakePool authority graph / totals, validator
+# list entries) — the same views the controller itself trusts on-chain.
+fusion-stake-view = { workspace = true }
 litesvm = "=0.7.1"
 solana-sdk = "2.3"
 spl-token = { version = "8.0", default-features = false, features = ["no-entrypoint"] }

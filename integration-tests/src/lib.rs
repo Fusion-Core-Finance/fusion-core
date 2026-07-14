@@ -58,6 +58,12 @@ pub const STAKE_POOL_FORK_ID: Pubkey =
 pub const STAKE_POOL_SO_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/spl_stake_pool.so");
 
+/// Compiled fuSOL Allocation Controller (built by the SAME `anchor build -- --features
+/// dev-oracle` invocation that produces `fusd_core.so`; the feature is INERT for this program —
+/// it declares no dev instructions, so no dev-marker assert applies to this `.so`).
+pub const CONTROLLER_SO_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../target/deploy/fusion_stake_controller.so");
+
 /// Load the stake-pool fork into `svm` at [`STAKE_POOL_FORK_ID`] (plain v2 loader — the pool
 /// program never reads its own ProgramData, and the fork ships sealed/immutable anyway).
 pub fn load_stake_pool_fork(svm: &mut LiteSVM) {
@@ -143,20 +149,42 @@ pub fn new_svm() -> LiteSVM {
     svm
 }
 
-/// The canonical `ProgramData` PDA of `fusd_core` under the BPF upgradeable loader.
-pub fn programdata_pda() -> Pubkey {
+/// The canonical `ProgramData` PDA of `program_id` under the BPF upgradeable loader.
+pub fn programdata_pda_of(program_id: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
-        &[fusd_core::ID.as_ref()],
+        &[program_id.as_ref()],
         &solana_sdk::bpf_loader_upgradeable::id(),
     )
     .0
 }
 
-/// Load `fusd_core.so` under the BPF upgradeable loader with the given upgrade authority: writes the
-/// `ProgramData` account (45-byte metadata header + ELF) then the `Program` account that points at
-/// it (executable). `add_program_from_file` only loads the non-upgradeable v2 layout, which has no
-/// `ProgramData` account and so can't drive the gate.
+/// The canonical `ProgramData` PDA of `fusd_core` under the BPF upgradeable loader.
+pub fn programdata_pda() -> Pubkey {
+    programdata_pda_of(&fusd_core::ID)
+}
+
+/// Load `fusd_core.so` under the BPF upgradeable loader with the given upgrade authority (dev
+/// marker required — see [`load_upgradeable_program_at`]).
 fn load_upgradeable_program(svm: &mut LiteSVM, so_path: &str, upgrade_authority: Pubkey) {
+    load_upgradeable_program_at(svm, so_path, fusd_core::ID, upgrade_authority, true);
+}
+
+/// Load any `.so` under the BPF upgradeable loader at `program_id` with the given upgrade
+/// authority: writes the `ProgramData` account (45-byte metadata header + ELF) then the
+/// `Program` account that points at it (executable). `add_program_from_file` only loads the
+/// non-upgradeable v2 layout, which has no `ProgramData` account and so can't drive an
+/// upgrade-authority gate (fusd-core `init_protocol`, controller `initialize_controller`).
+///
+/// `expect_dev_marker`: assert the ELF embeds the dev-oracle instruction marker. `true` for
+/// fusd-core (dev_set_price must exist at runtime), `false` for programs whose dev-oracle
+/// feature is inert (the controller declares no dev instructions).
+pub fn load_upgradeable_program_at(
+    svm: &mut LiteSVM,
+    so_path: &str,
+    program_id: Pubkey,
+    upgrade_authority: Pubkey,
+    expect_dev_marker: bool,
+) {
     use solana_sdk::account::Account;
     use solana_sdk::bpf_loader_upgradeable::{self, UpgradeableLoaderState};
 
@@ -174,12 +202,14 @@ fn load_upgradeable_program(svm: &mut LiteSVM, so_path: &str, upgrade_authority:
     // Anchor codegen embeds `msg!("Instruction: DevSetPrice")` in every dev-oracle build — the same
     // marker scripts/check-no-dev-oracle.sh asserts is ABSENT from production builds.
     const DEV_ORACLE_MARKER: &[u8] = b"Instruction: DevSetPrice";
-    assert!(
-        elf.windows(DEV_ORACLE_MARKER.len()).any(|w| w == DEV_ORACLE_MARKER),
-        "{so_path} is a PRODUCTION build (no dev-oracle feature) — ci-checks.sh intentionally \
-         leaves one after step 7; rebuild with: anchor build -- --features dev-oracle"
-    );
-    let pd_addr = programdata_pda();
+    if expect_dev_marker {
+        assert!(
+            elf.windows(DEV_ORACLE_MARKER.len()).any(|w| w == DEV_ORACLE_MARKER),
+            "{so_path} is a PRODUCTION build (no dev-oracle feature) — ci-checks.sh intentionally \
+             leaves one after step 7; rebuild with: anchor build -- --features dev-oracle"
+        );
+    }
+    let pd_addr = programdata_pda_of(&program_id);
 
     let meta = UpgradeableLoaderState::ProgramData {
         slot: 0,
@@ -206,7 +236,7 @@ fn load_upgradeable_program(svm: &mut LiteSVM, so_path: &str, upgrade_authority:
     let prog_data = bincode::serialize(&prog).expect("serialize Program state");
     let prog_lamports = svm.minimum_balance_for_rent_exemption(prog_data.len());
     svm.set_account(
-        fusd_core::ID,
+        program_id,
         Account {
             lamports: prog_lamports,
             data: prog_data,
@@ -218,11 +248,17 @@ fn load_upgradeable_program(svm: &mut LiteSVM, so_path: &str, upgrade_authority:
     .expect("set program account (loads the ELF from programdata)");
 }
 
-/// Repoint the loaded program's upgrade authority (rewrites only the `ProgramData` metadata header,
+/// Repoint fusd-core's upgrade authority (rewrites only the `ProgramData` metadata header,
 /// preserving the ELF) so `init_protocol`'s gate accepts `auth` as the legitimate initializer.
 pub fn set_program_upgrade_authority(svm: &mut LiteSVM, auth: &Pubkey) {
+    set_upgrade_authority_at(svm, &fusd_core::ID, auth);
+}
+
+/// As [`set_program_upgrade_authority`], for any loaded upgradeable program — the controller's
+/// `initialize_controller` carries the same upgrade-authority gate as fusd-core's `init_protocol`.
+pub fn set_upgrade_authority_at(svm: &mut LiteSVM, program_id: &Pubkey, auth: &Pubkey) {
     use solana_sdk::bpf_loader_upgradeable::UpgradeableLoaderState;
-    let pd_addr = programdata_pda();
+    let pd_addr = programdata_pda_of(program_id);
     let mut acct = svm.get_account(&pd_addr).expect("programdata account loaded");
     let meta = UpgradeableLoaderState::ProgramData {
         slot: 0,
@@ -231,6 +267,29 @@ pub fn set_program_upgrade_authority(svm: &mut LiteSVM, auth: &Pubkey) {
     let meta_bytes = bincode::serialize(&meta).expect("serialize ProgramData metadata");
     acct.data[..meta_bytes.len()].copy_from_slice(&meta_bytes);
     svm.set_account(pd_addr, acct).expect("rewrite programdata upgrade authority");
+}
+
+/// Load the fuSOL Allocation Controller as an UPGRADEABLE program with the given upgrade
+/// authority — `initialize_controller` gates genesis to it (front-run protection). No dev
+/// marker: the controller's `dev-oracle` feature is inert.
+pub fn load_controller(svm: &mut LiteSVM, upgrade_authority: Pubkey) {
+    load_upgradeable_program_at(
+        svm,
+        CONTROLLER_SO_PATH,
+        fusion_stake_controller::ID,
+        upgrade_authority,
+        false,
+    );
+}
+
+/// Fresh `LiteSVM` with the FULL fuSOL stack: fusd-core (upgradeable, like [`new_svm`]) + the
+/// Allocation Controller (upgradeable, authority `Pubkey::default()` — [`pool_genesis`] repoints
+/// it to the genesis payer) + the mainnet-dumped stake-pool program at [`STAKE_POOL_FORK_ID`].
+pub fn new_svm_full() -> LiteSVM {
+    let mut svm = new_svm();
+    load_controller(&mut svm, Pubkey::default());
+    load_stake_pool_fork(&mut svm);
+    svm
 }
 
 /// Compile + sign + send a v0 transaction. `payer` is the fee payer (and a signer); `signers`
@@ -626,6 +685,23 @@ pub fn warp_slots(svm: &mut LiteSVM, slots: u64) {
 pub fn current_slot(svm: &LiteSVM) -> u64 {
     let clock: solana_sdk::clock::Clock = svm.get_sysvar();
     clock.slot
+}
+
+/// Advance the SVM clock by `n` EPOCHS, keeping the slot consistent with the epoch schedule
+/// (litesvm has no epoch machinery: no rewards are paid and StakeHistory stays `Default` — epoch
+/// warp is purely manual). The slot lands on the target epoch's first slot (or just past the
+/// current slot if that is already beyond it), and the blockhash is expired so a post-warp retry
+/// of an identical tx isn't deduped as `AlreadyProcessed`.
+pub fn warp_epochs(svm: &mut LiteSVM, n: u64) {
+    let mut clock: solana_sdk::clock::Clock = svm.get_sysvar();
+    let schedule: solana_sdk::epoch_schedule::EpochSchedule = svm.get_sysvar();
+    let target_epoch = clock.epoch.saturating_add(n);
+    let slot = schedule.get_first_slot_in_epoch(target_epoch).max(clock.slot.saturating_add(1));
+    clock.epoch = target_epoch;
+    clock.slot = slot;
+    svm.set_sysvar(&clock);
+    svm.warp_to_slot(slot);
+    svm.expire_blockhash();
 }
 
 /// After a stall→resume armed the on-resume liquidation grace window, walk the clock PAST
@@ -2695,4 +2771,806 @@ pub fn provide_sp(svm: &mut LiteSVM, actor: &Actor, coll: &Pubkey, amount: u64) 
         &[],
     )
     .expect("provide_to_reactor failed");
+}
+
+// ============================ fuSOL allocation controller: PDAs + pins ============================
+//
+// Everything below drives `programs/fusion-stake-controller` against the REAL mainnet-dumped
+// stake-pool program (loaded at [`STAKE_POOL_FORK_ID`] by [`new_svm_full`]). Seeds are imported
+// from the program's constants module — never restrung.
+
+use fusion_stake_controller::constants::{
+    CONTROLLER_SEED, DEPOSIT_AUTHORITY_SEED, EPOCH_STATE_SEED, MAINTENANCE_AUTHORITY_SEED,
+    MAX_VALIDATORS, POOL_AUTHORITY_SEED, PREFERENCE_SEED, STAKE_ACCOUNT_SPACE, STAKE_CONFIG_ID,
+    STAKE_PROGRAM_ID, VALIDATOR_RECORD_SEED,
+};
+/// Re-exported so scenario files can build genesis args without spelling the module path.
+pub use fusion_stake_controller::instructions::initialize_controller::InitializeControllerArgs;
+
+fn ctrl_pda(seeds: &[&[u8]]) -> Pubkey {
+    Pubkey::find_program_address(seeds, &fusion_stake_controller::ID).0
+}
+
+/// `[b"controller"]` — the singleton `ControllerConfig`.
+pub fn controller_config_pda() -> Pubkey {
+    ctrl_pda(&[CONTROLLER_SEED])
+}
+/// `[b"epoch_state"]` — the singleton zero-copy crank state machine.
+pub fn controller_epoch_state_pda() -> Pubkey {
+    ctrl_pda(&[EPOCH_STATE_SEED])
+}
+/// `[b"validator", vote_account]` — one `ValidatorRecord` per registered vote account.
+pub fn validator_record_pda(vote: &Pubkey) -> Pubkey {
+    ctrl_pda(&[VALIDATOR_RECORD_SEED, vote.as_ref()])
+}
+/// `[b"preference", fusion_position]` — one `Preference` per fuSOL Fusion position.
+pub fn preference_pda(position: &Pubkey) -> Pubkey {
+    ctrl_pda(&[PREFERENCE_SEED, position.as_ref()])
+}
+/// `[b"pool_authority"]` — the stake pool's manager AND staker.
+pub fn pool_authority_pda() -> Pubkey {
+    ctrl_pda(&[POOL_AUTHORITY_SEED])
+}
+/// `[b"deposit_authority"]` — the pool's SOL + stake deposit authority.
+pub fn deposit_authority_pda() -> Pubkey {
+    ctrl_pda(&[DEPOSIT_AUTHORITY_SEED])
+}
+/// `[b"maintenance"]` — the maintenance vault's token authority.
+pub fn maintenance_authority_pda() -> Pubkey {
+    ctrl_pda(&[MAINTENANCE_AUTHORITY_SEED])
+}
+/// The controller's `#[event_cpi]` event-authority PDA (`[b"__event_authority"]`).
+pub fn controller_event_authority_pda() -> Pubkey {
+    Pubkey::find_program_address(&[b"__event_authority"], &fusion_stake_controller::ID).0
+}
+/// The stake-pool program's withdraw-authority PDA — `[stake_pool, b"withdraw"]` under the FORK
+/// program id (the upstream `AUTHORITY_WITHDRAW` seed literal; `initialize_controller` derives
+/// and records the same address).
+pub fn pool_withdraw_authority_pda(stake_pool: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[stake_pool.as_ref(), b"withdraw"], &STAKE_POOL_FORK_ID).0
+}
+
+// Anchor custom-error codes (base 6000 + variant index in fusion-stake-controller's errors.rs —
+// the litesvm pins that make that file's append-only comment true).
+pub const E_CTRL_ALREADY_SEALED: u32 = 6000;
+pub const E_CTRL_INVALID_CONFIG_ADDRESS: u32 = 6001;
+pub const E_CTRL_ADDRESS_MISMATCH: u32 = 6002;
+pub const E_CTRL_INVALID_FUSOL_MINT: u32 = 6003;
+pub const E_CTRL_INVALID_MAINTENANCE_VAULT: u32 = 6004;
+pub const E_CTRL_INVALID_VOTE_ACCOUNT: u32 = 6005;
+pub const E_CTRL_ZERO_AMOUNT: u32 = 6006;
+pub const E_CTRL_MATH_OVERFLOW: u32 = 6007;
+pub const E_CTRL_POOL_NOT_INITIALIZED: u32 = 6008;
+pub const E_CTRL_VALIDATOR_NOT_IN_POOL: u32 = 6009;
+pub const E_CTRL_VALIDATOR_CAP_EXCEEDED: u32 = 6010;
+pub const E_CTRL_CORRUPT_VALIDATOR_STATUS: u32 = 6011;
+pub const E_CTRL_INVALID_STAKE_POOL_ACCOUNT: u32 = 6012;
+pub const E_CTRL_INVALID_VALIDATOR_LIST_ENTRY: u32 = 6013;
+pub const E_CTRL_NOT_YET_IMPLEMENTED: u32 = 6014; // unreachable — kept for code stability
+pub const E_CTRL_WRONG_PHASE: u32 = 6015;
+pub const E_CTRL_EPOCH_NOT_ADVANCED: u32 = 6016;
+pub const E_CTRL_INVALID_REMAINING_ACCOUNTS: u32 = 6017;
+pub const E_CTRL_STALE_VALIDATOR_RECORD: u32 = 6018;
+pub const E_CTRL_RECORD_ALREADY_PLANNED: u32 = 6019;
+pub const E_CTRL_PREFERENCE_WINDOW_CLOSED: u32 = 6020;
+pub const E_CTRL_PREFERENCE_WINDOW_STILL_OPEN: u32 = 6021;
+pub const E_CTRL_PREFERENCE_NOT_COUNTABLE: u32 = 6022;
+pub const E_CTRL_PREFERENCE_CHANGE_LIMIT: u32 = 6023;
+pub const E_CTRL_PREFERENCE_OWNER_MISMATCH: u32 = 6024;
+pub const E_CTRL_INVALID_POSITION_ACCOUNT: u32 = 6025;
+pub const E_CTRL_VALIDATOR_NOT_ELIGIBLE_FOR_PREFERENCE: u32 = 6026;
+pub const E_CTRL_DIRECTED_SHARES_EXCEED_SUPPLY: u32 = 6027;
+pub const E_CTRL_PLAN_CONSERVATION_VIOLATED: u32 = 6028;
+pub const E_CTRL_NEUTRAL_ROUND_INCONSISTENT: u32 = 6029;
+pub const E_CTRL_REBALANCE_COMPLETE: u32 = 6030;
+pub const E_CTRL_WRONG_ACTION_TARGET: u32 = 6031;
+pub const E_CTRL_EPOCH_NOT_FINISHED: u32 = 6032;
+pub const E_CTRL_POSITION_STILL_OPEN: u32 = 6033;
+pub const E_CTRL_INVALID_RENT_RECIPIENT: u32 = 6034;
+pub const E_CTRL_INVALID_REWARD_RECIPIENT: u32 = 6035;
+pub const E_CTRL_PREFERENCE_CHANGE_LIMIT2: u32 = 6036;
+
+// ============================ controller: typed account readers ============================
+
+pub fn read_controller_config(svm: &LiteSVM) -> fusion_stake_controller::state::ControllerConfig {
+    let acct = svm.get_account(&controller_config_pda()).expect("ControllerConfig exists");
+    fusion_stake_controller::state::ControllerConfig::try_deserialize(&mut acct.data.as_slice())
+        .unwrap()
+}
+
+/// The zero-copy `EpochState` (read via `pod_read_unaligned` — account data is 1-aligned).
+pub fn read_epoch_state(svm: &LiteSVM) -> fusion_stake_controller::state::EpochState {
+    let acct = svm.get_account(&controller_epoch_state_pda()).expect("EpochState exists");
+    let size = core::mem::size_of::<fusion_stake_controller::state::EpochState>();
+    bytemuck::pod_read_unaligned(&acct.data[8..8 + size])
+}
+
+pub fn read_validator_record(
+    svm: &LiteSVM,
+    vote: &Pubkey,
+) -> fusion_stake_controller::state::ValidatorRecord {
+    let acct = svm.get_account(&validator_record_pda(vote)).expect("ValidatorRecord exists");
+    fusion_stake_controller::state::ValidatorRecord::try_deserialize(&mut acct.data.as_slice())
+        .unwrap()
+}
+
+pub fn read_preference(
+    svm: &LiteSVM,
+    position: &Pubkey,
+) -> fusion_stake_controller::state::Preference {
+    let acct = svm.get_account(&preference_pda(position)).expect("Preference exists");
+    fusion_stake_controller::state::Preference::try_deserialize(&mut acct.data.as_slice()).unwrap()
+}
+
+/// Parse the FORK pool's `StakePool` account through the same byte view the controller trusts
+/// on-chain (authority graph, canonical totals, `last_update_epoch`).
+pub fn read_fork_stake_pool(
+    svm: &LiteSVM,
+    stake_pool: &Pubkey,
+) -> fusion_stake_view::stake_pool::StakePoolView {
+    let acct = svm.get_account(stake_pool).expect("StakePool account exists");
+    assert_eq!(acct.owner, STAKE_POOL_FORK_ID, "StakePool must be owned by the fork program");
+    fusion_stake_view::stake_pool::parse(&acct.data).expect("StakePool parses")
+}
+
+/// Header + `entry_at` view of the FORK pool's `ValidatorList`.
+pub fn read_fork_validator_list_len(svm: &LiteSVM, validator_list: &Pubkey) -> u32 {
+    let acct = svm.get_account(validator_list).expect("ValidatorList account exists");
+    assert_eq!(acct.owner, STAKE_POOL_FORK_ID, "ValidatorList must be owned by the fork program");
+    fusion_stake_view::validator_list::parse_header(&acct.data).expect("ValidatorList parses").len
+}
+
+// ============================ controller: instruction builders ============================
+//
+// All 18 instructions, built from the program's generated `accounts::X` / `instruction::X`
+// types (the fusd-core builder convention). Every instruction is `#[event_cpi]`, so the
+// event-authority PDA + the program account ride at the END of the named accounts; the three
+// remaining-accounts cranks take a `&[AccountMeta]` tail appended AFTER those.
+
+pub fn ctrl_initialize_controller_ix(payer: &Pubkey, g: &PoolGenesis) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::InitializeController {
+            payer: *payer,
+            program_data: programdata_pda_of(&fusion_stake_controller::ID),
+            config: g.config,
+            epoch_state: g.epoch_state,
+            pool_authority: g.pool_authority,
+            deposit_authority: g.deposit_authority,
+            maintenance_authority: g.maintenance_authority,
+            system_program: system_program::ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::InitializeController {
+            args: InitializeControllerArgs {
+                stake_pool: g.stake_pool,
+                validator_list: g.validator_list,
+                reserve_stake: g.reserve_stake,
+                fusol_mint: g.fusol_mint,
+                maintenance_vault: g.maintenance_vault,
+            },
+        }
+        .data(),
+    }
+}
+
+pub fn ctrl_initialize_pool_ix(payer: &Pubkey, g: &PoolGenesis) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::InitializePool {
+            payer: *payer,
+            config: g.config,
+            stake_pool: g.stake_pool,
+            pool_authority: g.pool_authority,
+            deposit_authority: g.deposit_authority,
+            pool_withdraw_authority: g.pool_withdraw_authority,
+            validator_list: g.validator_list,
+            reserve_stake: g.reserve_stake,
+            fusol_mint: g.fusol_mint,
+            maintenance_vault: g.maintenance_vault,
+            maintenance_authority: g.maintenance_authority,
+            stake_pool_program: STAKE_POOL_FORK_ID,
+            token_program: SPL_TOKEN_ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::InitializePool {}.data(),
+    }
+}
+
+pub fn ctrl_register_validator_ix(payer: &Pubkey, vote: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::RegisterValidator {
+            payer: *payer,
+            config: controller_config_pda(),
+            vote_account: *vote,
+            validator_record: validator_record_pda(vote),
+            system_program: system_program::ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::RegisterValidator {}.data(),
+    }
+}
+
+pub fn ctrl_deposit_sol_ix(
+    depositor: &Pubkey,
+    g: &PoolGenesis,
+    user_fusol_account: &Pubkey,
+    lamports: u64,
+) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::DepositSol {
+            depositor: *depositor,
+            config: g.config,
+            stake_pool: g.stake_pool,
+            pool_withdraw_authority: g.pool_withdraw_authority,
+            reserve_stake: g.reserve_stake,
+            fusol_mint: g.fusol_mint,
+            user_fusol_account: *user_fusol_account,
+            maintenance_vault: g.maintenance_vault,
+            deposit_authority: g.deposit_authority,
+            stake_pool_program: STAKE_POOL_FORK_ID,
+            token_program: SPL_TOKEN_ID,
+            system_program: system_program::ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::DepositSol { lamports }.data(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn ctrl_deposit_stake_ix(
+    depositor: &Pubkey,
+    g: &PoolGenesis,
+    user_stake_account: &Pubkey,
+    vote: &Pubkey,
+    validator_stake_account: &Pubkey,
+    user_fusol_account: &Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::DepositStake {
+            depositor: *depositor,
+            config: g.config,
+            stake_pool: g.stake_pool,
+            validator_list: g.validator_list,
+            deposit_authority: g.deposit_authority,
+            pool_withdraw_authority: g.pool_withdraw_authority,
+            user_stake_account: *user_stake_account,
+            vote_account: *vote,
+            validator_record: validator_record_pda(vote),
+            validator_stake_account: *validator_stake_account,
+            reserve_stake: g.reserve_stake,
+            fusol_mint: g.fusol_mint,
+            user_fusol_account: *user_fusol_account,
+            maintenance_vault: g.maintenance_vault,
+            clock: solana_sdk::sysvar::clock::ID,
+            stake_history: solana_sdk::sysvar::stake_history::ID,
+            stake_program: STAKE_PROGRAM_ID,
+            stake_pool_program: STAKE_POOL_FORK_ID,
+            token_program: SPL_TOKEN_ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::DepositStake {}.data(),
+    }
+}
+
+pub fn ctrl_set_preference_ix(owner: &Pubkey, position: &Pubkey, vote: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::SetPreference {
+            owner: *owner,
+            config: controller_config_pda(),
+            fusion_position: *position,
+            vote_account: *vote,
+            validator_record: validator_record_pda(vote),
+            preference: preference_pda(position),
+            system_program: system_program::ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::SetPreference {}.data(),
+    }
+}
+
+/// Permissionless — any tx payer may carry it; there is no signer in the account set.
+pub fn ctrl_sync_preference_ix(position: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::SyncPreference {
+            config: controller_config_pda(),
+            fusion_position: *position,
+            preference: preference_pda(position),
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::SyncPreference {}.data(),
+    }
+}
+
+/// `vote` must be the preference's RECORDED vote account (the record PDA is seeded by it).
+pub fn ctrl_snapshot_preference_ix(position: &Pubkey, vote: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::SnapshotPreference {
+            config: controller_config_pda(),
+            epoch_state: controller_epoch_state_pda(),
+            fusion_position: *position,
+            preference: preference_pda(position),
+            validator_record: validator_record_pda(vote),
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::SnapshotPreference {}.data(),
+    }
+}
+
+pub fn ctrl_close_preference_ix(
+    closer: &Pubkey,
+    position: &Pubkey,
+    rent_recipient: &Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::ClosePreference {
+            closer: *closer,
+            config: controller_config_pda(),
+            fusion_position: *position,
+            preference: preference_pda(position),
+            rent_recipient: *rent_recipient,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::ClosePreference {}.data(),
+    }
+}
+
+pub fn ctrl_start_epoch_ix() -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::StartEpoch {
+            config: controller_config_pda(),
+            epoch_state: controller_epoch_state_pda(),
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::StartEpoch {}.data(),
+    }
+}
+
+/// `tail`: 4N remaining accounts — `(validator_stake [w], transient_stake [w],
+/// validator_record [w], vote_account [])` quads for consecutive list indices starting at
+/// `reconcile_cursor` (empty only to complete an already-covered/empty phase).
+pub fn ctrl_reconcile_batch_ix(
+    g: &PoolGenesis,
+    crank_reward_account: &Pubkey,
+    tail: &[AccountMeta],
+) -> Instruction {
+    let mut accounts = fusion_stake_controller::accounts::ReconcileBatch {
+        config: g.config,
+        epoch_state: g.epoch_state,
+        stake_pool: g.stake_pool,
+        pool_withdraw_authority: g.pool_withdraw_authority,
+        validator_list: g.validator_list,
+        reserve_stake: g.reserve_stake,
+        clock: solana_sdk::sysvar::clock::ID,
+        stake_history: solana_sdk::sysvar::stake_history::ID,
+        stake_program: STAKE_PROGRAM_ID,
+        stake_pool_program: STAKE_POOL_FORK_ID,
+        maintenance_vault: g.maintenance_vault,
+        maintenance_authority: g.maintenance_authority,
+        crank_reward_account: *crank_reward_account,
+        token_program: SPL_TOKEN_ID,
+        event_authority: controller_event_authority_pda(),
+        program: fusion_stake_controller::ID,
+    }
+    .to_account_metas(None);
+    accounts.extend_from_slice(tail);
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts,
+        data: fusion_stake_controller::instruction::ReconcileBatch {}.data(),
+    }
+}
+
+pub fn ctrl_finalize_pool_ix(g: &PoolGenesis, crank_reward_account: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::FinalizePool {
+            config: g.config,
+            epoch_state: g.epoch_state,
+            stake_pool: g.stake_pool,
+            pool_withdraw_authority: g.pool_withdraw_authority,
+            validator_list: g.validator_list,
+            reserve_stake: g.reserve_stake,
+            fusol_mint: g.fusol_mint,
+            maintenance_vault: g.maintenance_vault,
+            maintenance_authority: g.maintenance_authority,
+            crank_reward_account: *crank_reward_account,
+            stake_pool_program: STAKE_POOL_FORK_ID,
+            token_program: SPL_TOKEN_ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::FinalizePool {}.data(),
+    }
+}
+
+pub fn ctrl_close_preference_window_ix() -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::ClosePreferenceWindow {
+            config: controller_config_pda(),
+            epoch_state: controller_epoch_state_pda(),
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::ClosePreferenceWindow {}.data(),
+    }
+}
+
+/// `tail`: 2N remaining accounts — `(validator_record [w], vote_account [])` pairs: list-slice
+/// pairs from `plan_directed_cursor` first, then admission extras (UNSET-index records).
+pub fn ctrl_plan_directed_batch_ix(
+    g: &PoolGenesis,
+    crank_reward_account: &Pubkey,
+    tail: &[AccountMeta],
+) -> Instruction {
+    let mut accounts = fusion_stake_controller::accounts::PlanDirectedBatch {
+        config: g.config,
+        epoch_state: g.epoch_state,
+        validator_list: g.validator_list,
+        maintenance_vault: g.maintenance_vault,
+        maintenance_authority: g.maintenance_authority,
+        crank_reward_account: *crank_reward_account,
+        token_program: SPL_TOKEN_ID,
+        event_authority: controller_event_authority_pda(),
+        program: fusion_stake_controller::ID,
+    }
+    .to_account_metas(None);
+    accounts.extend_from_slice(tail);
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts,
+        data: fusion_stake_controller::instruction::PlanDirectedBatch {}.data(),
+    }
+}
+
+/// `tail`: N writable `ValidatorRecord`s for consecutive planned list ordinals starting at
+/// `neutral_cursor`.
+pub fn ctrl_plan_neutral_batch_ix(
+    g: &PoolGenesis,
+    crank_reward_account: &Pubkey,
+    tail: &[AccountMeta],
+) -> Instruction {
+    let mut accounts = fusion_stake_controller::accounts::PlanNeutralBatch {
+        config: g.config,
+        epoch_state: g.epoch_state,
+        maintenance_vault: g.maintenance_vault,
+        maintenance_authority: g.maintenance_authority,
+        crank_reward_account: *crank_reward_account,
+        token_program: SPL_TOKEN_ID,
+        event_authority: controller_event_authority_pda(),
+        program: fusion_stake_controller::ID,
+    }
+    .to_account_metas(None);
+    accounts.extend_from_slice(tail);
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts,
+        data: fusion_stake_controller::instruction::PlanNeutralBatch {}.data(),
+    }
+}
+
+pub fn ctrl_finalize_plan_ix(g: &PoolGenesis, crank_reward_account: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::FinalizePlan {
+            config: g.config,
+            epoch_state: g.epoch_state,
+            stake_pool: g.stake_pool,
+            pool_authority: g.pool_authority,
+            validator_list: g.validator_list,
+            stake_pool_program: STAKE_POOL_FORK_ID,
+            maintenance_vault: g.maintenance_vault,
+            maintenance_authority: g.maintenance_authority,
+            crank_reward_account: *crank_reward_account,
+            token_program: SPL_TOKEN_ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::FinalizePlan {}.data(),
+    }
+}
+
+/// `vote` must be the deterministic selection for the current rebalance slot (or a pending
+/// admission add); the stake/transient accounts are the upstream-derived pair for it.
+pub fn ctrl_execute_next_action_ix(
+    g: &PoolGenesis,
+    vote: &Pubkey,
+    validator_stake_account: &Pubkey,
+    transient_stake_account: &Pubkey,
+    crank_reward_account: &Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::ExecuteNextAction {
+            config: g.config,
+            epoch_state: g.epoch_state,
+            stake_pool: g.stake_pool,
+            pool_authority: g.pool_authority,
+            pool_withdraw_authority: g.pool_withdraw_authority,
+            validator_list: g.validator_list,
+            reserve_stake: g.reserve_stake,
+            vote_account: *vote,
+            validator_record: validator_record_pda(vote),
+            validator_stake_account: *validator_stake_account,
+            transient_stake_account: *transient_stake_account,
+            clock: solana_sdk::sysvar::clock::ID,
+            rent: rent::ID,
+            stake_history: solana_sdk::sysvar::stake_history::ID,
+            stake_config: STAKE_CONFIG_ID,
+            stake_program: STAKE_PROGRAM_ID,
+            stake_pool_program: STAKE_POOL_FORK_ID,
+            maintenance_vault: g.maintenance_vault,
+            maintenance_authority: g.maintenance_authority,
+            crank_reward_account: *crank_reward_account,
+            token_program: SPL_TOKEN_ID,
+            system_program: system_program::ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::ExecuteNextAction {}.data(),
+    }
+}
+
+pub fn ctrl_finish_epoch_ix(g: &PoolGenesis, crank_reward_account: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: fusion_stake_controller::ID,
+        accounts: fusion_stake_controller::accounts::FinishEpoch {
+            config: g.config,
+            epoch_state: g.epoch_state,
+            maintenance_vault: g.maintenance_vault,
+            maintenance_authority: g.maintenance_authority,
+            crank_reward_account: *crank_reward_account,
+            token_program: SPL_TOKEN_ID,
+            event_authority: controller_event_authority_pda(),
+            program: fusion_stake_controller::ID,
+        }
+        .to_account_metas(None),
+        data: fusion_stake_controller::instruction::FinishEpoch {}.data(),
+    }
+}
+
+// ============================ controller: pool genesis fixture ============================
+
+/// Pre-created `StakePool` account size. The REAL processor `try_from_slice_unchecked`-reads the
+/// zeroed account (`AccountType::Uninitialized`) and later `borsh::to_writer`s the initialized
+/// struct back (≤ ~470 bytes with this authority set — every `FutureEpoch`/`Option` small);
+/// A generous upper bound: the max borsh size of the vendored `StakePool` (every `Option` Some)
+/// field-sums to 611, and the processor imposes no exact size — only rent-exemption and room to
+/// serialize (`scripts/bootstrap-fusol.ts` allocates the exact 611). 656 kept here, generous on
+/// both sides.
+pub const STAKE_POOL_ACCOUNT_SIZE: usize = 656;
+/// Pre-created `ValidatorList` size: 5-byte header + 4-byte vec length + 73 bytes per entry.
+/// `Initialize` requires `calculate_max_validators(len) == MAX_VALIDATORS` EXACTLY.
+pub const VALIDATOR_LIST_ACCOUNT_SIZE: usize = 5 + 4 + (MAX_VALIDATORS as usize) * 73;
+/// Lamports the genesis reserve stake holds ABOVE its rent floor. The REAL `Initialize` counts
+/// everything above rent as pre-existing pool value: it mints exactly this many pool tokens to
+/// the manager fee account (the maintenance vault), so the pool starts at `total_lamports ==
+/// pool_token_supply == RESERVE_BOOTSTRAP_LAMPORTS` (rate 1) with a funded crank-reward vault.
+pub const RESERVE_BOOTSTRAP_LAMPORTS: u64 = 1_000_000_000; // 1 SOL
+
+/// Every address of a genesis'd fuSOL pool stack (controller PDAs + stake-pool-side accounts).
+#[derive(Clone, Debug)]
+pub struct PoolGenesis {
+    /// `[b"controller"]` — the `ControllerConfig` PDA.
+    pub config: Pubkey,
+    /// `[b"epoch_state"]` — the `EpochState` PDA.
+    pub epoch_state: Pubkey,
+    /// `[b"pool_authority"]` — the pool's manager + staker.
+    pub pool_authority: Pubkey,
+    /// `[b"deposit_authority"]` — the pool's SOL + stake deposit authority.
+    pub deposit_authority: Pubkey,
+    /// `[b"maintenance"]` — the maintenance vault's token authority.
+    pub maintenance_authority: Pubkey,
+    /// The initialized `StakePool` account (fork-owned).
+    pub stake_pool: Pubkey,
+    /// The initialized `ValidatorList` account (fork-owned, exactly `MAX_VALIDATORS` capacity).
+    pub validator_list: Pubkey,
+    /// The pool reserve stake account (REAL stake program, Initialized, withdraw-PDA authorities).
+    pub reserve_stake: Pubkey,
+    /// The fuSOL mint (9 dec, mint authority = the pool withdraw-authority PDA, freeze None).
+    pub fusol_mint: Pubkey,
+    /// The maintenance vault (fuSOL token account, authority = the maintenance PDA; ALSO the
+    /// pool's manager fee account).
+    pub maintenance_vault: Pubkey,
+    /// `[stake_pool, b"withdraw"]` under the FORK program id.
+    pub pool_withdraw_authority: Pubkey,
+}
+
+/// Build the WHOLE fuSOL pool stack for real against the loaded programs ([`new_svm_full`]):
+///
+/// 1. repoint the controller's upgrade authority to `payer` (the `initialize_controller` gate);
+/// 2. create the fuSOL mint (9 dec, mint authority = the pool withdraw-authority PDA, freeze
+///    None) and the maintenance vault (fuSOL account owned by the maintenance PDA);
+/// 3. pre-create the zeroed, rent-exempt, fork-owned `StakePool` + `ValidatorList` accounts;
+/// 4. create + initialize the reserve stake via the REAL stake program (staker + withdrawer =
+///    the withdraw-authority PDA, no lockup), funded [`RESERVE_BOOTSTRAP_LAMPORTS`] above rent;
+/// 5. `initialize_controller` (records the address set) then `initialize_pool` (the one-time
+///    stake-pool `Initialize` CPI + seal), asserting the resulting on-chain authority graph.
+///
+/// `payer` funds everything (needs ≈ 3 SOL rent — the 74 KiB validator list dominates — plus
+/// the reserve bootstrap); airdrop before calling.
+pub fn pool_genesis(svm: &mut LiteSVM, payer: &Keypair) -> PoolGenesis {
+    // (0) The genesis payer must hold the controller's upgrade authority (front-run gate),
+    // mirroring the fusd-core `set_program_upgrade_authority` → `init_protocol` flow.
+    set_upgrade_authority_at(svm, &fusion_stake_controller::ID, &payer.pubkey());
+
+    let stake_pool_kp = Keypair::new();
+    let validator_list_kp = Keypair::new();
+    let reserve_kp = Keypair::new();
+    let mint_kp = Keypair::new();
+    let vault_kp = Keypair::new();
+
+    let g = PoolGenesis {
+        config: controller_config_pda(),
+        epoch_state: controller_epoch_state_pda(),
+        pool_authority: pool_authority_pda(),
+        deposit_authority: deposit_authority_pda(),
+        maintenance_authority: maintenance_authority_pda(),
+        stake_pool: stake_pool_kp.pubkey(),
+        validator_list: validator_list_kp.pubkey(),
+        reserve_stake: reserve_kp.pubkey(),
+        fusol_mint: mint_kp.pubkey(),
+        maintenance_vault: vault_kp.pubkey(),
+        pool_withdraw_authority: pool_withdraw_authority_pda(&stake_pool_kp.pubkey()),
+    };
+
+    // (a) fuSOL mint — spec §12.2: legacy SPL, 9 decimals, freeze None, mint authority = the
+    // pool withdraw-authority PDA (only the stake-pool program can ever mint).
+    create_mint(svm, payer, &mint_kp, 9, &g.pool_withdraw_authority, false);
+
+    // (b) maintenance vault — plain SPL token account whose authority is the maintenance PDA
+    // (a PDA can't sign an ATA-idempotent path here; a keyed account via initialize_account3
+    // needs no owner signature at all).
+    let vault_rent = Rent::default().minimum_balance(spl_token::state::Account::LEN);
+    let create_vault = system_instruction::create_account(
+        &payer.pubkey(),
+        &g.maintenance_vault,
+        vault_rent,
+        spl_token::state::Account::LEN as u64,
+        &SPL_TOKEN_ID,
+    );
+    let init_vault = spl_token::instruction::initialize_account3(
+        &SPL_TOKEN_ID,
+        &g.maintenance_vault,
+        &g.fusol_mint,
+        &g.maintenance_authority,
+    )
+    .unwrap();
+    send(svm, &[create_vault, init_vault], payer, &[&vault_kp])
+        .expect("create maintenance vault");
+
+    // (c) pre-created, zeroed, rent-exempt, FORK-owned StakePool + ValidatorList accounts (the
+    // real Initialize validates the list size yields exactly MAX_VALIDATORS).
+    let create_pool = system_instruction::create_account(
+        &payer.pubkey(),
+        &g.stake_pool,
+        Rent::default().minimum_balance(STAKE_POOL_ACCOUNT_SIZE),
+        STAKE_POOL_ACCOUNT_SIZE as u64,
+        &STAKE_POOL_FORK_ID,
+    );
+    let create_list = system_instruction::create_account(
+        &payer.pubkey(),
+        &g.validator_list,
+        Rent::default().minimum_balance(VALIDATOR_LIST_ACCOUNT_SIZE),
+        VALIDATOR_LIST_ACCOUNT_SIZE as u64,
+        &STAKE_POOL_FORK_ID,
+    );
+    send(svm, &[create_pool, create_list], payer, &[&stake_pool_kp, &validator_list_kp])
+        .expect("create StakePool + ValidatorList accounts");
+
+    // (d) reserve stake via the REAL stake program: create (space 200, owner = stake program,
+    // funded above rent) + initialize with staker+withdrawer = the withdraw PDA, no lockup.
+    let stake_rent = Rent::default().minimum_balance(STAKE_ACCOUNT_SPACE);
+    let create_reserve = system_instruction::create_account(
+        &payer.pubkey(),
+        &g.reserve_stake,
+        stake_rent + RESERVE_BOOTSTRAP_LAMPORTS,
+        STAKE_ACCOUNT_SPACE as u64,
+        &STAKE_PROGRAM_ID,
+    );
+    let init_reserve = solana_sdk::stake::instruction::initialize(
+        &g.reserve_stake,
+        &solana_sdk::stake::state::Authorized {
+            staker: g.pool_withdraw_authority,
+            withdrawer: g.pool_withdraw_authority,
+        },
+        &solana_sdk::stake::state::Lockup::default(),
+    );
+    send(svm, &[create_reserve, init_reserve], payer, &[&reserve_kp])
+        .expect("create + initialize reserve stake (real stake program)");
+
+    // (e) genesis: record the address set, then the one-time stake-pool Initialize CPI + seal.
+    send(svm, &[ctrl_initialize_controller_ix(&payer.pubkey(), &g)], payer, &[])
+        .expect("initialize_controller");
+    send(svm, &[ctrl_initialize_pool_ix(&payer.pubkey(), &g)], payer, &[])
+        .expect("initialize_pool (real stake-pool Initialize CPI)");
+
+    // Assert the authority graph the REAL processor just wrote (spec §4.1 / §17.2 row 1).
+    let pool = read_fork_stake_pool(svm, &g.stake_pool);
+    assert_eq!(pool.manager, g.pool_authority.to_bytes(), "manager = pool-authority PDA");
+    assert_eq!(pool.staker, g.pool_authority.to_bytes(), "staker = pool-authority PDA");
+    assert_eq!(
+        pool.stake_deposit_authority,
+        g.deposit_authority.to_bytes(),
+        "stake deposit authority = deposit-authority PDA"
+    );
+    assert_eq!(
+        pool.manager_fee_account,
+        g.maintenance_vault.to_bytes(),
+        "manager fee account = maintenance vault"
+    );
+    assert_eq!(pool.pool_mint, g.fusol_mint.to_bytes(), "pool mint = fuSOL mint");
+    assert_eq!(pool.validator_list, g.validator_list.to_bytes());
+    assert_eq!(pool.reserve_stake, g.reserve_stake.to_bytes());
+    let config = read_controller_config(svm);
+    assert!(config.sealed, "initialize_pool must seal the controller");
+    assert_eq!(config.pool_withdraw_authority, g.pool_withdraw_authority);
+
+    g
+}
+
+/// Create a REAL vote account via the native vote program builtin: system create (space = the
+/// CURRENT `VoteState` size — litesvm runs `FeatureSet::all_enabled()`, so the vote-latency
+/// layout is required) + `InitializeAccount` with `node` as identity/voter/withdrawer. Funds the
+/// node with 10 SOL first (it pays and signs). Returns the vote account pubkey; the account
+/// parses under `fusion_stake_view::vote_state` (tag 2 / V3) and passes `register_validator`.
+pub fn create_vote_account(
+    svm: &mut LiteSVM,
+    node: &Keypair,
+    vote: &Keypair,
+    commission: u8,
+) -> Pubkey {
+    use solana_sdk::vote::instruction::{self as vote_instruction, CreateVoteAccountConfig};
+    use solana_sdk::vote::state::{VoteInit, VoteStateVersions};
+
+    airdrop_sol(svm, &node.pubkey(), 10);
+    let space = VoteStateVersions::vote_state_size_of(true) as u64;
+    let lamports = Rent::default().minimum_balance(space as usize);
+    let ixs = vote_instruction::create_account_with_config(
+        &node.pubkey(),
+        &vote.pubkey(),
+        &VoteInit {
+            node_pubkey: node.pubkey(),
+            authorized_voter: node.pubkey(),
+            authorized_withdrawer: node.pubkey(),
+            commission,
+        },
+        lamports,
+        CreateVoteAccountConfig { space, with_seed: None },
+    );
+    send(svm, &ixs, node, &[vote]).expect("create vote account (real vote program)");
+    vote.pubkey()
 }

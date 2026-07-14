@@ -1840,6 +1840,8 @@ dependencies = [
  "bytemuck",
  "fusd-core",
  "fusd-math",
+ "fusion-stake-controller",
+ "fusion-stake-view",
  "litesvm",
  "pyth-solana-receiver-sdk",
  "solana-client",
