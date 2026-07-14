@@ -121,7 +121,7 @@ pub fn handler(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         amount,
     )?;
 
-    ctx.accounts.position.ink = new_ink;
+    ctx.accounts.position.set_ink(new_ink);
     ctx.accounts.market.total_collateral = ctx
         .accounts
         .market

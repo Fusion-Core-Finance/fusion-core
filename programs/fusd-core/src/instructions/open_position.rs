@@ -65,7 +65,12 @@ pub fn handler(ctx: Context<OpenPosition>, args: OpenPositionArgs) -> Result<()>
         // Rate-change cooldown clock starts at open (BOLD `lastInterestRateAdjTime`), so a rate
         // adjustment within the market's cooldown of opening is also charged the upfront fee.
         p.last_rate_adjust_ts = now;
-        p._reserved = [0u8; 32];
+        // Collateral-change nonce starts at 0 ("never changed"); bumped by `set_ink` on every
+        // real `ink` change. NOTE a close+reopen at the same PDA restarts it at 0 — safe for the
+        // stake controller because per-epoch double-count is blocked by `last_counted_epoch`,
+        // not by nonce uniqueness (fuSOL stake-pool design).
+        p.ink_nonce = 0;
+        p._reserved = [0u8; 24];
     }
 
     // Post the SOL liquidation bond on top of rent (paid to the liquidator on liq, refunded on

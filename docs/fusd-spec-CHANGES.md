@@ -6,6 +6,27 @@ breaking change to an action's guards/formula or an account's layout; `MINOR` ad
 account, or invariant; `PATCH` corrects a citation, formula, or wording without changing what the
 code does. Every entry notes the `master` commit the spec was pinned to.
 
+## v1.2.0
+
+Pins the 2026-07-14 fuSOL groundwork change (the implementing `master` commit): the
+`Position.ink_nonce` collateral-change nonce.
+
+- **New `Position` field** `ink_nonce: u64`, carved from the HEAD of `_reserved` (32 → 24; total
+  SPACE unchanged): a monotonic nonce that bumps whenever `ink` CHANGES for any reason — deposit,
+  withdrawal, redemption drain, liquidation seize, and the lazy tier-2 redistribution fold on any
+  touch (including debt-only borrow/repay/adjust_rate). A no-op re-write of the same value (e.g.
+  re-zeroing an already-drained zombie) does not bump.
+- **New sole mutator** `Position::set_ink` — every `ink` write routes through it (open_position's
+  fresh-account field init excepted), so the nonce can never silently miss a collateral change.
+- **Purely informational**: no fusd-core solvency, debt, oracle, or liquidation path reads the
+  field. It exists for the stake-pool Allocation Controller (fuSOL native stake pool, in
+  development), which reads it to invalidate validator-direction preferences when position
+  collateral moves, preventing fungible-share direction reuse. Zeroed bytes on pre-carve accounts
+  decode as `0` ("never changed"), the correct grandfather sentinel.
+
+Versioning: **MINOR** — adds an account field carved from documented reserved padding; every
+existing account and action behaves identically.
+
 ## v1.1.0
 
 Pins the 2026-07-11 audit-L-02 change (the implementing `master` commit): the liquidation-infra

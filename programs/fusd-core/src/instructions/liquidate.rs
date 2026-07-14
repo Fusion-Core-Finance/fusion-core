@@ -488,8 +488,10 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
     }
 
     // Close out the victim (bond consumed; the owner can `close_position` to reclaim rent).
+    // `set_ink` bumps `ink_nonce` only when ink was > 0 (a zombie victim already at 0 is not a
+    // collateral change).
     ctx.accounts.position.recorded_debt = 0;
-    ctx.accounts.position.ink = 0;
+    ctx.accounts.position.set_ink(0);
     ctx.accounts.position.stake = 0;
     ctx.accounts.position.reserve_lamports = 0;
     ctx.accounts.position.redist_l_coll_snapshot = ctx.accounts.market.l_coll;

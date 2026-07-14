@@ -213,7 +213,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Redeem<'info>>, amount:
         )
         .ok_or(FusdError::MathOverflow)?;
         pos.recorded_debt -= redeem_amt;
-        pos.ink -= coll_total as u64;
+        let new_ink = pos.ink - coll_total as u64;
+        pos.set_ink(new_ink);
         ctx.accounts.market.agg_recorded_debt = d.new_agg;
         ctx.accounts.market.total_collateral = ctx
             .accounts

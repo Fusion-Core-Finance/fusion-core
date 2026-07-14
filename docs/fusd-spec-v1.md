@@ -179,7 +179,7 @@ The four surplus/collateral fields above satisfy the market's proof-of-reserves 
 - **Account-local invariants:** `amount >= total_collateral + surplus_collateral + total_coll_surplus + protocol_collateral` — the 4-term sufficiency (`reconcile.rs:64`; `==` in tests, `reconcile.rs:4-5`); only the Market PDA (its `authority`) can move funds out, via `invoke_signed`.
 
 ### `Position` — PDA `[b"position", collateral_mint, owner]` (`POSITION_SEED`, `constants.rs:12`)
-- **Kind:** Borsh `#[account]` (`programs/fusd-core/src/state/position.rs:7`). SPACE pinned at `position.rs:69` (reserve widened 6→32 pre-launch).
+- **Kind:** Borsh `#[account]` (`programs/fusd-core/src/state/position.rs:7`). SPACE pinned at `position.rs:78` (reserve widened 6→32 pre-launch, carved to 24 by `ink_nonce`).
 - **Fields:**
   - `owner: Pubkey` — CDP owner; only the owner's txs write it (parallel under Sealevel) (`position.rs:10`).
   - `collateral_mint: Pubkey` — the market's collateral asset (`position.rs:11`).
@@ -195,8 +195,9 @@ The four surplus/collateral fields above satisfy the market's proof-of-reserves 
   - `bucket: u16` — redemption rate-bucket; valid iff `recorded_debt > 0`; stored explicitly (not re-derived) (`position.rs:45`).
   - `coll_surplus: u64` — collateral returned by the bonus collar; held in vault, NOT in `ink`, NOT staked; withdrawn via `claim_coll_surplus` (`position.rs:54`).
   - `last_rate_adjust_ts: i64` — ts of last rate change (set at open, updated on `adjust_rate`); drives the premature-rate-change cooldown/fee (`position.rs:59`).
-  - `_reserved: [u8; 32]` — forward-compat reserve (widened 6→32 pre-launch; carve from the HEAD; zeroed bytes decode as `0 = disabled/none`) (`position.rs:65`).
-- **Init:** `open_position` — `#[account(init, payer = owner, space = Position::SPACE, seeds = [POSITION_SEED, collateral_mint.key().as_ref(), owner.key().as_ref()])]` at `programs/fusd-core/src/instructions/open_position.rs:26-33`; fields written at `open_position.rs:45-68` (opens with `ink = 0`, `recorded_debt = 0`, `stake = 0`, snapshots = market's current `l_coll`/`l_art`, `reserve_lamports` fixed at the market's current value, `bucket = 0`).
+  - `ink_nonce: u64` — monotonic collateral-change nonce: bumps whenever `ink` CHANGES for any reason (deposit, withdrawal, redemption drain, liquidation seize, realized redistribution fold) via the sole sanctioned mutator `Position::set_ink` (`position.rs:96`); a re-write of the same value (e.g. re-zeroing a drained zombie in `liquidate`) does not bump. Purely informational to fusd-core — no solvency/debt path reads it; consumed read-only by the stake-pool Allocation Controller's preference sync to prevent fungible-share validator-direction reuse. A close+reopen at the same PDA restarts it at 0 (safe: per-epoch double-count is blocked controller-side by `last_counted_epoch`, not by nonce uniqueness). **Carved from `_reserved`** (`position.rs:68`).
+  - `_reserved: [u8; 24]` — forward-compat reserve (widened 6→32 pre-launch, then carved to 24 by `ink_nonce`; carve from the HEAD; zeroed bytes decode as `0 = disabled/none`) (`position.rs:74`).
+- **Init:** `open_position` — `#[account(init, payer = owner, space = Position::SPACE, seeds = [POSITION_SEED, collateral_mint.key().as_ref(), owner.key().as_ref()])]` at `programs/fusd-core/src/instructions/open_position.rs:26-33`; fields written at `open_position.rs:45-73` (opens with `ink = 0`, `recorded_debt = 0`, `stake = 0`, snapshots = market's current `l_coll`/`l_art`, `reserve_lamports` fixed at the market's current value, `bucket = 0`, `ink_nonce = 0`).
 - **Account-local invariants:**
   - `user_rate_bps ∈ [MIN_USER_RATE_BPS, MAX_USER_RATE_BPS]` (50–2550) — `require!(args.user_rate_bps >= MIN_USER_RATE_BPS && args.user_rate_bps <= MAX_USER_RATE_BPS, FusdError::InterestRateOutOfBounds)` (`open_position.rs:39-42`); interest accrual never changes it, so redemption ordering is stable (`position.rs:18-20`).
   - `bucket` is a valid index only while `recorded_debt > 0` (else 0 at open / `ZOMBIE_BUCKET` sentinel when parked) (`position.rs:41-45`).

@@ -58,11 +58,20 @@ pub struct Position {
     /// an `adjust_rate` within `Market.rate_adjust_cooldown_secs` of this time is charged an upfront fee.
     pub last_rate_adjust_ts: i64,
 
-    /// Forward-compat reserve. WIDENED 6 → 32 bytes pre-launch: keeps the
-    /// carve-from-`_reserved` additive-upgrade path alive through the upgradeable Phases 1–3
-    /// (post-launch a Borsh account cannot grow without realloc). Carve from the HEAD; zeroed
-    /// bytes on old accounts must decode as the new field's `0 = disabled/none` sentinel.
-    pub _reserved: [u8; 32],
+    /// Monotonic collateral-change nonce: increments whenever `ink` CHANGES for any reason
+    /// (deposit, withdrawal, redemption, liquidation, realized redistribution fold). Carved from
+    /// the HEAD of `_reserved` (zeroed bytes on pre-carve accounts decode as 0 = "never changed",
+    /// the correct sentinel). Purely informational to fusd-core — no solvency/debt path reads it.
+    /// Consumed read-only by the fuSOL stake-pool Allocation Controller's Preference sync to
+    /// prevent fungible-share validator-direction reuse. Every `ink` mutation MUST go through
+    /// [`Position::set_ink`] so the nonce can never silently miss a collateral change.
+    pub ink_nonce: u64,
+
+    /// Forward-compat reserve. WIDENED 6 → 32 bytes pre-launch; 32 → 24 on the `ink_nonce` carve.
+    /// Keeps the carve-from-`_reserved` additive-upgrade path alive through the upgradeable
+    /// Phases 1–3 (post-launch a Borsh account cannot grow without realloc). Carve from the HEAD;
+    /// zeroed bytes on old accounts must decode as the new field's `0 = disabled/none` sentinel.
+    pub _reserved: [u8; 24],
 }
 
 impl Position {
@@ -76,5 +85,44 @@ impl Position {
         + 2                     // bucket
         + 8                     // coll_surplus
         + 8                     // last_rate_adjust_ts
-        + 32; // reserved (widened pre-launch)
+        + 8                     // ink_nonce (carved from _reserved)
+        + 24; // reserved (widened pre-launch, minus the ink_nonce carve)
+
+    /// The ONLY sanctioned way to change `ink`: writes the new value and bumps `ink_nonce` iff
+    /// the value actually changed (a no-op write — e.g. re-zeroing an already-drained zombie in
+    /// `liquidate` — is not a collateral change and must not bump). `wrapping_add` because 2^64
+    /// increments are physically unreachable, and even a hypothetically stuck nonce only fails
+    /// toward "stale preference stays synced" in the direction layer — never funds or solvency.
+    pub fn set_ink(&mut self, new_ink: u64) {
+        if new_ink != self.ink {
+            self.ink = new_ink;
+            self.ink_nonce = self.ink_nonce.wrapping_add(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `set_ink` bumps the nonce exactly on value CHANGES — a no-op write (re-zeroing an
+    /// already-drained zombie in `liquidate`, or writing the current value back) is not a
+    /// collateral change and must not bump (the nonce tracks "whenever ink CHANGES").
+    #[test]
+    fn set_ink_bumps_only_on_change() {
+        // All-zero bit pattern is a valid Position (ints/Pubkeys/bool-free) — same technique as
+        // the state/mod.rs layout tests.
+        let mut p: Position = unsafe { std::mem::zeroed() };
+        assert_eq!((p.ink, p.ink_nonce), (0, 0));
+        p.set_ink(0); // no-op write on a fresh position
+        assert_eq!(p.ink_nonce, 0);
+        p.set_ink(5);
+        assert_eq!((p.ink, p.ink_nonce), (5, 1));
+        p.set_ink(5); // same value — not a collateral change
+        assert_eq!(p.ink_nonce, 1);
+        p.set_ink(0);
+        assert_eq!((p.ink, p.ink_nonce), (0, 2));
+        p.set_ink(0); // zombie re-zero
+        assert_eq!(p.ink_nonce, 2);
+    }
 }

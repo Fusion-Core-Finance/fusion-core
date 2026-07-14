@@ -74,7 +74,11 @@ pub fn realize(market: &Market, position: &mut Position, now: i64) -> Result<()>
     let (pending_coll, pending_debt) = redist::pending(market, position)?;
     if pending_coll > 0 {
         let add = u64::try_from(pending_coll).map_err(|_| FusdError::MathOverflow)?;
-        position.ink = position.ink.checked_add(add).ok_or(FusdError::MathOverflow)?;
+        let new_ink = position.ink.checked_add(add).ok_or(FusdError::MathOverflow)?;
+        // Realized redistribution IS a collateral change — the fold must bump `ink_nonce`
+        // (the fuSOL stake-pool design names it explicitly), so debt-only touches (borrow/repay/adjust_rate)
+        // that fold pending collateral still invalidate a stake-direction preference.
+        position.set_ink(new_ink);
     }
     position.recorded_debt = position
         .recorded_debt

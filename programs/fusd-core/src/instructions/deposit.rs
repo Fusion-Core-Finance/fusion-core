@@ -70,12 +70,13 @@ pub fn handler(ctx: Context<Deposit>, amount: u64) -> Result<()> {
     accrual::accrue(&mut ctx.accounts.market, now)?;
     accrual::realize(&ctx.accounts.market, &mut ctx.accounts.position, now)?;
 
-    ctx.accounts.position.ink = ctx
+    let new_ink = ctx
         .accounts
         .position
         .ink
         .checked_add(amount)
         .ok_or(FusdError::MathOverflow)?;
+    ctx.accounts.position.set_ink(new_ink);
     ctx.accounts.market.total_collateral = ctx
         .accounts
         .market
