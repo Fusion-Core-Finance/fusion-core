@@ -20,10 +20,10 @@ while IFS= read -r -d '' f; do
     printf '%s\n' "$hits" | sed "s|^|  $f:|" >&2
     fail=1
   fi
-done < <(find programs/fusd-core/src crates/fusd-math/src crates/fusd-oracle/src -name '*.rs' -print0)
+done < <(find programs/fusd-core/src crates/fusd-math/src crates/fusd-oracle/src crates/fusion-stake-math/src crates/fusion-stake-view/src -name '*.rs' -print0)
 
 if [ "$fail" -ne 0 ]; then
   echo "No floats in the SBF money path — use integer WAD/RAY fixed-point + bnum::U256." >&2
   exit 1
 fi
-echo "OK: production SBF path (fusd-core / fusd-math / fusd-oracle) is float-free."
+echo "OK: production SBF path (fusd-core / fusd-math / fusd-oracle / fusion-stake-*) is float-free."

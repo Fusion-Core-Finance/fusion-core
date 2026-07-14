@@ -1,0 +1,27 @@
+[package]
+name = "fusion-stake-view"
+description = "Read-only byte-offset views of the external accounts the fuSOL Allocation Controller reads (SPL stake pool + validator list, vote accounts, fusd-core Position)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "fusion_stake_view"
+
+# [dependencies] intentionally absent: pure no_std byte parsing over verified fixed offsets,
+# zero supply-chain surface — the same rationale as fusd-core's stake_pool.rs offset parser.
+
+[dev-dependencies]
+proptest = "1.6.0"
+# Round-trip layout PINS only (never runtime deps): serialize the REAL upstream types and assert
+# the fixed-offset parsers read every exposed field back. These tests break loudly if a pinned
+# layout ever moves.
+fusd-core = { path = "../../programs/fusd-core", default-features = false, features = ["no-entrypoint"] }
+anchor-lang = { workspace = true }
+# Real agave vote-state types for vote_state fixtures — co-resolves with the workspace's pinned
+# solana 2.3 line (Cargo.lock already holds solana-vote-interface 2.2.6). `bincode` feature gives
+# `VoteStateV3::serialize` (account-sized, zero-padded); the bincode crate gives exact-length bytes.
+solana-vote-interface = { version = "2.2.6", features = ["bincode"] }
+solana-pubkey = "2.2"
+bincode = "1.3"

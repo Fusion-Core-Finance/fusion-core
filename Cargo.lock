@@ -1865,6 +1865,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusion-stake-math"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "fusion-stake-view"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "bincode",
+ "fusd-core",
+ "proptest",
+ "solana-pubkey",
+ "solana-vote-interface",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"

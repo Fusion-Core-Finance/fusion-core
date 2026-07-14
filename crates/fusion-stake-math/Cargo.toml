@@ -1,0 +1,21 @@
+[package]
+name = "fusion-stake-math"
+description = "fuSOL Allocation Controller pure math: reserve split, validator lifecycle, directed/neutral targets, churn limits, preference counting, crank rewards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "fusion_stake_math"
+
+# Zero runtime dependencies by design: every function is a deterministic integer map,
+# host-testable and Kani-provable, consumed on-chain by fusion-stake-controller.
+
+# `cfg(kani)` is set only by the Kani verifier; declare it so normal builds don't warn (the
+# `#[cfg(kani)] mod kani_proofs` formal-verification harnesses are excluded from every other build).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[dev-dependencies]
+proptest = "1.6.0"
