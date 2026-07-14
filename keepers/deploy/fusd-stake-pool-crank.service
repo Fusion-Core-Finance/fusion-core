@@ -1,0 +1,39 @@
+[Unit]
+Description=fuSOL stake-pool crank (controller epoch machine: reconcile/finalize/plan/rebalance)
+After=network-online.target
+Wants=network-online.target
+# A stalled crank delays the epoch cycle: reconcile lagging past the pool-update grace window
+# freezes NEW fuSOL-collateral debt in Fusion until it catches up (existing positions,
+# withdrawals and liquidations are never gated). Never stop restarting it.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@RUNUSER@
+WorkingDirectory=@REPO@
+EnvironmentFile=/etc/fusd/keeper.env
+# bash -l so nvm-managed node resolves; exec so signals reach the process.
+ExecStart=/bin/bash -lc 'exec npx ts-node keepers/stake-pool-crank.ts'
+Restart=always
+RestartSec=5
+# Sandbox. ProtectHome=read-only (NOT tmpfs): nvm's node under ~/.nvm and the in-home repo
+# checkout must stay READABLE. InaccessiblePaths hides the gov/deployer default key
+# (~/.config/solana/id.json — loadWallet's fallback) from the keeper. Do NOT add
+# MemoryDenyWriteExecute (node's V8 JIT needs W^X) or a SystemCallFilter (breaks node net).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+InaccessiblePaths=-@HOME@/.config/solana
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -21,7 +21,7 @@ id "$RUNUSER" >/dev/null
 RUNHOME="$(getent passwd "$RUNUSER" | cut -d: -f6)"
 [ -n "$RUNHOME" ] || { echo "could not resolve home dir for user $RUNUSER"; exit 1; }
 
-UNITS="fusd-oracle-crank.service fusd-liquidator.service fusd-monitor.service fusd-alert-webhook.service fusd-alert-webhook.timer"
+UNITS="fusd-oracle-crank.service fusd-stake-pool-crank.service fusd-liquidator.service fusd-monitor.service fusd-alert-webhook.service fusd-alert-webhook.timer"
 for u in $UNITS; do
   sed -e "s|@REPO@|$REPO|g" -e "s|@RUNUSER@|$RUNUSER|g" -e "s|@HOME@|$RUNHOME|g" "$HERE/$u" > "/etc/systemd/system/$u"
 done

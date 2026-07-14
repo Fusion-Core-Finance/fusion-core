@@ -1,0 +1,4470 @@
+{
+  "address": "Fz3z1yh21PQ59smsPjmjeyK6ngh8KoK6PiPxUgCgspFq",
+  "metadata": {
+    "name": "fusion_stake_controller",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "fuSOL Native Stake Share Pool — the immutable Allocation Controller (see ../../docs/fusion-docs.md and docs/stake-pool)"
+  },
+  "instructions": [
+    {
+      "name": "close_preference",
+      "docs": [
+        "Owner (or anyone once the position is gone): close a preference and refund rent to the",
+        "preference owner."
+      ],
+      "discriminator": [
+        125,
+        211,
+        4,
+        198,
+        4,
+        252,
+        147,
+        157
+      ],
+      "accounts": [
+        {
+          "name": "closer",
+          "docs": [
+            "The position owner, or anyone when the underlying position no longer exists (or holds",
+            "zero ink)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fusion_position",
+          "docs": [
+            "the handler decides the authorization rule from its live state."
+          ]
+        },
+        {
+          "name": "preference",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  101,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "fusion_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "docs": [
+            "close can never redirect the refund."
+          ],
+          "writable": true
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_preference_window",
+      "docs": [
+        "Anyone, after the deadline: freeze direction totals and enter PLAN-DIRECTED."
+      ],
+      "discriminator": [
+        85,
+        31,
+        181,
+        110,
+        20,
+        4,
+        7,
+        125
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "deposit_sol",
+      "docs": [
+        "Permissionless: deposit SOL through the controller deposit authority; fuSOL mints",
+        "immediately at the pool rate. Backing is undirected until a preference is snapshotted."
+      ],
+      "discriminator": [
+        108,
+        81,
+        78,
+        117,
+        125,
+        155,
+        56,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "depositor",
+          "docs": [
+            "The lamports source (`[s,w]` in the CPI)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool",
+          "writable": true
+        },
+        {
+          "name": "pool_withdraw_authority"
+        },
+        {
+          "name": "reserve_stake",
+          "writable": true
+        },
+        {
+          "name": "fusol_mint",
+          "writable": true
+        },
+        {
+          "name": "user_fusol_account",
+          "docs": [
+            "Receives the minted fuSOL."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault — the pool's manager fee account; ALSO passed as the referrer",
+            "slot (referral fee is 0, upstream only requires a valid pool-token account there)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "deposit_authority",
+          "docs": [
+            "authority; the trailing signer account of `DepositSol`)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool_program",
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "lamports",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "deposit_stake",
+      "docs": [
+        "Stake owner: deposit a fully active stake account delegated to a pool validator (the",
+        "account's staker+withdrawer must already be authorized to the deposit-authority PDA)."
+      ],
+      "discriminator": [
+        160,
+        167,
+        9,
+        220,
+        74,
+        243,
+        228,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "depositor",
+          "docs": [
+            "The depositing user (event attribution + fee payer; the stake account's authorities",
+            "must already point at the deposit-authority PDA — see the module doc)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool",
+          "docs": [
+            "the cap denominator (total pool lamports)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "validator_list",
+          "writable": true
+        },
+        {
+          "name": "deposit_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_withdraw_authority"
+        },
+        {
+          "name": "user_stake_account",
+          "docs": [
+            "delegation to `vote_account`, authorities) is upstream's; only its lamports feed the",
+            "cap pre-check here."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vote_account",
+          "docs": [
+            "mismatch between this and the stake's actual voter via the validator stake account)."
+          ]
+        },
+        {
+          "name": "validator_record",
+          "docs": [
+            "The controller's record for that validator — must exist (register + admission first)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vote_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator_stake_account",
+          "writable": true
+        },
+        {
+          "name": "reserve_stake",
+          "writable": true
+        },
+        {
+          "name": "fusol_mint",
+          "writable": true
+        },
+        {
+          "name": "user_fusol_account",
+          "docs": [
+            "Receives the minted fuSOL."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (manager fee account; also the referrer slot, fee 0)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "clock",
+          "address": "SysvarC1ock11111111111111111111111111111111"
+        },
+        {
+          "name": "stake_history",
+          "docs": [
+            "deserialized, it is ~16 KiB)."
+          ],
+          "address": "SysvarStakeHistory1111111111111111111111111"
+        },
+        {
+          "name": "stake_program",
+          "address": "Stake11111111111111111111111111111111111111"
+        },
+        {
+          "name": "stake_pool_program",
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "execute_next_action",
+      "docs": [
+        "Anyone: execute the one deterministic valid rebalance action within churn limits."
+      ],
+      "discriminator": [
+        133,
+        222,
+        167,
+        168,
+        123,
+        239,
+        146,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool",
+          "writable": true
+        },
+        {
+          "name": "pool_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_withdraw_authority"
+        },
+        {
+          "name": "validator_list",
+          "writable": true
+        },
+        {
+          "name": "reserve_stake",
+          "writable": true
+        },
+        {
+          "name": "vote_account",
+          "docs": [
+            "selection, never a caller choice."
+          ]
+        },
+        {
+          "name": "validator_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vote_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator_stake_account",
+          "writable": true
+        },
+        {
+          "name": "transient_stake_account",
+          "docs": [
+            "deactivated by remove; unused rider for add)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "clock",
+          "address": "SysvarC1ock11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        },
+        {
+          "name": "stake_history",
+          "address": "SysvarStakeHistory1111111111111111111111111"
+        },
+        {
+          "name": "stake_config",
+          "address": "StakeConfig11111111111111111111111111111111"
+        },
+        {
+          "name": "stake_program",
+          "address": "Stake11111111111111111111111111111111111111"
+        },
+        {
+          "name": "stake_pool_program",
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (crank reward source)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "finalize_plan",
+      "docs": [
+        "Anyone: prove target conservation, record capacity shortfall, commit final targets."
+      ],
+      "discriminator": [
+        86,
+        174,
+        54,
+        41,
+        184,
+        180,
+        69,
+        114
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool",
+          "writable": true
+        },
+        {
+          "name": "pool_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator_list",
+          "docs": [
+            "list member)."
+          ]
+        },
+        {
+          "name": "stake_pool_program",
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (crank reward source)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "finalize_pool",
+      "docs": [
+        "Anyone: finalize canonical pool totals, snapshot NAV/supply, open the preference",
+        "window."
+      ],
+      "discriminator": [
+        74,
+        182,
+        193,
+        101,
+        92,
+        152,
+        202,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool",
+          "docs": [
+            "dangling preferred validator."
+          ],
+          "writable": true
+        },
+        {
+          "name": "pool_withdraw_authority"
+        },
+        {
+          "name": "validator_list",
+          "writable": true
+        },
+        {
+          "name": "reserve_stake"
+        },
+        {
+          "name": "fusol_mint",
+          "docs": [
+            "The pool mint (epoch fee is minted)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault — receives the epoch fee (as the manager fee account) AND funds",
+            "the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "stake_pool_program",
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "finish_epoch",
+      "docs": [
+        "Anyone: REBALANCE → IDLE once targets are exhausted or the churn budget is reached."
+      ],
+      "discriminator": [
+        75,
+        146,
+        171,
+        85,
+        101,
+        178,
+        201,
+        136
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (crank reward source)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize_controller",
+      "docs": [
+        "One-time genesis: create `ControllerConfig` + `EpochState` and record the predeclared",
+        "immutable address set. No authority is stored (the payer only funds rent)."
+      ],
+      "discriminator": [
+        137,
+        255,
+        100,
+        190,
+        201,
+        247,
+        241,
+        81
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "This program's `ProgramData` account (BPF upgradeable loader), derived as the canonical",
+            "programdata PDA so it cannot be spoofed. Gates genesis to the program's UPGRADE",
+            "authority — front-run protection only; nothing about the payer is recorded."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  222,
+                  161,
+                  24,
+                  149,
+                  119,
+                  40,
+                  139,
+                  175,
+                  167,
+                  101,
+                  140,
+                  125,
+                  2,
+                  247,
+                  150,
+                  114,
+                  183,
+                  103,
+                  133,
+                  128,
+                  2,
+                  41,
+                  231,
+                  10,
+                  189,
+                  21,
+                  250,
+                  211,
+                  205,
+                  48,
+                  154,
+                  88
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                2,
+                168,
+                246,
+                145,
+                78,
+                136,
+                161,
+                176,
+                226,
+                16,
+                21,
+                62,
+                247,
+                99,
+                174,
+                43,
+                0,
+                194,
+                185,
+                61,
+                22,
+                193,
+                36,
+                210,
+                192,
+                83,
+                122,
+                16,
+                4,
+                128,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_authority",
+          "docs": [
+            "so its canonical bump is derived and recorded; it holds no data and never will."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "deposit_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "InitializeControllerArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_pool",
+      "docs": [
+        "One-time: CPI the stake-pool `Initialize` with the controller PDAs and the fixed fee",
+        "set, then seal the controller (`sealed = true`, forever)."
+      ],
+      "discriminator": [
+        95,
+        180,
+        10,
+        172,
+        84,
+        174,
+        232,
+        40
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Transaction fee payer only; nothing is recorded about it."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool",
+          "docs": [
+            "recorded address and to the FORK program as owner; the CPI initializes it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "pool_authority",
+          "docs": [
+            "`Initialize` CPI via `invoke_signed`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "deposit_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_withdraw_authority",
+          "docs": [
+            "stake-pool program re-derives and enforces it in the CPI)."
+          ]
+        },
+        {
+          "name": "validator_list",
+          "docs": [
+            "size must yield exactly `MAX_VALIDATORS` (the CPI enforces this)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "reserve_stake",
+          "docs": [
+            "pool withdraw authority; the CPI validates its state)."
+          ]
+        },
+        {
+          "name": "fusol_mint",
+          "docs": [
+            "The fuSOL mint. `Account<Mint>` under `anchor_spl::token` enforces LEGACY SPL ownership",
+            "(never Token-2022); decimals / freeze / authority / supply checks live in the handler."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault — validated below as a fuSOL account owned by the maintenance",
+            "PDA, then installed as the pool's manager fee account."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool_program",
+          "docs": [
+            "would receive the pool-authority PDA's signature)."
+          ],
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "plan_directed_batch",
+      "docs": [
+        "Anyone: refresh eligibility + directed targets/caps/capacity for the next validator",
+        "slice."
+      ],
+      "discriminator": [
+        92,
+        234,
+        43,
+        241,
+        61,
+        11,
+        152,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator_list",
+          "docs": [
+            "All target math runs over the FINALIZED snapshot in `EpochState`, never a live total",
+            "(deposits mid-epoch move the live pool total; the plan must not chase it)."
+          ]
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (crank reward source)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "plan_neutral_batch",
+      "docs": [
+        "Anyone: fold one bounded slice of the current deterministic neutral capacity round."
+      ],
+      "discriminator": [
+        238,
+        18,
+        132,
+        166,
+        208,
+        134,
+        125,
+        19
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (crank reward source)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "reconcile_batch",
+      "docs": [
+        "Anyone: reconcile the next bounded validator-list slice (merge completed transients)."
+      ],
+      "discriminator": [
+        124,
+        246,
+        224,
+        76,
+        37,
+        147,
+        26,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "docs": [
+            "The single crank write lane (cursor + phase)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "stake_pool"
+        },
+        {
+          "name": "pool_withdraw_authority"
+        },
+        {
+          "name": "validator_list",
+          "writable": true
+        },
+        {
+          "name": "reserve_stake",
+          "writable": true
+        },
+        {
+          "name": "clock",
+          "address": "SysvarC1ock11111111111111111111111111111111"
+        },
+        {
+          "name": "stake_history",
+          "address": "SysvarStakeHistory1111111111111111111111111"
+        },
+        {
+          "name": "stake_program",
+          "address": "Stake11111111111111111111111111111111111111"
+        },
+        {
+          "name": "stake_pool_program",
+          "address": "3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi"
+        },
+        {
+          "name": "maintenance_vault",
+          "docs": [
+            "The maintenance vault (crank reward source)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maintenance_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  105,
+                  110,
+                  116,
+                  101,
+                  110,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "crank_reward_account",
+          "docs": [
+            "The caller's fuSOL account for the crank reward."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "register_validator",
+      "docs": [
+        "Permissionless: create a `ValidatorRecord` for a vote account (registration, not",
+        "admission)."
+      ],
+      "discriminator": [
+        118,
+        98,
+        251,
+        58,
+        81,
+        30,
+        13,
+        240
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vote_account",
+          "docs": [
+            "`fusion_stake_view::vote_state` (fails closed on unsupported versions)."
+          ]
+        },
+        {
+          "name": "validator_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vote_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "set_preference",
+      "docs": [
+        "Position owner: select or change the validator direction for one fuSOL position",
+        "(effective next epoch; at most one change per epoch)."
+      ],
+      "discriminator": [
+        78,
+        219,
+        60,
+        39,
+        20,
+        31,
+        187,
+        155
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "The Fusion position owner (verified against the parsed `Position.owner` in the",
+            "handler); pays rent on first use."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fusion_position",
+          "docs": [
+            "byte-parsed (`fusion_stake_view::position`) in the handler; NEVER written (Fusion debt",
+            "paths stay fully independent of this program)."
+          ]
+        },
+        {
+          "name": "vote_account",
+          "docs": [
+            "registration exists for it)."
+          ]
+        },
+        {
+          "name": "validator_record",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vote_account"
+              }
+            ]
+          }
+        },
+        {
+          "name": "preference",
+          "docs": [
+            "Created on first set, reused on change (`init_if_needed` — the once-per-epoch change",
+            "counter must survive re-targeting; close_preference additionally rejects a live-ink close in the change epoch, so close+recreate cannot reset the limit)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  101,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "fusion_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "snapshot_preference",
+      "docs": [
+        "Anyone, during the preference window: count one valid position into its selected",
+        "validator's epoch directed weight (once per epoch)."
+      ],
+      "discriminator": [
+        15,
+        254,
+        176,
+        168,
+        1,
+        228,
+        191,
+        41
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "docs": [
+            "Read-only: phase + window-deadline checks (snapshots never advance the crank machine,",
+            "keeping them parallel across validators)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fusion_position",
+          "docs": [
+            "byte-parsed in the handler; never written."
+          ]
+        },
+        {
+          "name": "preference",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  101,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "fusion_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator_record",
+          "docs": [
+            "The record of the preference's SELECTED validator (seeded by the stored vote account,",
+            "so a snapshot can never credit a different validator)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "preference.vote_account",
+                "account": "Preference"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "start_epoch",
+      "docs": [
+        "Anyone: IDLE → RECONCILE when the cluster epoch advances past the controller epoch."
+      ],
+      "discriminator": [
+        204,
+        248,
+        232,
+        82,
+        251,
+        45,
+        164,
+        113
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epoch_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  112,
+                  111,
+                  99,
+                  104,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "sync_preference",
+      "docs": [
+        "Anyone: refresh a preference's observed ink/nonce after a collateral change",
+        "(eligibility delayed to next epoch)."
+      ],
+      "discriminator": [
+        15,
+        45,
+        224,
+        152,
+        184,
+        133,
+        173,
+        79
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  111,
+                  108,
+                  108,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fusion_position",
+          "docs": [
+            "byte-parsed in the handler; never written."
+          ]
+        },
+        {
+          "name": "preference",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  101,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "fusion_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "ControllerConfig",
+      "discriminator": [
+        185,
+        239,
+        115,
+        13,
+        26,
+        3,
+        55,
+        72
+      ]
+    },
+    {
+      "name": "EpochState",
+      "discriminator": [
+        191,
+        63,
+        139,
+        237,
+        144,
+        12,
+        223,
+        210
+      ]
+    },
+    {
+      "name": "Preference",
+      "discriminator": [
+        161,
+        159,
+        67,
+        185,
+        137,
+        55,
+        118,
+        132
+      ]
+    },
+    {
+      "name": "ValidatorRecord",
+      "discriminator": [
+        105,
+        248,
+        112,
+        34,
+        71,
+        224,
+        21,
+        71
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "ControllerInitialized",
+      "discriminator": [
+        37,
+        65,
+        63,
+        234,
+        176,
+        123,
+        36,
+        86
+      ]
+    },
+    {
+      "name": "EpochPhaseChanged",
+      "discriminator": [
+        37,
+        187,
+        194,
+        24,
+        33,
+        43,
+        21,
+        253
+      ]
+    },
+    {
+      "name": "MaintenanceRewardPaid",
+      "discriminator": [
+        209,
+        168,
+        244,
+        81,
+        37,
+        159,
+        126,
+        224
+      ]
+    },
+    {
+      "name": "NegativeNavObserved",
+      "discriminator": [
+        240,
+        248,
+        171,
+        66,
+        76,
+        61,
+        189,
+        209
+      ]
+    },
+    {
+      "name": "PlanFinalized",
+      "discriminator": [
+        184,
+        139,
+        80,
+        214,
+        58,
+        83,
+        122,
+        167
+      ]
+    },
+    {
+      "name": "PoolDeposit",
+      "discriminator": [
+        58,
+        186,
+        106,
+        66,
+        167,
+        37,
+        218,
+        6
+      ]
+    },
+    {
+      "name": "PoolInitialized",
+      "discriminator": [
+        100,
+        118,
+        173,
+        87,
+        12,
+        198,
+        254,
+        229
+      ]
+    },
+    {
+      "name": "PreferenceUpdated",
+      "discriminator": [
+        16,
+        45,
+        33,
+        111,
+        42,
+        184,
+        215,
+        7
+      ]
+    },
+    {
+      "name": "RebalanceActionExecuted",
+      "discriminator": [
+        252,
+        164,
+        162,
+        126,
+        218,
+        111,
+        2,
+        80
+      ]
+    },
+    {
+      "name": "ValidatorRegistered",
+      "discriminator": [
+        20,
+        20,
+        190,
+        191,
+        53,
+        174,
+        95,
+        72
+      ]
+    },
+    {
+      "name": "ValidatorStatusChanged",
+      "discriminator": [
+        252,
+        161,
+        155,
+        8,
+        159,
+        50,
+        127,
+        218
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "AlreadySealed",
+      "msg": "Controller is already sealed: initialize_pool may run exactly once"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidConfigAddress",
+      "msg": "A predeclared address passed to initialize_controller is the default pubkey"
+    },
+    {
+      "code": 6002,
+      "name": "AddressMismatch",
+      "msg": "Supplied account does not match the ControllerConfig-recorded address"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidFusolMint",
+      "msg": "fuSOL mint must be legacy SPL, 9 decimals, freeze authority None, zero supply, mint authority = the stake-pool withdraw-authority PDA"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidMaintenanceVault",
+      "msg": "Maintenance vault must be a fuSOL token account whose authority is the maintenance PDA"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidVoteAccount",
+      "msg": "Vote account is not owned by the Vote program or does not parse under a supported VoteState version"
+    },
+    {
+      "code": 6006,
+      "name": "ZeroAmount",
+      "msg": "Amount must be non-zero"
+    },
+    {
+      "code": 6007,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6008,
+      "name": "PoolNotInitialized",
+      "msg": "Pool is not initialized yet: initialize_pool must seal the controller before deposits"
+    },
+    {
+      "code": 6009,
+      "name": "ValidatorNotInPool",
+      "msg": "Validator is not admitted to the stake-pool validator list (or is draining) — deposit SOL or choose another validator"
+    },
+    {
+      "code": 6010,
+      "name": "ValidatorCapExceeded",
+      "msg": "Stake deposit would push the validator past its lifecycle cap — deposit SOL or choose another eligible validator"
+    },
+    {
+      "code": 6011,
+      "name": "CorruptValidatorStatus",
+      "msg": "Validator record's lifecycle status byte is corrupt (fail closed)"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidStakePoolAccount",
+      "msg": "Stake-pool account failed to parse (wrong account or truncated data)"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidValidatorListEntry",
+      "msg": "Validator-list entry missing or inconsistent with the validator record"
+    },
+    {
+      "code": 6014,
+      "name": "NotYetImplemented",
+      "msg": "Instruction not yet implemented"
+    },
+    {
+      "code": 6015,
+      "name": "WrongPhase",
+      "msg": "Crank instruction called in the wrong phase"
+    },
+    {
+      "code": 6016,
+      "name": "EpochNotAdvanced",
+      "msg": "Cluster epoch has not advanced past the controller epoch"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidRemainingAccounts",
+      "msg": "remaining_accounts malformed: wrong count, order, duplicate, or account for the cursor slice"
+    },
+    {
+      "code": 6018,
+      "name": "StaleValidatorRecord",
+      "msg": "Validator record was not covered by this epoch's reconcile pass (stale observations)"
+    },
+    {
+      "code": 6019,
+      "name": "RecordAlreadyPlanned",
+      "msg": "Validator record already received a current-epoch plan result"
+    },
+    {
+      "code": 6020,
+      "name": "PreferenceWindowClosed",
+      "msg": "The preference window is not open at the current slot"
+    },
+    {
+      "code": 6021,
+      "name": "PreferenceWindowStillOpen",
+      "msg": "The preference window deadline has not passed yet"
+    },
+    {
+      "code": 6022,
+      "name": "PreferenceNotCountable",
+      "msg": "Preference is not countable this epoch (mint/owner/nonce/delay/already-counted)"
+    },
+    {
+      "code": 6023,
+      "name": "PreferenceChangeLimit",
+      "msg": "Preference already changed this epoch (at most one change per epoch)"
+    },
+    {
+      "code": 6024,
+      "name": "PreferenceOwnerMismatch",
+      "msg": "Signer is not the position owner recorded on the live Position"
+    },
+    {
+      "code": 6025,
+      "name": "InvalidPositionAccount",
+      "msg": "Fusion position account failed the fusd-core owner check or does not parse as a Position"
+    },
+    {
+      "code": 6026,
+      "name": "ValidatorNotEligibleForPreference",
+      "msg": "Preference targets a Draining/Removable validator — choose an eligible validator"
+    },
+    {
+      "code": 6027,
+      "name": "DirectedSharesExceedSupply",
+      "msg": "Plan rejected: total eligible directed shares exceed the finalized fuSOL supply"
+    },
+    {
+      "code": 6028,
+      "name": "PlanConservationViolated",
+      "msg": "Plan conservation violated: directed + neutral + shortfall != productive lamports"
+    },
+    {
+      "code": 6029,
+      "name": "NeutralRoundInconsistent",
+      "msg": "Neutral capacity round incomplete or inconsistent with the unsaturated count"
+    },
+    {
+      "code": 6030,
+      "name": "RebalanceComplete",
+      "msg": "Rebalance walk already complete — call finish_epoch"
+    },
+    {
+      "code": 6031,
+      "name": "WrongActionTarget",
+      "msg": "Passed validator is not the deterministic selection for the current rebalance slot"
+    },
+    {
+      "code": 6032,
+      "name": "EpochNotFinished",
+      "msg": "Rebalance walk incomplete and churn budget not exhausted — the epoch is not finished"
+    },
+    {
+      "code": 6033,
+      "name": "PositionStillOpen",
+      "msg": "Position still exists: only the preference owner may close this preference"
+    },
+    {
+      "code": 6034,
+      "name": "InvalidRentRecipient",
+      "msg": "Rent recipient must be the recorded preference owner"
+    },
+    {
+      "code": 6035,
+      "name": "InvalidRewardRecipient",
+      "msg": "Crank reward recipient must not be the maintenance vault itself"
+    },
+    {
+      "code": 6036,
+      "name": "PreferenceChangeLimit2",
+      "msg": "Preference already changed this epoch (close+recreate does not reset the limit)"
+    }
+  ],
+  "types": [
+    {
+      "name": "ControllerConfig",
+      "docs": [
+        "The controller's immutable address book. PDA `[b\"controller\"]`, created once by",
+        "`initialize_controller` (which only RECORDS predeclared addresses — the stake-pool-side",
+        "accounts need not exist yet) and frozen by `initialize_pool` (`sealed = true`).",
+        "",
+        "No authority is stored anywhere in this account: the payer funds creation and keeps",
+        "nothing. Every recorded address is compared (`address =` constraints) on each later",
+        "instruction, so a mis-built transaction can never smuggle a foreign account into a CPI."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "Layout version byte (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "sealed",
+            "docs": [
+              "`false` between `initialize_controller` and `initialize_pool`; `true` forever after.",
+              "While unsealed, deposits are rejected and the one-time pool CPI is still available."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "stake_pool_program",
+            "docs": [
+              "The pinned stake-pool FORK program (== `constants::FUSION_STAKE_POOL_PROGRAM_ID`;",
+              "recorded so the audit config manifest reads it from one on-chain account)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "stake_pool",
+            "docs": [
+              "The `StakePool` state account (pre-created, program-owned, initialized by our CPI)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "validator_list",
+            "docs": [
+              "The pool's `ValidatorList` account (pre-created at exactly `MAX_VALIDATORS` capacity)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve_stake",
+            "docs": [
+              "The pool's reserve stake account."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fusol_mint",
+            "docs": [
+              "The fuSOL mint (legacy SPL, 9 decimals, freeze authority None, mint authority = the",
+              "pool withdraw-authority PDA)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_withdraw_authority",
+            "docs": [
+              "The stake-pool program's withdraw-authority PDA",
+              "(`[stake_pool, b\"withdraw\"]` under the FORK program id) — derived and recorded at init."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maintenance_vault",
+            "docs": [
+              "The maintenance vault: a fuSOL token account, authority = the `[b\"maintenance\"]` PDA.",
+              "Doubles as the stake pool's manager fee account, so every pool fee lands here."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fusd_core_program",
+            "docs": [
+              "fusd-core — owner of the `Position` accounts the Preference layer reads."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fusol_collateral_mint",
+            "docs": [
+              "The collateral mint a Fusion `Position` must hold for its preference to count. Recorded",
+              "as its own named field (the Preference path never derives it); at genesis it MUST equal",
+              "`fusol_mint` — the fuSOL market's collateral mint IS the pool mint — and",
+              "`initialize_controller` enforces that equality."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Canonical bump of this `[b\"controller\"]` PDA."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "pool_authority_bump",
+            "docs": [
+              "Canonical bump of the `[b\"pool_authority\"]` PDA (manager + staker signer)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "deposit_authority_bump",
+            "docs": [
+              "Canonical bump of the `[b\"deposit_authority\"]` PDA (SOL + stake deposit signer)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "maintenance_authority_bump",
+            "docs": [
+              "Canonical bump of the `[b\"maintenance\"]` PDA (maintenance vault token authority)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Forward-compat reserve. Carve from the HEAD; zeroed bytes on old accounts must decode",
+              "as the new field's `0 = disabled/none` sentinel (fusd-core discipline)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ControllerInitialized",
+      "docs": [
+        "One-time: `initialize_controller` recorded the immutable address set."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stake_pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "validator_list",
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve_stake",
+            "type": "pubkey"
+          },
+          {
+            "name": "fusol_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool_withdraw_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "maintenance_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "fusd_core_program",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EpochPhaseChanged",
+      "docs": [
+        "The crank state machine moved phases (`EpochState::PHASE_*` bytes)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "from_phase",
+            "type": "u8"
+          },
+          {
+            "name": "to_phase",
+            "type": "u8"
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EpochState",
+      "docs": [
+        "The single crank write lane (zero-copy). PDA `[b\"epoch_state\"]`.",
+        "",
+        "Competing permissionless callers may race, but only one transaction can advance a given",
+        "cursor value; successful transitions are idempotent at the task level. Fusion position",
+        "operations never write this account, so debt paths stay independent of the crank.",
+        "",
+        "All plan aggregates are FINALIZED-snapshot values: the controller never estimates stake",
+        "balances — it snapshots the canonical stake-pool totals at FINALIZE and plans from those."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "controller_epoch",
+            "docs": [
+              "The epoch this controller cycle is processing (advanced by `start_epoch` when the",
+              "cluster epoch exceeds it)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "reconcile_cursor",
+            "docs": [
+              "Next validator-list index RECONCILE will update (u64 for field alignment; the upstream",
+              "list index is u32)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "plan_directed_cursor",
+            "docs": [
+              "Next canonical validator ordinal PLAN-DIRECTED will process."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rebalance_actions_done",
+            "docs": [
+              "Rebalance actions executed this epoch."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "preference_window_close_slot",
+            "docs": [
+              "Slot at which the preference window closes (set by FINALIZE; 0 = window not open)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "nav_total_lamports",
+            "docs": [
+              "Canonical `StakePool.total_lamports` at FINALIZE."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "nav_fusol_supply",
+            "docs": [
+              "Canonical fuSOL supply at FINALIZE."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "productive_lamports",
+            "docs": [
+              "`total - reserve_target` — the lamports the plan MUST fully assign (or record as",
+              "capacity shortfall)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "reserve_target",
+            "docs": [
+              "The epoch's operational reserve target."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_directed_shares",
+            "docs": [
+              "Σ eligible directed shares over all validators, CHECKED-summed in PLAN-DIRECTED; the",
+              "plan is rejected when it exceeds `nav_fusol_supply` (`D > S`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "neutral_total",
+            "docs": [
+              "The neutral pool remaining to distribute (decremented as rounds grant)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "unsaturated_active_count",
+            "docs": [
+              "Unsaturated Active validators entering the CURRENT capacity round."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "capacity_shortfall",
+            "docs": [
+              "Neutral lamports no Active capacity could absorb (recorded at PLAN-FINALIZE; they stay",
+              "in reserve temporarily)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "churn_budget_total",
+            "docs": [
+              "This epoch's global churn budget (`bps_of(total, GLOBAL_CHURN_CAP_BPS)`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "churn_budget_used",
+            "docs": [
+              "Budget consumed by executed actions (`<= churn_budget_total`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "healthy_delegated_lamports",
+            "docs": [
+              "Delegated pool lamports whose validator passed the health check this epoch."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_delegated_lamports",
+            "docs": [
+              "Total DELEGATED pool lamports (excludes the reserve — the guard denominator)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "epoch_payout_budget_used",
+            "docs": [
+              "Crank payouts made this epoch (`<= CRANK_EPOCH_PAYOUT_BUDGET`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "round_remaining",
+            "type": "u64"
+          },
+          {
+            "name": "round_n_unsaturated",
+            "type": "u64"
+          },
+          {
+            "name": "round_tranche",
+            "type": "u64"
+          },
+          {
+            "name": "round_remainder",
+            "type": "u64"
+          },
+          {
+            "name": "round_start",
+            "type": "u64"
+          },
+          {
+            "name": "round_steps",
+            "type": "u64"
+          },
+          {
+            "name": "round_remainder_used",
+            "type": "u64"
+          },
+          {
+            "name": "round_granted",
+            "type": "u64"
+          },
+          {
+            "name": "round_saturated",
+            "type": "u64"
+          },
+          {
+            "name": "neutral_round_number",
+            "docs": [
+              "Completed capacity rounds this epoch (terminates within `MAX_NEUTRAL_ROUNDS`).",
+              "`0` doubles as \"no round opened yet this phase\"."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "neutral_cursor",
+            "docs": [
+              "In-round validator cursor: next canonical validator ordinal to fold into the round."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sum_directed_targets",
+            "docs": [
+              "Σ per-validator directed targets, CHECKED-summed in PLAN-DIRECTED (list records AND",
+              "admission extras) — one leg of the PLAN-FINALIZE conservation proof."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "neutral_granted_total",
+            "docs": [
+              "Σ neutral grants applied, CHECKED-summed grant-by-grant in PLAN-NEUTRAL — the second",
+              "leg of the conservation proof (independent of the round mirror's own accounting)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rebalance_cursor",
+            "docs": [
+              "Deterministic rebalance visit counter over `[0, 2 × planned validators)`: pass 0",
+              "(Draining decreases/removals) then pass 1 (ordinary deficit/surplus moves), each pass",
+              "walking list ordinals from the epoch-rotating start index. See `logic::rebalance_slot`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "preferred_withdraw_surplus",
+            "docs": [
+              "Greatest positive `observed active − final target` seen in the latest full plan walk",
+              "(reset at each capacity-round start; PLAN-DIRECTED seeds it for the zero-round case)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "preferred_withdraw_vote",
+            "docs": [
+              "The vote account holding that greatest surplus (`[0; 32]` when none). PLAN-FINALIZE",
+              "sets it (or None) as the pool's preferred WITHDRAW validator — the deterministic",
+              "drain-first source."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "phase",
+            "docs": [
+              "Current phase (`PHASE_*`)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_padding",
+            "docs": [
+              "Explicit padding to the 8-byte boundary (zero-copy layouts carry no implicit padding)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Forward-compat reserve (carve from the HEAD on any later addition)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeControllerArgs",
+      "docs": [
+        "The predeclared stake-pool-side addresses (spec §\"initialization without a persistent",
+        "bootstrap key\": every account is created at a predetermined address, then verified)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stake_pool",
+            "docs": [
+              "The pre-created (program-owned, uninitialized) `StakePool` account."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "validator_list",
+            "docs": [
+              "The pre-created `ValidatorList` account (sized to exactly `MAX_VALIDATORS`)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve_stake",
+            "docs": [
+              "The pool reserve stake account."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fusol_mint",
+            "docs": [
+              "The fuSOL mint."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maintenance_vault",
+            "docs": [
+              "The maintenance vault (fuSOL token account, authority = the `[b\"maintenance\"]` PDA);",
+              "doubles as the stake pool's manager fee account."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MaintenanceRewardPaid",
+      "docs": [
+        "A bounded crank reward left the maintenance vault (fuSOL base units)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "crank",
+            "docs": [
+              "The recipient fuSOL token account."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "task",
+            "docs": [
+              "The task-class tag (`TASK_*` above — the instruction class that earned it)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "epoch",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "NegativeNavObserved",
+      "docs": [
+        "Pool finalization observed a LOWER exchange rate than the previous snapshot. Committed",
+        "immediately (never smoothed) so Fusion's collateral oracle recognizes the loss at once."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "previous_total_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "new_total_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "fusol_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlanFinalized",
+      "docs": [
+        "PLAN-FINALIZE committed the epoch's final targets (conservation:",
+        "`Σ final targets + capacity_shortfall == productive_lamports`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "productive_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_target",
+            "type": "u64"
+          },
+          {
+            "name": "total_directed_shares",
+            "type": "u64"
+          },
+          {
+            "name": "neutral_total",
+            "type": "u64"
+          },
+          {
+            "name": "capacity_shortfall",
+            "docs": [
+              "Neutral lamports NO Active capacity could absorb (temporarily reserve-held)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "churn_budget",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolDeposit",
+      "docs": [
+        "A deposit flowed through the controller's deposit authority (`op` = `DEPOSIT_KIND_*`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "depositor",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "vote_account",
+            "docs": [
+              "The deposited stake account's voter for stake deposits; `Pubkey::default()` for SOL."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports",
+            "docs": [
+              "Lamports entering pool accounting (SOL amount, or the full absorbed stake account)."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolInitialized",
+      "docs": [
+        "One-time: `initialize_pool` CPI'd the stake-pool `Initialize` and sealed the controller."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stake_pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "fusol_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_validators",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Preference",
+      "docs": [
+        "One position's validator direction. PDA `[b\"preference\", fusion_position]` — the seed",
+        "includes the position address, so duplicate preference accounts cannot exist.",
+        "",
+        "The `(observed_ink_nonce, observed_ink, owner)` triple is the anti-reuse belt-and-braces:",
+        "any collateral change bumps the position's ink nonce, desynchronizing this record until a",
+        "resync — which only becomes eligible NEXT epoch — so the same fungible shares can never",
+        "direct stake twice in one epoch through different positions. Losing countability affects",
+        "direction only; funds, solvency operations and fuSOL rewards never depend on this account."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "Layout version byte (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "fusion_position",
+            "docs": [
+              "The fusd-core `Position` this preference belongs to (also a PDA seed)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "docs": [
+              "Position owner at the last (re)sync."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vote_account",
+            "docs": [
+              "The selected validator's vote account."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "observed_ink_nonce",
+            "docs": [
+              "`Position.ink_nonce` observed at the last (re)sync."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "observed_ink",
+            "docs": [
+              "`Position.ink` observed at the last (re)sync (informational; the snapshot re-reads the",
+              "live ink)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "eligible_from_epoch",
+            "docs": [
+              "First epoch this preference may count (sync-epoch + 1 on every nonce/validator change)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_counted_epoch",
+            "docs": [
+              "Last epoch this preference was counted (one count per epoch)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "change_epoch",
+            "docs": [
+              "Last epoch the OWNER changed the selected validator (at most one change per epoch)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Forward-compat reserve (carve from the HEAD)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PreferenceUpdated",
+      "docs": [
+        "A Preference lifecycle op (`op` = `PREF_OP_*`): set / synced / counted / closed."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "fusion_position",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "vote_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "op",
+            "type": "u8"
+          },
+          {
+            "name": "observed_ink",
+            "docs": [
+              "Position ink observed (the directed weight a COUNTED snapshot added)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "observed_ink_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "eligible_from_epoch",
+            "type": "u64"
+          },
+          {
+            "name": "epoch",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RebalanceActionExecuted",
+      "docs": [
+        "One deterministic rebalance action executed (`action` = the `spl_cpi` discriminant of the",
+        "CPI performed: add / remove / increase / decrease-with-reserve / set-preferred-withdraw)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "action",
+            "type": "u8"
+          },
+          {
+            "name": "vote_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ValidatorRecord",
+      "docs": [
+        "Per-validator controller state. PDA `[b\"validator\", vote_account]`, created permissionlessly",
+        "by `register_validator` (registration is NOT admission — admission to the stake-pool list is",
+        "an explicit plan outcome requiring eligibility + minimum directed support + list capacity).",
+        "",
+        "Balance fields (`last_active_lamports` / `last_transient_lamports`) are OBSERVATIONS of the",
+        "canonical validator-list entry recorded at reconcile time — the controller never maintains a",
+        "competing balance; the stake-pool list stays the source of truth."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "Layout version byte (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "vote_account",
+            "docs": [
+              "The validator's vote account (also a PDA seed)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "validator_list_index",
+            "docs": [
+              "Index of this validator's entry in the stake-pool `ValidatorList`;",
+              "`VALIDATOR_LIST_INDEX_UNSET` (u32::MAX) until admitted."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "status",
+            "docs": [
+              "Lifecycle status (`fusion_stake_math::lifecycle::ValidatorStatus` byte; parse with",
+              "`ValidatorStatus::from_u8`, which fails closed on corruption)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "consecutive_liveness_failures",
+            "docs": [
+              "Consecutive failed completed epochs of liveness BEFORE the current plan pass",
+              "(`LifecycleInput::consecutive_failures`)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "consecutive_healthy_epochs",
+            "docs": [
+              "Consecutive healthy-with-pool-stake completed epochs (`LifecycleInput::consecutive_healthy`",
+              "— the Candidate promotion streak)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "has_pool_stake",
+            "docs": [
+              "Validator carried pool stake through the last completed epoch."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "last_active_lamports",
+            "docs": [
+              "Last observed canonical active stake (validator-list entry, at reconcile)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_transient_lamports",
+            "docs": [
+              "Last observed canonical transient stake."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "directed_shares_epoch",
+            "docs": [
+              "Epoch stamp for `directed_shares`: shares are valid only when this equals the epoch",
+              "being planned (a stale stamp reads as zero directed weight — no clearing pass needed)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "directed_shares",
+            "docs": [
+              "Eligible directed fuSOL shares counted for `directed_shares_epoch` (checked-summed",
+              "into `EpochState.total_directed_shares` during PLAN-DIRECTED)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "directed_target",
+            "docs": [
+              "This epoch's directed target floor (`min(floor(P·d/S), lifecycle_cap)`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "neutral_granted",
+            "docs": [
+              "Neutral lamports granted by capacity rounds this epoch."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "final_target",
+            "docs": [
+              "`directed_target + neutral_granted` once PLAN-FINALIZE commits."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "remaining_capacity",
+            "docs": [
+              "Remaining neutral capacity (`lifecycle_cap - current target`), decremented as rounds",
+              "grant — derived from the SAME snapshot the grants accumulate into."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "saturated_this_round",
+            "docs": [
+              "The validator hit `remaining_capacity == 0` during round `saturated_round` (it leaves",
+              "the unsaturated set for subsequent rounds). Valid only when `saturated_round` equals",
+              "the current `EpochState.neutral_round_number` context."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "saturated_round",
+            "docs": [
+              "The capacity round `saturated_this_round` refers to."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_increase_epoch",
+            "docs": [
+              "Last epoch a rebalance INCREASE executed for this validator."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_decrease_epoch",
+            "docs": [
+              "Last epoch a rebalance DECREASE executed for this validator."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "removal_delay_start",
+            "docs": [
+              "Epoch this validator entered Draining (0 = never): the removal delay runs from here."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "observed_epoch",
+            "docs": [
+              "Epoch stamp of the observations below (RECONCILE writes them; PLAN-DIRECTED requires",
+              "the stamp to be current before advancing the lifecycle from them)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "observed_commission_ok",
+            "docs": [
+              "Inflation commission was at or below the fixed cap at reconcile. An UNREADABLE vote",
+              "account observes `true` here (and `false` for liveness): a systemic vote-state parse",
+              "failure must surface as guard-suppressible liveness failure, never as a mass",
+              "commission-drain that bypasses the global liveness guard."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "observed_liveness_ok",
+            "docs": [
+              "Passed BOTH liveness checks at reconcile (fresh landed vote AND positive prior-epoch",
+              "credit growth). `false` freezes increases this epoch (single-failure rule)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "plan_epoch",
+            "docs": [
+              "Epoch stamp of the last PLAN-DIRECTED result (once-per-epoch plan idempotency; also",
+              "certifies `validator_list_index` / targets / capacity as current-plan values)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pool_entry_status",
+            "docs": [
+              "Upstream `StakeStatus` byte of this validator's list entry at plan time",
+              "(`POOL_ENTRY_STATUS_NONE` when not in the pool). Gates preferred-withdraw candidacy."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Forward-compat reserve (carve from the HEAD)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                13
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ValidatorRegistered",
+      "docs": [
+        "A `ValidatorRecord` was created for a vote account (registration, NOT admission)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vote_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "payer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ValidatorStatusChanged",
+      "docs": [
+        "A validator's lifecycle status changed (admission, promotion, draining, removal)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vote_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_status",
+            "docs": [
+              "`fusion_stake_math::lifecycle::ValidatorStatus` bytes."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "new_status",
+            "type": "u8"
+          },
+          {
+            "name": "epoch",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

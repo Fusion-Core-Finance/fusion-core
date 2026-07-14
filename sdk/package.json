@@ -7,7 +7,7 @@
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "sync-idl": "cp ../target/idl/fusd_core.json src/idl/fusd_core.json"
+    "sync-idl": "cp ../target/idl/fusd_core.json src/idl/fusd_core.json && cp ../target/idl/fusion_stake_controller.json src/idl/fusion_stake_controller.json"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
