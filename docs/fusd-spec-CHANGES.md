@@ -6,6 +6,40 @@ breaking change to an action's guards/formula or an account's layout; `MINOR` ad
 account, or invariant; `PATCH` corrects a citation, formula, or wording without changing what the
 code does. Every entry notes the `master` commit the spec was pinned to.
 
+## v1.3.0
+
+Pins the 2026-07-14 canonical-primary oracle mode (the implementing `master` commit) — the fuSOL
+pricing mode: a market whose collateral has NO external market feed and is priced as
+`sol_usd × stake_pool_rate`.
+
+- **New `MarketOracle` fields** `canonical_primary: u8` + `liquidity_haircut_bps: u16`, carved
+  from the HEAD of `_reserved` (30 → 27; total SPACE unchanged). Both init-only; zeroed bytes on
+  every existing account decode as mode off + no haircut — byte-identical prior behavior.
+- **`init_market_oracle`**: two new args (`canonical_primary`, `liquidity_haircut_bps`, appended)
+  and a mode split — mode 1 requires the SOL/USD Pyth feed id, a bound FORK stake pool, NO DEX
+  pools, and a haircut in `[1, MAX_LIQUIDITY_HAIRCUT_BPS]`; mode 0 keeps the ≥1-TWAP-venue rule
+  and requires the haircut be 0.
+- **`update_price`**: in mode 1 both parsed views (SOL/USD legs) are scaled by the bound pool's
+  `total_lamports / pool_token_supply` BEFORE aggregation (conf scaled too — ratios and the
+  Pyth↔SB deviation corridor are scale-invariant), so `spot` AND `debt_spot` track pool NAV and a
+  negative-NAV finalization reaches the liquidation path on the next crank. The collateral leg
+  then takes the mandatory liquidity haircut (the debt leg deliberately does not — it wants the
+  conservative HIGH side). An unavailable pool rate (absent / parse failure / epoch lag /
+  pool-mint mismatch) freezes mints AND WITHHOLDS the commit — there is no market feed to fall
+  back on, so the cache ages into the staleness machinery. A pool owned by the wrong deployment
+  hard-reverts (`InvalidStakePool`); the expected owner is `FUSION_STAKE_POOL_PROGRAM_ID` in
+  mode 1 vs `SPL_STAKE_POOL_PROGRAM_ID` for the C1 min-cap leg (both via the shared
+  `parse_bound_stake_pool`).
+- **`fusd_oracle::aggregate`**: new `OracleConfig.twap_corridor_optional` — mint mode no longer
+  requires a PRESENT TWAP when set (no fuSOL venue exists pre-listing); a present-but-divergent
+  TWAP still freezes mints. `false` everywhere else — existing markets unchanged.
+- **New constants** `FUSION_STAKE_POOL_PROGRAM_ID` (the pinned fork deployment) and
+  `MAX_LIQUIDITY_HAIRCUT_BPS` (2 000).
+
+Versioning: **MINOR** — new account fields from documented reserved padding + new args + a new
+mode gated entirely on an opt-in flag; every existing market's behavior is bit-for-bit unchanged
+(mode 0 paths are untouched; the aggregate change is behind a flag no existing market can set).
+
 ## v1.2.0
 
 Pins the 2026-07-14 fuSOL groundwork change (the implementing `master` commit): the

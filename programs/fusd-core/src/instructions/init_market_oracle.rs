@@ -5,7 +5,8 @@ use crate::constants::{
     CONFIG_SEED, DEX_TWAP_SEED, MARKET_ORACLE_SEED, MARKET_SEED, MAX_ORACLE_CONF_BPS,
     MAX_ORACLE_DEVIATION_BPS, MAX_ORACLE_K_BPS, MAX_ORACLE_MAX_AGE_SECS, MAX_TWAP_DIVERGENCE_BPS,
     MAX_LIQ_DIVERGENCE_BPS, MAX_TWAP_STALENESS_SECS, MAX_TWAP_WINDOW_SECS, MIN_ORACLE_K_BPS,
-    MIN_PRICE_BAND_RATIO, MIN_TWAP_MIN_SAMPLES, MIN_TWAP_WINDOW_SECS, TWAP_RING_CAPACITY,
+    MAX_LIQUIDITY_HAIRCUT_BPS, MIN_PRICE_BAND_RATIO, MIN_TWAP_MIN_SAMPLES,
+    MIN_TWAP_WINDOW_SECS, PYTH_SOL_USD_FEED_ID, TWAP_RING_CAPACITY,
 };
 use crate::errors::FusdError;
 use crate::state::{DexTwap, Market, MarketOracle, ProtocolConfig};
@@ -46,7 +47,17 @@ pub struct InitMarketOracleArgs {
     /// LST market: minting requires a fresh canonical rate, and the collateral price is capped at
     /// `MIN(market, sol_usd · stake_pool_rate)`. The collateral mint must be 9-decimal (SPL pool
     /// mints are, so `total_lamports / pool_token_supply` is the whole-token SOL/LST rate directly).
+    /// In canonical-primary mode (below) this binds the FUSION fork pool instead and is REQUIRED.
     pub lst_stake_pool: Pubkey,
+    /// Canonical-primary oracle mode (fuSOL): the market's price IS `sol_usd × pool_rate` — no
+    /// external market feed for the collateral exists. Requires: `lst_stake_pool` set (the FUSION
+    /// fork pool — owner-checked at every crank against `FUSION_STAKE_POOL_PROGRAM_ID`),
+    /// `pyth_feed_id == PYTH_SOL_USD_FEED_ID` (the bound feeds ARE the SOL/USD legs), NO DEX
+    /// pools, `liquidity_haircut_bps > 0`, and a 9-decimal collateral mint. INIT-ONLY.
+    pub canonical_primary: bool,
+    /// Mandatory (>0) in canonical-primary mode, clamped `<= MAX_LIQUIDITY_HAIRCUT_BPS`; must be
+    /// 0 otherwise. Applied to the collateral (mint/LTV) price only — see `MarketOracle`.
+    pub liquidity_haircut_bps: u16,
 }
 
 #[derive(Accounts)]
@@ -98,11 +109,35 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
     // Feed bindings must be real (an all-zero feed id / default pubkey can never verify).
     require!(args.pyth_feed_id != [0u8; 32], FusdError::ParamOutOfBounds);
     require!(args.switchboard_feed != Pubkey::default(), FusdError::ParamOutOfBounds);
-    // The TWAP corridor is load-bearing for mint-mode (aggregate requires it): at least one pool.
-    require!(
-        args.orca_pool != Pubkey::default() || args.raydium_pool != Pubkey::default(),
-        FusdError::ParamOutOfBounds
-    );
+    if args.canonical_primary {
+        // Canonical-primary (fuSOL): the price is `sol_usd × pool_rate`, so the bound Pyth feed
+        // MUST be the shared SOL/USD id (the Switchboard secondary is likewise a SOL/USD feed —
+        // an account address, not id-verifiable here; the deviation corridor cross-checks it
+        // against the composed primary at every crank). The fork pool binding is mandatory, and
+        // no DEX venue can exist pre-listing: the TWAP corridor is OPTIONAL in this mode (a
+        // fuSOL-venue corridor is a deferred, deliberate follow-on — its natural quote is SOL,
+        // not USD, so it needs a rate-domain comparison, not this USD one), and the mandatory
+        // liquidity haircut stands in for it conservatively.
+        require!(args.pyth_feed_id == PYTH_SOL_USD_FEED_ID, FusdError::ParamOutOfBounds);
+        require!(args.lst_stake_pool != Pubkey::default(), FusdError::ParamOutOfBounds);
+        require!(
+            args.orca_pool == Pubkey::default() && args.raydium_pool == Pubkey::default(),
+            FusdError::ParamOutOfBounds
+        );
+        require!(
+            args.liquidity_haircut_bps > 0
+                && args.liquidity_haircut_bps <= MAX_LIQUIDITY_HAIRCUT_BPS,
+            FusdError::ParamOutOfBounds
+        );
+    } else {
+        // Market-feed oracle: the TWAP corridor is load-bearing for mint-mode (aggregate
+        // requires it): at least one pool. The haircut is a canonical-primary-only knob.
+        require!(
+            args.orca_pool != Pubkey::default() || args.raydium_pool != Pubkey::default(),
+            FusdError::ParamOutOfBounds
+        );
+        require!(args.liquidity_haircut_bps == 0, FusdError::ParamOutOfBounds);
+    }
     // If both venues are configured they must be distinct pools — else `sample_twap`'s
     // address-based venue selection would shadow one venue with the other's program owner.
     require!(
@@ -216,6 +251,8 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
     o.liq_max_divergence_bps = args.liq_max_divergence_bps;
     o.lst_stake_pool = args.lst_stake_pool;
     o.bump = ctx.bumps.market_oracle;
-    o._reserved = [0u8; 30];
+    o.canonical_primary = args.canonical_primary as u8;
+    o.liquidity_haircut_bps = args.liquidity_haircut_bps;
+    o._reserved = [0u8; 27];
     Ok(())
 }

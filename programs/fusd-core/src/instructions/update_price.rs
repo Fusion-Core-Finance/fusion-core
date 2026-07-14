@@ -17,8 +17,8 @@ use pyth_solana_receiver_sdk::price_update::{PriceUpdateV2, VerificationLevel};
 use switchboard_on_demand::PullFeedAccountData;
 
 use crate::constants::{
-    CONFIG_SEED, DEX_TWAP_SEED, MARKET_ORACLE_SEED, MARKET_SEED, MAX_STAKE_POOL_EPOCH_LAG,
-    PYTH_SOL_USD_FEED_ID, SPL_STAKE_POOL_PROGRAM_ID,
+    CONFIG_SEED, DEX_TWAP_SEED, FUSION_STAKE_POOL_PROGRAM_ID, MARKET_ORACLE_SEED, MARKET_SEED,
+    MAX_STAKE_POOL_EPOCH_LAG, PYTH_SOL_USD_FEED_ID, SPL_STAKE_POOL_PROGRAM_ID,
 };
 use crate::errors::FusdError;
 use crate::instructions::init_protocol::FUSD_DECIMALS;
@@ -65,9 +65,12 @@ pub struct UpdatePrice<'info> {
     /// `PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is unavailable → mints freeze.
     pub sol_usd_pyth_update: Option<UncheckedAccount<'info>>,
 
-    /// CHECK: OPTIONAL SPL Stake Pool `StakePool` for the C1 canonical-rate leg. Required only for an
-    /// LST market; verified in the handler (owner == `SPL_STAKE_POOL_PROGRAM_ID`, key ==
-    /// `market_oracle.lst_stake_pool`). Absent/stale/degenerate ⇒ leg unavailable → mints freeze.
+    /// CHECK: OPTIONAL `StakePool` account. Two consumers: (a) the C1 canonical-rate leg on an LST
+    /// market (owner == `SPL_STAKE_POOL_PROGRAM_ID`) — absent/stale/degenerate ⇒ leg unavailable →
+    /// mints freeze; (b) the canonical-primary (fuSOL) mode (owner ==
+    /// `FUSION_STAKE_POOL_PROGRAM_ID`) — the pool rate IS the price's rate leg, so
+    /// absent/stale/degenerate ⇒ mints freeze AND the commit is WITHHELD (no market feed exists to
+    /// fall back on). Key always == `market_oracle.lst_stake_pool`; a wrong account hard-reverts.
     pub lst_stake_pool: Option<UncheckedAccount<'info>>,
 }
 
@@ -98,8 +101,14 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         liq_max_divergence_bps: mo.liq_max_divergence_bps as u128,
         // C1 LST canonical-rate leg: an LST market (a stake pool is bound) cannot mint without a
         // fresh canonical rate to bound the market price. Non-LST markets (default) ⇒ false.
-        canonical_required: mo.lst_stake_pool != Pubkey::default(),
+        // Canonical-primary mode never uses the min-cap leg (the rate is IN the price), so false.
+        canonical_required: mo.canonical_primary == 0 && mo.lst_stake_pool != Pubkey::default(),
+        // Canonical-primary: no fuSOL DEX venue exists pre-listing; the corridor is enforced only
+        // when a TWAP is present (none can be — mode-1 init rejects pool bindings in v1).
+        twap_corridor_optional: mo.canonical_primary != 0,
     };
+    let canonical_primary = mo.canonical_primary != 0;
+    let liquidity_haircut_bps = mo.liquidity_haircut_bps;
     let lst_stake_pool_key = mo.lst_stake_pool;
     let collateral_mint_key = ctx.accounts.collateral_mint.key();
     let coll_decimals = ctx.accounts.market.collateral_decimals;
@@ -112,14 +121,60 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
     let sb_program_id = ctx.accounts.config.switchboard_program_id;
 
     // --- 1. Pyth (primary, mandatory) → usd_ray PriceView -----------------------------------
-    let pyth_pv =
+    // In canonical-primary mode the bound feed id is the shared SOL/USD id (init-enforced), so
+    // this parses the SOL/USD leg; it becomes the fuSOL price once scaled by the pool rate below.
+    let mut pyth_pv =
         parse_pyth(&ctx.accounts.pyth_price_update, &pyth_feed_id, &pyth_program_id, &pyth_program_id_alt)?;
 
     // --- 2. Switchboard (secondary, optional) → usd_ray PriceView ---------------------------
-    let sb_pv = match ctx.accounts.switchboard_feed.as_ref() {
+    let mut sb_pv = match ctx.accounts.switchboard_feed.as_ref() {
         Some(sb) => parse_switchboard(sb, &sb_feed_key, &sb_program_id)?,
         None => None,
     };
+
+    // --- 2b. Canonical-primary (fuSOL): compose `sol_usd × pool_rate` into BOTH legs ---------
+    // The pool rate scales price AND conf of each view (conf/price ratios and the Pyth↔SB
+    // deviation are scale-invariant, so every downstream check keeps its meaning), and the
+    // composed views drive `spot` AND `debt_spot` — a pool NAV drop reaches the liquidation
+    // path on the next crank. An unavailable rate (absent account / parse failure / epoch lag /
+    // wrong pool mint / degenerate totals) WITHHOLDS the commit entirely and freezes mints:
+    // there is no market feed to fall back on, so the cache must age into the staleness
+    // machinery rather than serve an unscaled SOL/USD price as if it were fuSOL.
+    if canonical_primary {
+        let rate = parse_bound_stake_pool(
+            ctx.accounts.lst_stake_pool.as_ref(),
+            &lst_stake_pool_key,
+            &FUSION_STAKE_POOL_PROGRAM_ID,
+            &collateral_mint_key,
+            clock.epoch,
+        )?;
+        match rate {
+            Some(sample) => {
+                pyth_pv = scale_view(&pyth_pv, sample.total_lamports, sample.pool_token_supply)
+                    .ok_or(FusdError::MathOverflow)?;
+                sb_pv = match sb_pv {
+                    Some(v) => Some(
+                        scale_view(&v, sample.total_lamports, sample.pool_token_supply)
+                            .ok_or(FusdError::MathOverflow)?,
+                    ),
+                    None => None,
+                };
+            }
+            None => {
+                let market = &mut ctx.accounts.market;
+                market.mint_frozen = true;
+                emit_cpi!(crate::events::PriceCommitted {
+                    collateral_mint: ctx.accounts.collateral_mint.key(),
+                    spot: market.spot,
+                    slot,
+                    mint_frozen: true,
+                    fresh: false,
+                    plausible: true,
+                });
+                return Ok(());
+            }
+        }
+    }
 
     // --- 3. DEX-TWAP corridor (already usd_ray in the ring) ---------------------------------
     let twap = ctx
@@ -185,7 +240,21 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
     //     (repay/deposit stay open; a sustained breach → shutdown → urgent_redeem). Default band
     //     `(0, 0)` ⇒ `plausible == true` always ⇒ byte-identical to the prior behavior.
     if result.fresh && result.plausible {
-        let spot = usd_ray_to_spot(result.collateral_price, coll_decimals, FUSD_DECIMALS)
+        // Canonical-primary: the mandatory liquidity haircut discounts the COLLATERAL (mint/LTV)
+        // price only — the conservative stand-in for a market corridor while no fuSOL venue
+        // exists. The debt/liquidation price is deliberately NOT discounted (it wants the
+        // conservative HIGH side; a haircut there would make liquidations laxer, not safer).
+        let coll_price_ray = if canonical_primary && liquidity_haircut_bps > 0 {
+            fusd_math::mul_div_floor(
+                result.collateral_price,
+                (fusd_oracle::BPS as u128) - liquidity_haircut_bps as u128,
+                fusd_oracle::BPS as u128,
+            )
+            .ok_or(FusdError::MathOverflow)?
+        } else {
+            result.collateral_price
+        };
+        let spot = usd_ray_to_spot(coll_price_ray, coll_decimals, FUSD_DECIMALS)
             .ok_or(FusdError::MathOverflow)?;
         // The asymmetric HIGH (debt/liquidation) price = `price + k·σ`. Cached alongside `spot`
         // (the LOW price) so liquidation prices off the optimistic valuation and a wide confidence
@@ -317,9 +386,9 @@ fn compute_canonical(
     current_epoch: u64,
 ) -> Result<Option<u128>> {
     // Both legs must be supplied for an LST market; either absent ⇒ leg unavailable.
-    let (sol_acc, sp_acc) = match (sol_usd_acc, stake_pool_acc) {
-        (Some(a), Some(b)) => (a, b),
-        _ => return Ok(None),
+    let sol_acc = match sol_usd_acc {
+        Some(a) => a,
+        None => return Ok(None),
     };
 
     // SOL/USD underlying — bound to the shared canonical feed id. A wrong/unverified account hard-
@@ -329,9 +398,44 @@ fn compute_canonical(
         return Ok(None);
     }
 
-    // SPL stake pool — owner + key bound hard (caller bug if wrong); a parse failure / epoch-stale /
-    // degenerate rate degrades to None.
-    require!(sp_acc.owner == &SPL_STAKE_POOL_PROGRAM_ID, FusdError::InvalidStakePool);
+    let sample = match parse_bound_stake_pool(
+        stake_pool_acc,
+        expected_stake_pool,
+        &SPL_STAKE_POOL_PROGRAM_ID,
+        collateral_mint,
+        current_epoch,
+    )? {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    // canonical_ray = sol_usd_ray · total_lamports / pool_token_supply (floored). None on overflow
+    // ⇒ leg unavailable (never a fabricated price).
+    Ok(fusd_math::mul_div_floor(
+        sol_pv.price,
+        sample.total_lamports as u128,
+        sample.pool_token_supply as u128,
+    ))
+}
+
+/// Validate + parse a bound `StakePool` account against the expected key and OWNER program (the
+/// upstream `SPoo1…` deployment for C1 LST markets; the FUSION fork for canonical-primary
+/// markets — layouts are byte-identical). A present-but-WRONG account (bad owner / key) is a
+/// mis-built crank ⇒ hard error; an ABSENT account, parse failure, epoch lag beyond
+/// `MAX_STAKE_POOL_EPOCH_LAG`, or a pool whose `pool_mint` is not this market's collateral
+/// degrades to `None` (the caller decides freeze vs withhold semantics).
+fn parse_bound_stake_pool(
+    stake_pool_acc: Option<&UncheckedAccount>,
+    expected_stake_pool: &Pubkey,
+    expected_owner: &Pubkey,
+    collateral_mint: &Pubkey,
+    current_epoch: u64,
+) -> Result<Option<crate::stake_pool::StakePoolSample>> {
+    let sp_acc = match stake_pool_acc {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+    require!(sp_acc.owner == expected_owner, FusdError::InvalidStakePool);
     require_keys_eq!(sp_acc.key(), *expected_stake_pool, FusdError::InvalidStakePool);
     let sample = {
         let data = sp_acc.try_borrow_data().map_err(|_| FusdError::InvalidStakePool)?;
@@ -343,18 +447,27 @@ fn compute_canonical(
     if current_epoch.saturating_sub(sample.last_update_epoch) > MAX_STAKE_POOL_EPOCH_LAG {
         return Ok(None);
     }
-    // Bind the pool's LST mint to the market's collateral. A gov-misconfigured pool (correct key,
-    // wrong underlying asset) degrades the leg to None — pricing the wrong LST would silently
-    // mis-cap the collateral. The stake-pool analog of the CLMM leg's per-crank mint check (audit #21).
+    // Bind the pool's mint to the market's collateral. A gov-misconfigured pool (correct key,
+    // wrong underlying asset) degrades to None — pricing the wrong token would silently
+    // mis-price the collateral. The stake-pool analog of the CLMM leg's per-crank mint check.
     if sample.pool_mint != collateral_mint.to_bytes() {
         return Ok(None);
     }
+    Ok(Some(sample))
+}
 
-    // canonical_ray = sol_usd_ray · total_lamports / pool_token_supply (floored). None on overflow
-    // ⇒ leg unavailable (never a fabricated price).
-    Ok(fusd_math::mul_div_floor(
-        sol_pv.price,
-        sample.total_lamports as u128,
-        sample.pool_token_supply as u128,
-    ))
+/// Canonical-primary composition: scale a SOL/USD view into a fuSOL/USD view by the pool rate
+/// (`total_lamports / pool_token_supply`), price AND conf (floored — `conf/price` ratios and the
+/// Pyth↔SB deviation are scale-invariant, so every downstream aggregate check keeps its meaning).
+/// `None` on a degenerate rate or overflow ⇒ the caller withholds (never a fabricated price).
+fn scale_view(v: &PriceView, total_lamports: u64, pool_token_supply: u64) -> Option<PriceView> {
+    if total_lamports == 0 || pool_token_supply == 0 {
+        return None;
+    }
+    Some(PriceView {
+        price: fusd_math::mul_div_floor(v.price, total_lamports as u128, pool_token_supply as u128)?,
+        conf: fusd_math::mul_div_floor(v.conf, total_lamports as u128, pool_token_supply as u128)?,
+        expo: v.expo,
+        publish_ts: v.publish_ts,
+    })
 }

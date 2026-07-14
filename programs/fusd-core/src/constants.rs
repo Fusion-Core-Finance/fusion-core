@@ -496,7 +496,24 @@ pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
 /// canonical rate is treated as stale → leg unavailable → mints freeze. Pools crank once per epoch
 /// (`UpdateStakePoolBalance`); a 1–2 epoch lag moves the rate negligibly, but a long-dead pool is
 /// rejected. The canonical leg is a manipulation-resistant FLOOR, so mild staleness is conservative.
+/// Shared by the canonical-primary (fuSOL) mode, where a lagged pool WITHHOLDS the commit entirely
+/// (no market feed exists to fall back on — the cache ages into the staleness machinery).
 pub const MAX_STAKE_POOL_EPOCH_LAG: u64 = 2;
+
+/// The FUSION stake-pool FORK program — the pinned upstream-compatible SPL Stake Pool deployment
+/// backing fuSOL (vendor/spl-stake-pool: `declare_id!` swap only; controlled by the immutable
+/// Allocation Controller). A canonical-primary market's bound `lst_stake_pool` account must be
+/// owned by THIS program (the C1 LST leg keeps `SPL_STAKE_POOL_PROGRAM_ID` — external LSTs live
+/// under the upstream deployment). Account layout is byte-identical to upstream, so
+/// `stake_pool::parse` applies unchanged.
+pub const FUSION_STAKE_POOL_PROGRAM_ID: Pubkey =
+    pubkey!("3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi");
+
+/// Upper clamp on `MarketOracle.liquidity_haircut_bps` (canonical-primary mode's conservative
+/// stand-in for a market corridor). 20% is far above any sane discount for a native stake pool
+/// with a permissionless active-stake exit — the clamp only stops a fat-fingered init from
+/// bricking the market's borrowing power entirely.
+pub const MAX_LIQUIDITY_HAIRCUT_BPS: u16 = 2_000;
 
 /// Metaplex Token Metadata program — the CPI target of `create_fusd_metadata` (the fUSD mint's
 /// on-chain name/symbol/uri, so wallets stop showing "Unknown Token"). Hardcoded like the other

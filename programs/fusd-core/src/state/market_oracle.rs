@@ -77,12 +77,33 @@ pub struct MarketOracle {
     pub lst_stake_pool: Pubkey,
 
     pub bump: u8,
+
+    /// Canonical-primary oracle mode (fuSOL): `1` = this market's PRICE IS the composed
+    /// `sol_usd × stake_pool_rate` — the bound Pyth/Switchboard feeds are the SOL/USD legs
+    /// (init-enforced `pyth_feed_id == PYTH_SOL_USD_FEED_ID`) and `update_price` scales both
+    /// parsed views by the bound pool's `total_lamports / pool_token_supply` before aggregation,
+    /// so `spot` AND `debt_spot` both track pool NAV (a negative-NAV finalization propagates to
+    /// the liquidation path on the next crank). Requires `lst_stake_pool` set (owner = the
+    /// FUSION stake-pool fork, not `SPoo1…`), no DEX pools bound (no venue exists pre-listing;
+    /// the TWAP corridor is optional in this mode and deferred until a fuSOL venue design lands),
+    /// and `liquidity_haircut_bps > 0`. `0` (zeroed on every pre-carve account) = the market-feed
+    /// oracle, byte-identical to prior behavior. INIT-ONLY. Carved from `_reserved`.
+    pub canonical_primary: u8,
+    /// Liquidity haircut (bps) applied to the COLLATERAL (mint/LTV) price in canonical-primary
+    /// mode — the conservative stand-in for a market corridor while no fuSOL DEX venue exists
+    /// (`spot = composed_nav × (10_000 − haircut) / 10_000`, after the −k·σ confidence haircut).
+    /// The debt/liquidation price is NOT haircut (it wants the conservative HIGH side). Clamped
+    /// `[1, MAX_LIQUIDITY_HAIRCUT_BPS]` in mode 1; MUST be 0 in mode 0 (unused). INIT-ONLY.
+    /// Carved from `_reserved`.
+    pub liquidity_haircut_bps: u16,
+
     /// Forward-compat reserve. WIDENED 32 → 64 bytes pre-launch (layout-freeze checklist): a Borsh
     /// account cannot grow without realloc post-launch, so carve-from-`_reserved` headroom is free
     /// now and impossible later. Carve new fields from the HEAD; old accounts' zeroed bytes must
     /// decode as the new field's `0 = disabled/none` sentinel. Holds feed-rebind and future
-    /// oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62.)
-    pub _reserved: [u8; 30],
+    /// oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62;
+    /// `canonical_primary` + `liquidity_haircut_bps` carved 3 more: was 30.)
+    pub _reserved: [u8; 27],
 }
 
 impl MarketOracle {
@@ -95,5 +116,6 @@ impl MarketOracle {
         + 2                         // liq_max_divergence_bps
         + 32                        // lst_stake_pool (C1 LST canonical-rate leg)
         + 1                         // bump
-        + 30; // reserved (62 → 30 for lst_stake_pool; widened 32 → 64 for freeze headroom)
+        + 1 + 2                     // canonical_primary, liquidity_haircut_bps (fuSOL mode)
+        + 27; // reserved (62 → 30 for lst_stake_pool → 27 for the fuSOL mode fields)
 }

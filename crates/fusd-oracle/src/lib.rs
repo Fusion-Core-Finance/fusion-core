@@ -113,6 +113,15 @@ pub struct OracleConfig {
     /// `MIN(market, canonical)` before the −k·σ haircut (debt/redemption pricing is left on the raw
     /// market price — we don't force the worst case on redeemers).
     pub canonical_required: bool,
+    /// Canonical-primary (fuSOL) markets: `true` makes the DEX-TWAP corridor OPTIONAL for mint
+    /// mode — a market with NO DEX pool bound can still reach `Ok` (there is no venue to sample
+    /// pre-listing), while a PRESENT-but-divergent TWAP still freezes mints (a material market
+    /// discount blocks new borrowing exactly as before). `false` (default, every pre-existing
+    /// market) keeps the corridor load-bearing: an absent TWAP freezes mints. NEVER set for
+    /// markets whose price comes from an external market feed — the corridor is their
+    /// manipulation rail; a canonical-primary market's rail is the stake-pool rate itself plus
+    /// the mandatory liquidity haircut.
+    pub twap_corridor_optional: bool,
 }
 
 /// Validated, asymmetric price + permitted-actions mode. Always returned — even with
@@ -241,8 +250,13 @@ pub fn aggregate(
                 && s.expo == pyth.expo
                 && deviation_bps(pyth.price, s.price) <= cfg.max_deviation_bps
         })
-        && dex_twap
-            .is_some_and(|t| deviation_bps(pyth.price, t) <= cfg.twap_max_divergence_bps)
+        && (if cfg.twap_corridor_optional {
+            // Canonical-primary: corridor enforced only when a TWAP is PRESENT (none may exist
+            // pre-listing); a present-but-divergent TWAP still freezes mints.
+            dex_twap.is_none_or(|t| deviation_bps(pyth.price, t) <= cfg.twap_max_divergence_bps)
+        } else {
+            dex_twap.is_some_and(|t| deviation_bps(pyth.price, t) <= cfg.twap_max_divergence_bps)
+        })
         && plausible
         // C1: an LST market cannot mint without a healthy canonical rate to bound the market price.
         && (!cfg.canonical_required || canonical.is_some());
@@ -292,6 +306,7 @@ mod tests {
         band_upper_ray: 0,
         liq_max_divergence_bps: 0, // liquidation-divergence gate disabled by default (pre-B3)
         canonical_required: false, // C1 LST canonical leg off by default (non-LST markets)
+        twap_corridor_optional: false, // corridor load-bearing by default (pre-fuSOL behavior)
     };
     const NOW: Timestamp = 1_000;
 

@@ -51,6 +51,13 @@ interface OracleCfg {
   twapWindowSecs: number;      // >= 300 (clamp)
   twapMinSamples: number;      // >= 3 (clamp)
   twapMaxStalenessSecs: number;
+  // Optional later-added knobs; omitted = disabled (matches on-chain 0/default sentinels).
+  priceBandLowerRay?: number | string; // C6 plausibility rail (RAY-scaled)
+  priceBandUpperRay?: number | string;
+  liqMaxDivergenceBps?: number;        // B3 liquidation-divergence gate
+  lstStakePool?: string;               // C1 LST canonical leg / fuSOL fork pool binding
+  canonicalPrimary?: boolean;          // fuSOL canonical-primary mode
+  liquidityHaircutBps?: number;        // mandatory > 0 when canonicalPrimary
 }
 interface MarketCfg {
   collateralMint: string;
@@ -104,7 +111,7 @@ function loadWallet(): anchor.Wallet {
   const path = process.env.ANCHOR_WALLET || `${os.homedir()}/.config/solana/id.json`;
   return new anchor.Wallet(Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(path, "utf8")))));
 }
-const opt = (s: string): Pk => (s ? new PublicKey(s) : PublicKey.default);
+const opt = (s?: string): Pk => (s ? new PublicKey(s) : PublicKey.default);
 
 async function trySend(label: string, fn: () => Promise<string>) {
   try {
@@ -202,6 +209,14 @@ async function main() {
         maxAgeSecs: new BN(o.maxAgeSecs), kBps: o.kBps,
         twapWindowSecs: new BN(o.twapWindowSecs), twapMinSamples: o.twapMinSamples,
         twapMaxStalenessSecs: new BN(o.twapMaxStalenessSecs),
+        // Later-added args (C6 band / B3 liq-divergence / C1 LST / fuSOL canonical-primary),
+        // config-driven with disabled defaults so pre-existing market configs keep working.
+        priceBandLowerRay: new BN(o.priceBandLowerRay ?? 0),
+        priceBandUpperRay: new BN(o.priceBandUpperRay ?? 0),
+        liqMaxDivergenceBps: o.liqMaxDivergenceBps ?? 0,
+        lstStakePool: opt(o.lstStakePool),
+        canonicalPrimary: o.canonicalPrimary ?? false,
+        liquidityHaircutBps: o.liquidityHaircutBps ?? 0,
       }).accounts({
         authority: me, config, collateralMint: coll, quoteMint: new PublicKey(m.quoteMint),
         market, marketOracle, dexTwap, systemProgram: SystemProgram.programId,

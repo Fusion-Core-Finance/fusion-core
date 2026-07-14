@@ -6161,8 +6161,11 @@
         {
           "name": "lst_stake_pool",
           "docs": [
-            "LST market; verified in the handler (owner == `SPL_STAKE_POOL_PROGRAM_ID`, key ==",
-            "`market_oracle.lst_stake_pool`). Absent/stale/degenerate ⇒ leg unavailable → mints freeze."
+            "market (owner == `SPL_STAKE_POOL_PROGRAM_ID`) — absent/stale/degenerate ⇒ leg unavailable →",
+            "mints freeze; (b) the canonical-primary (fuSOL) mode (owner ==",
+            "`FUSION_STAKE_POOL_PROGRAM_ID`) — the pool rate IS the price's rate leg, so",
+            "absent/stale/degenerate ⇒ mints freeze AND the commit is WITHHELD (no market feed exists to",
+            "fall back on). Key always == `market_oracle.lst_stake_pool`; a wrong account hard-reverts."
           ],
           "optional": true
         },
@@ -8901,9 +8904,29 @@
               "`Pubkey::default()` (zero) for a non-LST market (leg disabled). When set, this market is an",
               "LST market: minting requires a fresh canonical rate, and the collateral price is capped at",
               "`MIN(market, sol_usd · stake_pool_rate)`. The collateral mint must be 9-decimal (SPL pool",
-              "mints are, so `total_lamports / pool_token_supply` is the whole-token SOL/LST rate directly)."
+              "mints are, so `total_lamports / pool_token_supply` is the whole-token SOL/LST rate directly).",
+              "In canonical-primary mode (below) this binds the FUSION fork pool instead and is REQUIRED."
             ],
             "type": "pubkey"
+          },
+          {
+            "name": "canonical_primary",
+            "docs": [
+              "Canonical-primary oracle mode (fuSOL): the market's price IS `sol_usd × pool_rate` — no",
+              "external market feed for the collateral exists. Requires: `lst_stake_pool` set (the FUSION",
+              "fork pool — owner-checked at every crank against `FUSION_STAKE_POOL_PROGRAM_ID`),",
+              "`pyth_feed_id == PYTH_SOL_USD_FEED_ID` (the bound feeds ARE the SOL/USD legs), NO DEX",
+              "pools, `liquidity_haircut_bps > 0`, and a 9-decimal collateral mint. INIT-ONLY."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "liquidity_haircut_bps",
+            "docs": [
+              "Mandatory (>0) in canonical-primary mode, clamped `<= MAX_LIQUIDITY_HAIRCUT_BPS`; must be",
+              "0 otherwise. Applied to the collateral (mint/LTV) price only — see `MarketOracle`."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -9829,18 +9852,47 @@
             "type": "u8"
           },
           {
+            "name": "canonical_primary",
+            "docs": [
+              "Canonical-primary oracle mode (fuSOL): `1` = this market's PRICE IS the composed",
+              "`sol_usd × stake_pool_rate` — the bound Pyth/Switchboard feeds are the SOL/USD legs",
+              "(init-enforced `pyth_feed_id == PYTH_SOL_USD_FEED_ID`) and `update_price` scales both",
+              "parsed views by the bound pool's `total_lamports / pool_token_supply` before aggregation,",
+              "so `spot` AND `debt_spot` both track pool NAV (a negative-NAV finalization propagates to",
+              "the liquidation path on the next crank). Requires `lst_stake_pool` set (owner = the",
+              "FUSION stake-pool fork, not `SPoo1…`), no DEX pools bound (no venue exists pre-listing;",
+              "the TWAP corridor is optional in this mode and deferred until a fuSOL venue design lands),",
+              "and `liquidity_haircut_bps > 0`. `0` (zeroed on every pre-carve account) = the market-feed",
+              "oracle, byte-identical to prior behavior. INIT-ONLY. Carved from `_reserved`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "liquidity_haircut_bps",
+            "docs": [
+              "Liquidity haircut (bps) applied to the COLLATERAL (mint/LTV) price in canonical-primary",
+              "mode — the conservative stand-in for a market corridor while no fuSOL DEX venue exists",
+              "(`spot = composed_nav × (10_000 − haircut) / 10_000`, after the −k·σ confidence haircut).",
+              "The debt/liquidation price is NOT haircut (it wants the conservative HIGH side). Clamped",
+              "`[1, MAX_LIQUIDITY_HAIRCUT_BPS]` in mode 1; MUST be 0 in mode 0 (unused). INIT-ONLY.",
+              "Carved from `_reserved`."
+            ],
+            "type": "u16"
+          },
+          {
             "name": "_reserved",
             "docs": [
               "Forward-compat reserve. WIDENED 32 → 64 bytes pre-launch (layout-freeze checklist): a Borsh",
               "account cannot grow without realloc post-launch, so carve-from-`_reserved` headroom is free",
               "now and impossible later. Carve new fields from the HEAD; old accounts' zeroed bytes must",
               "decode as the new field's `0 = disabled/none` sentinel. Holds feed-rebind and future",
-              "oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62.)"
+              "oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62;",
+              "`canonical_primary` + `liquidity_haircut_bps` carved 3 more: was 30.)"
             ],
             "type": {
               "array": [
                 "u8",
-                30
+                27
               ]
             }
           }

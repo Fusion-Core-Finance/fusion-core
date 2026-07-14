@@ -803,6 +803,8 @@ pub fn default_oracle_args() -> InitMarketOracleArgs {
         liq_max_divergence_bps: 0,
         // C1 LST canonical-rate leg OFF by default (non-LST market).
         lst_stake_pool: Pubkey::default(),
+        canonical_primary: false,
+        liquidity_haircut_bps: 0,
     }
 }
 
@@ -910,6 +912,26 @@ pub fn set_stake_pool(
     data[266..274].copy_from_slice(&pool_token_supply.to_le_bytes());
     data[274..282].copy_from_slice(&last_update_epoch.to_le_bytes());
     set_raw_account(svm, key, data, fusd_core::constants::SPL_STAKE_POOL_PROGRAM_ID);
+}
+
+/// As [`set_stake_pool`], but owned by `owner` — the canonical-primary (fuSOL) mode binds a pool
+/// owned by the FUSION stake-pool FORK (`FUSION_STAKE_POOL_PROGRAM_ID`), not the upstream `SPoo1…`.
+pub fn set_stake_pool_owned(
+    svm: &mut LiteSVM,
+    key: &Pubkey,
+    pool_mint: &Pubkey,
+    total_lamports: u64,
+    pool_token_supply: u64,
+    last_update_epoch: u64,
+    owner: Pubkey,
+) {
+    let mut data = vec![0u8; 320];
+    data[0] = 1; // AccountType::StakePool
+    data[162..194].copy_from_slice(pool_mint.as_ref());
+    data[258..266].copy_from_slice(&total_lamports.to_le_bytes());
+    data[266..274].copy_from_slice(&pool_token_supply.to_le_bytes());
+    data[274..282].copy_from_slice(&last_update_epoch.to_le_bytes());
+    set_raw_account(svm, key, data, owner);
 }
 
 /// As [`set_pyth_price`], but the account is owned by `owner_program` (D3 — to exercise a migrated
@@ -1316,6 +1338,8 @@ pub fn bootstrap_oracle_full(
         price_band_upper_ray: band_upper_ray,
         liq_max_divergence_bps,
         lst_stake_pool: Pubkey::default(),
+        canonical_primary: false,
+        liquidity_haircut_bps: 0,
     };
     send(svm, &[init_market_oracle_ix(&gov.pubkey(), coll, &quote, args)], gov, &[])
         .expect("init_market_oracle");
@@ -1360,10 +1384,65 @@ pub fn bootstrap_oracle_lst(
         price_band_upper_ray: 0,
         liq_max_divergence_bps: 0,
         lst_stake_pool: stake_pool,
+        canonical_primary: false,
+        liquidity_haircut_bps: 0,
     };
     send(svm, &[init_market_oracle_ix(&gov.pubkey(), coll, &quote, args)], gov, &[])
         .expect("init_market_oracle (LST)");
     (OracleHandles { quote, orca_pool, raydium_pool: Pubkey::default(), pyth, sb, feed_id }, stake_pool)
+}
+
+/// Bootstrap a CANONICAL-PRIMARY (fuSOL) market oracle: the bound Pyth feed is the shared SOL/USD
+/// id, no DEX pools (the TWAP corridor is optional in this mode), a FORK-owned stake pool is
+/// bound, and the mandatory liquidity haircut is set. Returns the handles + the stake-pool key
+/// (fabricate it with [`set_stake_pool_owned`] + `FUSION_STAKE_POOL_PROGRAM_ID`).
+pub fn bootstrap_oracle_fusol(
+    svm: &mut LiteSVM,
+    gov: &Keypair,
+    coll: &Pubkey,
+    liquidity_haircut_bps: u16,
+) -> (OracleHandles, Pubkey) {
+    use fusd_core::constants::{
+        DEFAULT_ORACLE_CONF_BPS, DEFAULT_ORACLE_DEVIATION_BPS, DEFAULT_ORACLE_K_BPS,
+        DEFAULT_ORACLE_MAX_AGE_SECS, DEFAULT_TWAP_DIVERGENCE_BPS, PYTH_SOL_USD_FEED_ID,
+    };
+    let quote = create_quote_mint(svm, gov, FUSD_DECIMALS);
+    let pyth = Pubkey::new_unique();
+    let sb = Pubkey::new_unique();
+    let stake_pool = Pubkey::new_unique();
+    let args = InitMarketOracleArgs {
+        pyth_feed_id: PYTH_SOL_USD_FEED_ID,
+        switchboard_feed: sb,
+        orca_pool: Pubkey::default(),
+        raydium_pool: Pubkey::default(),
+        max_conf_bps: DEFAULT_ORACLE_CONF_BPS,
+        max_deviation_bps: DEFAULT_ORACLE_DEVIATION_BPS,
+        twap_max_divergence_bps: DEFAULT_TWAP_DIVERGENCE_BPS,
+        max_age_secs: DEFAULT_ORACLE_MAX_AGE_SECS,
+        k_bps: DEFAULT_ORACLE_K_BPS,
+        twap_window_secs: 300,
+        twap_min_samples: 3,
+        twap_max_staleness_secs: 300,
+        price_band_lower_ray: 0,
+        price_band_upper_ray: 0,
+        liq_max_divergence_bps: 0,
+        lst_stake_pool: stake_pool,
+        canonical_primary: true,
+        liquidity_haircut_bps,
+    };
+    send(svm, &[init_market_oracle_ix(&gov.pubkey(), coll, &quote, args)], gov, &[])
+        .expect("init_market_oracle (fusol)");
+    (
+        OracleHandles {
+            quote,
+            orca_pool: Pubkey::default(),
+            raydium_pool: Pubkey::default(),
+            pyth,
+            sb,
+            feed_id: PYTH_SOL_USD_FEED_ID,
+        },
+        stake_pool,
+    )
 }
 
 pub fn dev_set_price_ix(gov: &Pubkey, coll: &Pubkey, spot: u128) -> Instruction {
