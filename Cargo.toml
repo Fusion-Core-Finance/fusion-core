@@ -1,5 +1,8 @@
 [workspace]
 members = ["programs/*", "crates/*", "integration-tests"]
+# vendor/ carries the pinned SPL Stake Pool fork as its OWN standalone workspace (newer
+# solana-* crate line — see vendor/spl-stake-pool/UPSTREAM.md); never unify it into this one.
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]

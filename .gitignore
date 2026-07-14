@@ -45,3 +45,6 @@ proptest-regressions/
 # Local-only session memory (never commit to the public repo)
 /CLAUDE.md
 /.internal/
+
+# Vendored fork build artifacts (own workspace, own target dir)
+/vendor/spl-stake-pool/target/

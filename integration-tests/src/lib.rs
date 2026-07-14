@@ -48,6 +48,29 @@ pub use fusd_core::state::{GlobalParam, MarketParam};
 pub const SO_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/deploy/fusd_core.so");
 pub const SPL_TOKEN_ID: Pubkey = spl_token::ID;
 
+/// The fuSOL stake-pool FORK program id (vendor/spl-stake-pool — `declare_id!` swap only; see
+/// UPSTREAM.md). Tests load the mainnet-dumped upstream `.so` at this address: the one source
+/// diff is unused at runtime, so the dump is behaviorally identical to a from-source fork build.
+pub const STAKE_POOL_FORK_ID: Pubkey =
+    solana_sdk::pubkey!("3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi");
+/// Mainnet dump of the upstream SPL Stake Pool program (gitignored; re-create with
+/// `scripts/fetch-spl-stake-pool.sh`).
+pub const STAKE_POOL_SO_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/spl_stake_pool.so");
+
+/// Load the stake-pool fork into `svm` at [`STAKE_POOL_FORK_ID`] (plain v2 loader — the pool
+/// program never reads its own ProgramData, and the fork ships sealed/immutable anyway).
+pub fn load_stake_pool_fork(svm: &mut LiteSVM) {
+    let elf = std::fs::read(STAKE_POOL_SO_PATH).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {STAKE_POOL_SO_PATH}: {e}\n\
+             the stake-pool tests load the dumped upstream program — fetch it first:\n\
+                 bash scripts/fetch-spl-stake-pool.sh"
+        )
+    });
+    svm.add_program(STAKE_POOL_FORK_ID, &elf);
+}
+
 // --- fixed scenario knobs shared across tests ---
 pub const COLL_DECIMALS: u8 = 9; // a SOL-like collateral
 pub const FUSD_DECIMALS: u8 = 6; // fUSD

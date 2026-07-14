@@ -1,0 +1,24 @@
+# Standalone workspace for the vendored SPL Stake Pool fork (see UPSTREAM.md for the pin).
+# Deliberately NOT a member of the fusion-core root workspace (root `exclude = ["vendor"]`):
+# upstream is on the solana-* v3/v4 modular crates + a newer toolchain line, and unifying that
+# dependency graph into the anchor 0.32.1 / solana 2.3 workspace is neither needed nor wanted.
+# Build the deployable artifact with `cargo build-sbf --manifest-path program/Cargo.toml` from
+# this directory (platform tools per the upstream pin — see UPSTREAM.md).
+#
+# The [workspace.lints] table below is carried verbatim from the upstream workspace root because
+# program/Cargo.toml inherits it via `[lints] workspace = true`.
+
+[workspace]
+resolver = "2"
+members = ["program"]
+
+[workspace.lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("frozen-abi", "no-entrypoint"))',
+]
+
+# Upstream CI builds with this Solana CLI / platform-tools line (carried for documentation).
+[workspace.metadata.cli]
+solana = "3.1.14"
