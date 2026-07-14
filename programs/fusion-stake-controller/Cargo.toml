@@ -1,0 +1,44 @@
+[package]
+name = "fusion-stake-controller"
+description = "fuSOL Native Stake Share Pool — the immutable Allocation Controller (see ../../docs/fusion-docs.md and docs/stake-pool)"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "fusion_stake_controller"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# INERT here — this program has no dev oracle. Declared because `scripts/ci-checks.sh` passes
+# `--features dev-oracle` to every program under programs/ (cargo errors on undefined features).
+dev-oracle = []
+
+[dependencies]
+# `init-if-needed`: `set_preference` both creates a position's Preference PDA on first use and
+# re-targets it on a later change through ONE instruction (the spec's once-per-epoch change
+# counter lives in the account, so close+recreate would erase it).
+anchor-lang = { workspace = true, features = ["event-cpi", "init-if-needed"] }
+anchor-spl = { workspace = true }
+fusion-stake-math = { workspace = true }
+fusion-stake-view = { workspace = true }
+# Required by `#[account(zero_copy)]` (EpochState); min_const_generics mirrors fusd-core.
+bytemuck = { version = "1", features = ["min_const_generics"] }
+# On-chain `security.txt` (Neodyme). Emitted only in the deployable program (gated
+# `not(no-entrypoint)`), never in CPI/lib consumers — same posture as fusd-core.
+solana-security-txt = "1.1.1"
+
+# Silence the cfg flags that Anchor/Solana entrypoint macros reference but we don't enable
+# (mirrors fusd-core).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("anchor-debug", "custom-heap", "custom-panic", "solana"))',
+    # The #[program] entrypoint macro uses cfg(target_os = "solana"); declare it so host
+    # (cargo test) builds don't warn. The SBF target sets it for real.
+    'cfg(target_os, values("solana"))',
+] }

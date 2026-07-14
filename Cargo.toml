@@ -16,6 +16,8 @@ anchor-lang = "0.32.1"
 anchor-spl = "0.32.1"
 fusd-math = { path = "crates/fusd-math" }
 fusd-oracle = { path = "crates/fusd-oracle" }
+fusion-stake-math = { path = "crates/fusion-stake-math" }
+fusion-stake-view = { path = "crates/fusion-stake-view" }
 
 # Money math must keep overflow checks in release — never silently wrap.
 [profile.release]

@@ -7,6 +7,7 @@ skip-lint = false
 
 [programs.localnet]
 fusd_core = "FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud"
+fusion_stake_controller = "Fz3z1yh21PQ59smsPjmjeyK6ngh8KoK6PiPxUgCgspFq"
 
 [registry]
 url = "https://api.apr.dev"

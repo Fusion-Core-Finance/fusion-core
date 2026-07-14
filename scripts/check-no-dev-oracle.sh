@@ -65,9 +65,29 @@ elif printf '%s\n' "$so_syms" | grep -qi "DevSetPrice"; then
   fail=1
 fi
 
+# fusion-stake-controller: its dev-oracle feature is inert (declared only because this workspace
+# passes --features dev-oracle to every program), but assert that stays true — no dev-gated
+# instruction may appear in its production artifacts — and pin its declared id the same way.
+ctrl_idl="target/idl/fusion_stake_controller.json"
+ctrl_expected_id="Fz3z1yh21PQ59smsPjmjeyK6ngh8KoK6PiPxUgCgspFq"  # = declare_id! (programs/fusion-stake-controller/src/lib.rs)
+if [ -f "$ctrl_idl" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    ctrl_got_id="$(jq -r '.address' "$ctrl_idl")"
+  else
+    ctrl_got_id="$(grep -o '"address": *"[1-9A-HJ-NP-Za-km-z]*"' "$ctrl_idl" | head -1 | tr -d '" ' | cut -d: -f2)"
+  fi
+  if [ "$ctrl_got_id" != "$ctrl_expected_id" ]; then
+    echo "FAIL: controller IDL address '$ctrl_got_id' != declared id '$ctrl_expected_id' — was 'anchor keys sync' run?" >&2
+    fail=1
+  fi
+else
+  echo "FAIL: '$ctrl_idl' missing — the production build should emit the controller IDL." >&2
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "dev-oracle isolation BROKEN. Ensure no program-crate dependency enables the 'dev-oracle' feature." >&2
   exit 1
 fi
 
-echo "OK: production build is free of dev_set_price (IDL + .so clean)."
+echo "OK: production build is free of dev_set_price (IDL + .so clean; controller id pinned)."

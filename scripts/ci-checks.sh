@@ -21,7 +21,7 @@ step "1/7  Pure-crate host tests (fusd-math + fusd-oracle + fusd-core + fusion-s
 # fusd-core's host-side unit tests carry the layout/discipline pins (the MarketParam borsh-tag
 # pin, cdp/governance boundary algebra, Borsh SPACE pins) — they must run in CI, not just the
 # litesvm lane.
-cargo test -p fusd-math -p fusd-oracle -p fusd-core -p fusion-stake-math -p fusion-stake-view
+cargo test -p fusd-math -p fusd-oracle -p fusd-core -p fusion-stake-math -p fusion-stake-view -p fusion-stake-controller
 
 step "2/7  Clippy lint gate (fusd-oracle both feature configs + fusd-math + fusion-stake-*; warnings are errors)"
 cargo clippy -p fusd-oracle --all-targets -- -D warnings
@@ -32,6 +32,7 @@ cargo clippy -p fusd-math --all-targets -- -D warnings
 # which is NOT clippy-gated (pre-existing manual_is_multiple_of hits under clippy 1.93).
 cargo clippy -p fusion-stake-math --all-targets --no-deps -- -D warnings
 cargo clippy -p fusion-stake-view --all-targets --no-deps -- -D warnings
+cargo clippy -p fusion-stake-controller --all-targets --no-deps -- -D warnings
 
 step "3/7  Build the dev-oracle .so (needed by the litesvm integration tests)"
 anchor build -- --features dev-oracle
