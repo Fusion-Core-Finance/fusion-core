@@ -67,11 +67,17 @@ IDLE → RECONCILE → FINALIZE → PREFERENCES → PLAN-DIRECTED → PLAN-NEUTR
   validators with remaining capacity, in deterministic capacity rounds with an epoch-rotating
   remainder. The plan is rejected if directed shares exceed supply, and `finalize_plan` proves
   conservation on-chain: `directed + neutral grants + recorded shortfall == productive`, exactly.
-- **Rebalance**: a monotonic, epoch-rotated two-pass cursor (draining validators first, then
-  deficit/surplus moves), each action amount capped by hysteresis (max(50 SOL, 5 bps)), a 3%
-  global churn budget, and a 0.5% per-validator move cap. The caller supplies accounts, never
-  choices — the record must sit at exactly the cursor's index or the call fails without
-  advancing.
+- **Rebalance**: a monotonic, epoch-rotated two-pass cursor — pass 0 executes only draining
+  validators' decreases/removals ("drains first" preserved globally), pass 1 the ordinary
+  deficit/surplus moves, each pass walking the planned validator ordinals from an
+  epoch-rotating start index. Each action amount is capped by hysteresis (max(50 SOL, 5 bps)),
+  a 3% global churn budget, and a 0.5% per-validator move cap. The caller supplies accounts,
+  never choices — the record must sit at exactly the cursor's index or the call fails without
+  advancing. **Recorded spec deviation:** the spec orders ordinary moves by per-epoch global
+  greatest-deficit/surplus first. Verifying a global maximum on-chain requires the full record
+  set in one transaction — infeasible at 1024 validators — and any subset-based selection would
+  let a caller steer the choice by omission. Cursor order is a deterministic, batchable,
+  non-steerable approximation of that intent; it does NOT execute greatest-deficit-first.
 
 Validator admission is objective: any vote account can be registered; explicit directed support
 of at least 500 SOL admits it as a Candidate (directed stake only, 0.25% cap); two consecutive
@@ -128,3 +134,10 @@ runtime). Building the fork from source requires the upstream platform-tools lin
 7. Aggregate Active-validator capacity ≥ 100% of productive AUM at public opening.
 8. Upgrade authorities set to `None` on both programs, independently verified — THEN open
    deposits, not before.
+9. External audit (received 2026-07-14): findings remediated in-tree, closure evidence
+   published.
+
+**Open spec-amendment item (pending economic review):** the rebalance's epoch-rotated two-pass
+cursor order deviates from the spec's per-epoch global greatest-deficit-first priority (see
+"How allocation works" above). The deviation is deliberate and recorded; the spec text has not
+yet been amended to match the implemented order.

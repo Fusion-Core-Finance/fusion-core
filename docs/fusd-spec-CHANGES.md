@@ -6,6 +6,36 @@ breaking change to an action's guards/formula or an account's layout; `MINOR` ad
 account, or invariant; `PATCH` corrects a citation, formula, or wording without changing what the
 code does. Every entry notes the `master` commit the spec was pinned to.
 
+## v1.4.0
+
+Pins the 2026-07-14 external-audit remediation of the canonical-primary (fuSOL) oracle mode (the
+implementing `master` commit). Two freshness/grace fixes + one hardening, all mode-1-only; mode-0
+and C1 markets are byte-identical.
+
+- **FUSOL-04 (High) — 1/16-epoch pool-update grace.** Canonical-primary freshness was the C1
+  leg's lenient `epoch-lag ≤ 2`; a keeper could keep committing a pre-loss pool rate on fresh
+  SOL/USD. `update_price` now withholds the mode-1 commit (freeze mints, don't advance
+  `spot_updated_slot`) unless the pool finalized this epoch, or finalized last epoch and the
+  current slot is within `epoch_slots / POOL_UPDATE_GRACE_DIVISOR` (= 16) of the epoch's first
+  slot (`Clock` + `EpochSchedule::get()`, warmup-aware).
+- **FUSOL-05 (High) — negative-NAV liquidation grace.** New `MarketOracle.last_canonical_rate_ray:
+  u128` (carved from `_reserved`, 27 → 11; SPACE unchanged; init-zeroed; `market_oracle` now
+  `mut` in `update_price`). A committed mode-1 rate strictly below the stored one is a pool NAV
+  decrease (keyed on the rate, so a SOL/USD dip never arms) and monotonically arms
+  `Market.liq_grace_until = max(current, slot + LIQ_RESUME_GRACE_SLOTS)` — the loss commits
+  immediately (spec §12.4) AND borrowers get the standard cure window before liquidation.
+- **FUSOL-09 (Medium) — canonical leg gate.** `canonical` is now forced `None` whenever
+  `canonical_primary` is set, so a caller supplying the optional SOL/USD account no longer turns
+  the crank into a hard `InvalidStakePool` (the generic C1 `compute_canonical` owner-checks the
+  upstream `SPoo1…` program against the FORK-owned pool).
+
+Versioning: **MINOR** — a new account field from documented reserved padding + tightened
+freshness/grace guards on a mode gated entirely behind the opt-in `canonical_primary` flag; every
+existing market's behavior is unchanged. (The remaining audit findings — FUSOL-01/02/03 deposit
+security + min-delegation, FUSOL-06 genesis atomicity, FUSOL-07 rebalance-order disclosure,
+FUSOL-08 test coverage — are controller/tooling changes recorded in the stake-pool docs, not the
+fusd-core spec.)
+
 ## v1.3.0
 
 Pins the 2026-07-14 canonical-primary oracle mode (the implementing `master` commit) — the fuSOL
