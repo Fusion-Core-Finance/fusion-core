@@ -3,7 +3,8 @@
  * pinned SPL stake-pool FORK) to a live fuSOL pool.
  *
  * Creates the predeclared stake-pool-side account set, then runs the controller's two-step
- * genesis, idempotently (re-running skips whatever already exists), for any cluster:
+ * genesis, idempotently (re-running VERIFIES whatever already exists — existence alone is
+ * never trusted — and skips it), for any cluster:
  *
  *   a. the fuSOL mint            legacy SPL, 9 decimals, mint authority = the pool
  *                                withdraw-authority PDA, freeze authority None
@@ -11,15 +12,27 @@
  *                                InitializeAccount3, NOT an ATA), token authority = the
  *                                controller's [b"maintenance"] PDA — becomes the pool's
  *                                manager fee account
- *   c. StakePool + ValidatorList fresh keypair accounts owned by the FORK program, rent-exempt
- *                                and zeroed; the list sized to EXACTLY MAX_VALIDATORS = 1024
- *   d. the reserve stake account space-200 stake account, staker + withdrawer = the pool
+ *   c. the reserve stake account space-200 stake account, staker + withdrawer = the pool
  *                                withdraw-authority PDA, funded above rent (the surplus becomes
  *                                the genesis pool value — the Initialize CPI mints exactly that
  *                                many fuSOL to the maintenance vault, seeding crank rewards and
  *                                anchoring the 1:1 share price)
- *   e. initialize_controller     records the address set in ControllerConfig
- *   f. initialize_pool           the one-time stake-pool Initialize CPI; seals the controller
+ *   d. initialize_controller     records the address set in ControllerConfig — BEFORE any
+ *                                fork-owned account exists on-chain
+ *   e. StakePool + ValidatorList fresh keypair accounts owned by the FORK program (rent-exempt,
+ *      + initialize_pool         zeroed; the list sized to EXACTLY MAX_VALIDATORS = 1024),
+ *                                created in the SAME atomic transaction as the controller's
+ *                                one-time initialize_pool (the stake-pool Initialize CPI +
+ *                                seal), so they are claimed the instant they exist
+ *
+ * ORDERING IS SECURITY-CRITICAL. The fork's `Initialize` is publicly callable and the
+ * StakePool account is NOT a signer of it: a fork-owned, zeroed, rent-exempt StakePool (or
+ * ValidatorList) left on-chain between transactions can be observed and initialized by ANYONE
+ * with their own manager/staker/mint/list — permanently burning the predeclared address (an
+ * initialized pool can never be reset). Hence (d) records the addresses before anything
+ * claimable exists, and (e) creates both fork-owned accounts inside the very transaction whose
+ * initialize_pool claims them — there is no cross-transaction window in which a bare account
+ * is hijackable.
  *
  * The five predeclared addresses are Keypairs persisted under keys/fusol/ (keys/ is gitignored)
  * so a partial run resumes with the SAME addresses. Once ControllerConfig exists on-chain, ITS
@@ -107,21 +120,6 @@ function loadOrCreateKeypair(dir: string, name: string): anchor.web3.Keypair {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file, JSON.stringify(Array.from(kp.secretKey)), { mode: 0o600 });
   return kp;
-}
-
-async function trySend(label: string, fn: () => Promise<string>) {
-  try {
-    const sig = await fn();
-    console.log(`  ✓ ${label}  (${sig.slice(0, 16)}…)`);
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    // 0x0 = "account already in use" from an `init` on an existing PDA.
-    if (/already in use|already exists|custom program error: 0x0\b/i.test(msg)) {
-      console.log(`  • ${label} — already initialized, skipping`);
-    } else {
-      throw new Error(`${label} FAILED: ${msg}`);
-    }
-  }
 }
 
 // SPL Token InitializeMint2 (tag 20): decimals, mint authority, freeze authority = COption::None.
@@ -219,9 +217,96 @@ async function main() {
 
   const pwAuthority = poolWithdrawAuthority(addrs.stakePool);
 
-  const ensure = async (label: string, address: Pk, create: () => Promise<string>) => {
-    if (await connection.getAccountInfo(address)) {
-      console.log(`  • ${label} — already exists, skipping`);
+  // --- resume-state verifiers -----------------------------------------------------------------
+  // Existence is NOT sufficiency: a resumed run must never skip an account that exists at the
+  // right address with the WRONG contents (a hijacked / mis-created account exists too). Each
+  // verifier returns null when the on-chain state matches this deployment's expectations,
+  // otherwise a description of the mismatch — which aborts the bootstrap.
+  type AcctInfo = anchor.web3.AccountInfo<Buffer>;
+  const pkAt = (data: Buffer, off: number) => new PublicKey(data.subarray(off, off + 32));
+
+  // SPL Mint layout: mint_authority COption (tag u32 @0, key @4), supply u64 @36,
+  // decimals u8 @44, is_initialized u8 @45, freeze_authority COption (tag u32 @46, key @50).
+  const verifyMint = (info: AcctInfo): string | null => {
+    if (!info.owner.equals(TOKEN_PROGRAM)) return `owner ${info.owner.toBase58()} is not the SPL Token program`;
+    if (info.data.length !== MINT_SPACE) return `size ${info.data.length} != ${MINT_SPACE}`;
+    if (info.data[45] !== 1) return "mint is not initialized";
+    if (info.data[44] !== 9) return `decimals ${info.data[44]} != 9`;
+    if (info.data.readUInt32LE(0) !== 1 || !pkAt(info.data, 4).equals(pwAuthority))
+      return `mint authority is not the pool withdraw-authority PDA ${pwAuthority.toBase58()}`;
+    if (info.data.readUInt32LE(46) !== 0) return "freeze authority is set (must be None)";
+    return null;
+  };
+
+  // SPL Token Account layout: mint @0, owner @32, amount u64 @64, delegate COption (tag u32
+  // @72, key @76), state u8 @108, is_native COption<u64> @109, delegated_amount u64 @121,
+  // close_authority COption (tag u32 @129, key @133).
+  const verifyVault = (info: AcctInfo): string | null => {
+    if (!info.owner.equals(TOKEN_PROGRAM)) return `owner ${info.owner.toBase58()} is not the SPL Token program`;
+    if (info.data.length !== TOKEN_ACCOUNT_SPACE) return `size ${info.data.length} != ${TOKEN_ACCOUNT_SPACE}`;
+    if (info.data[108] !== 1) return "token account is not in the Initialized state";
+    if (!pkAt(info.data, 0).equals(addrs.fusolMint)) return "token account mint is not the fuSOL mint";
+    if (!pkAt(info.data, 32).equals(maintenanceAuthority()))
+      return `token authority is not the maintenance PDA ${maintenanceAuthority().toBase58()}`;
+    if (info.data.readUInt32LE(72) !== 0) return "a delegate is set (must be None)";
+    if (info.data.readUInt32LE(129) !== 0) return "a close authority is set (must be None)";
+    return null;
+  };
+
+  // StakeStateV2 (bincode): discriminant u32 @0 (1 = Initialized, 2 = Stake), then Meta
+  // { rent_exempt_reserve u64 @4, authorized.staker @12, authorized.withdrawer @44 }.
+  const verifyReserve = (info: AcctInfo): string | null => {
+    if (!info.owner.equals(StakeProgram.programId)) return `owner ${info.owner.toBase58()} is not the stake program`;
+    if (info.data.length !== STAKE_ACCOUNT_SPACE) return `size ${info.data.length} != ${STAKE_ACCOUNT_SPACE}`;
+    const tag = info.data.readUInt32LE(0);
+    if (tag !== 1 && tag !== 2) return `stake state ${tag} is neither Initialized nor Stake`;
+    if (!pkAt(info.data, 12).equals(pwAuthority) || !pkAt(info.data, 44).equals(pwAuthority))
+      return `staker/withdrawer is not the pool withdraw-authority PDA ${pwAuthority.toBase58()}`;
+    return null;
+  };
+
+  // Borsh StakePool head (pinned fork state.rs): account_type u8 @0 (1 = StakePool), manager
+  // @1, staker @33, stake_deposit_authority @65, stake_withdraw_bump_seed u8 @97,
+  // validator_list @98, reserve_stake @130, pool_mint @162, manager_fee_account @194,
+  // token_program_id @226. Together these pin the pool's ENTIRE authority graph to this
+  // controller — a pool initialized by anyone else fails here.
+  const verifyStakePool = (info: AcctInfo): string | null => {
+    if (!info.owner.equals(STAKE_POOL_FORK_ID)) return `owner ${info.owner.toBase58()} is not the stake-pool fork`;
+    if (info.data.length !== STAKE_POOL_SPACE) return `size ${info.data.length} != ${STAKE_POOL_SPACE}`;
+    if (info.data[0] !== 1) return `account_type ${info.data[0]} != StakePool`;
+    const expected: [string, number, Pk][] = [
+      ["manager", 1, poolAuthority()],
+      ["staker", 33, poolAuthority()],
+      ["stake_deposit_authority", 65, depositAuthority()],
+      ["validator_list", 98, addrs.validatorList],
+      ["reserve_stake", 130, addrs.reserveStake],
+      ["pool_mint", 162, addrs.fusolMint],
+      ["manager_fee_account", 194, addrs.maintenanceVault],
+      ["token_program_id", 226, TOKEN_PROGRAM],
+    ];
+    for (const [name, off, want] of expected) {
+      const got = pkAt(info.data, off);
+      if (!got.equals(want)) return `${name} is ${got.toBase58()}, expected ${want.toBase58()}`;
+    }
+    return null;
+  };
+
+  /** Create `address` via `create` if absent; if it already exists, VERIFY it before skipping. */
+  const ensure = async (
+    label: string,
+    address: Pk,
+    verify: (info: AcctInfo) => string | null,
+    create: () => Promise<string>
+  ) => {
+    const info = await connection.getAccountInfo(address);
+    if (info) {
+      const mismatch = verify(info);
+      if (mismatch)
+        throw new Error(
+          `${label} at ${address.toBase58()} already exists but does not match the expected ` +
+            `state: ${mismatch} — refusing to resume around a wrong account`
+        );
+      console.log(`  • ${label} — already exists, state verified, skipping`);
       return;
     }
     const sig = await create();
@@ -231,7 +316,7 @@ async function main() {
 
   console.log("── stake-pool-side accounts ──");
   // (a) the fuSOL mint: 9 decimals, mint authority = the pool withdraw-authority PDA, no freeze.
-  await ensure("fuSOL mint", addrs.fusolMint, async () =>
+  await ensure("fuSOL mint", addrs.fusolMint, verifyMint, async () =>
     provider.sendAndConfirm(
       new Transaction()
         .add(SystemProgram.createAccount({
@@ -244,7 +329,7 @@ async function main() {
 
   // (b) the maintenance vault: plain fuSOL token account, authority = the [b"maintenance"] PDA
   // (InitializeAccount3 leaves delegate + close authority None, as initialize_pool requires).
-  await ensure("maintenance vault", addrs.maintenanceVault, async () =>
+  await ensure("maintenance vault", addrs.maintenanceVault, verifyVault, async () =>
     provider.sendAndConfirm(
       new Transaction()
         .add(SystemProgram.createAccount({
@@ -255,27 +340,9 @@ async function main() {
       [kpVault]
     ));
 
-  // (c) StakePool + ValidatorList: fork-owned, rent-exempt, zeroed (the Initialize CPI fills them).
-  await ensure("StakePool account", addrs.stakePool, async () =>
-    provider.sendAndConfirm(
-      new Transaction().add(SystemProgram.createAccount({
-        fromPubkey: me, newAccountPubkey: addrs.stakePool, lamports: await rent(STAKE_POOL_SPACE),
-        space: STAKE_POOL_SPACE, programId: STAKE_POOL_FORK_ID,
-      })),
-      [kpPool]
-    ));
-  await ensure(`ValidatorList account (${VALIDATOR_LIST_SPACE} bytes = ${MAX_VALIDATORS} entries)`, addrs.validatorList, async () =>
-    provider.sendAndConfirm(
-      new Transaction().add(SystemProgram.createAccount({
-        fromPubkey: me, newAccountPubkey: addrs.validatorList, lamports: await rent(VALIDATOR_LIST_SPACE),
-        space: VALIDATOR_LIST_SPACE, programId: STAKE_POOL_FORK_ID,
-      })),
-      [kpList]
-    ));
-
-  // (d) the reserve stake account: staker + withdrawer = the pool withdraw-authority PDA,
+  // (c) the reserve stake account: staker + withdrawer = the pool withdraw-authority PDA,
   // funded reserveExtra above rent (counted as genesis pool value by the Initialize CPI).
-  await ensure("reserve stake account", addrs.reserveStake, async () =>
+  await ensure("reserve stake account", addrs.reserveStake, verifyReserve, async () =>
     provider.sendAndConfirm(
       new Transaction()
         .add(SystemProgram.createAccount({
@@ -290,15 +357,19 @@ async function main() {
       [kpReserve]
     ));
 
-  // (e) initialize_controller — records the address set; gated to the upgrade authority via
-  // the canonical ProgramData PDA.
+  // (d) initialize_controller — records the address set BEFORE any fork-owned account exists
+  // on-chain (nothing claimable may ever precede its controller); gated to the upgrade
+  // authority via the canonical ProgramData PDA. The earlier ControllerConfig fetch already
+  // proves genuine prior completion — no blind "already in use" skip.
   console.log("\n── controller genesis ──");
-  const programData = PublicKey.findProgramAddressSync(
-    [CONTROLLER_PROGRAM_ID.toBuffer()],
-    BPF_LOADER_UPGRADEABLE
-  )[0];
-  await trySend("initialize_controller", () =>
-    program.methods.initializeController({
+  if (cfgInfo) {
+    console.log("  • initialize_controller — ControllerConfig already exists (addresses adopted above), skipping");
+  } else {
+    const programData = PublicKey.findProgramAddressSync(
+      [CONTROLLER_PROGRAM_ID.toBuffer()],
+      BPF_LOADER_UPGRADEABLE
+    )[0];
+    const sig = await program.methods.initializeController({
       stakePool: addrs.stakePool, validatorList: addrs.validatorList,
       reserveStake: addrs.reserveStake, fusolMint: addrs.fusolMint,
       maintenanceVault: addrs.maintenanceVault,
@@ -306,23 +377,90 @@ async function main() {
       payer: me, programData, config: configPda, epochState: epochState(),
       poolAuthority: poolAuthority(), depositAuthority: depositAuthority(),
       maintenanceAuthority: maintenanceAuthority(), systemProgram: SystemProgram.programId,
-    }).rpc());
+    }).rpc();
+    console.log(`  ✓ initialize_controller  (${sig.slice(0, 16)}…)`);
+  }
 
-  // (f) initialize_pool — the one-time stake-pool Initialize CPI; seals the controller. A
-  // sealed controller means genesis already completed (re-running would hit AlreadySealed).
+  // (e) StakePool + ValidatorList creation AND initialize_pool (the one-time stake-pool
+  // Initialize CPI; seals the controller) in ONE atomic transaction. The fork's Initialize is
+  // publicly callable and the StakePool account is not a signer of it, so the fork-owned
+  // zeroed accounts must never exist outside the transaction that claims them (see the header
+  // comment). A sealed controller means genesis already completed — the seal is written in the
+  // same instruction as the CPI, so sealed is proof the pool was initialized by THIS controller.
+  console.log("\n── stake-pool genesis ──");
   const sealed = (await program.account.controllerConfig.fetch(configPda)).sealed as boolean;
   if (sealed) {
-    console.log("  • initialize_pool — controller already sealed, skipping");
+    const info = await connection.getAccountInfo(addrs.stakePool);
+    const mismatch = info ? verifyStakePool(info) : "account does not exist";
+    if (mismatch) throw new Error(`controller is sealed but the StakePool account is wrong: ${mismatch}`);
+    console.log("  • initialize_pool — controller already sealed, StakePool state verified, skipping");
   } else {
-    await trySend("initialize_pool", () =>
-      program.methods.initializePool().accounts({
-        payer: me, config: configPda, stakePool: addrs.stakePool,
-        poolAuthority: poolAuthority(), depositAuthority: depositAuthority(),
-        poolWithdrawAuthority: pwAuthority, validatorList: addrs.validatorList,
-        reserveStake: addrs.reserveStake, fusolMint: addrs.fusolMint,
-        maintenanceVault: addrs.maintenanceVault, maintenanceAuthority: maintenanceAuthority(),
-        stakePoolProgram: STAKE_POOL_FORK_ID, tokenProgram: TOKEN_PROGRAM,
-      }).rpc());
+    // Triage a pre-existing pool/list (a resume of an older, non-atomic run). Initialized data
+    // under an UNSEALED controller can only mean someone else ran the fork's public Initialize
+    // against the predeclared account — a hijack. Fail loudly; never skip past it.
+    const needsCreate = async (label: string, address: Pk, keypair: anchor.web3.Keypair, space: number) => {
+      const info = await connection.getAccountInfo(address);
+      if (!info) {
+        if (!address.equals(keypair.publicKey))
+          throw new Error(
+            `${label} ${address.toBase58()} is recorded in ControllerConfig but does not exist, ` +
+              `and the local keypair does not match — cannot sign its creation`
+          );
+        return true;
+      }
+      if (!info.owner.equals(STAKE_POOL_FORK_ID))
+        throw new Error(`${label} ${address.toBase58()} exists but is owned by ${info.owner.toBase58()}, not the stake-pool fork`);
+      if (info.data.length !== space)
+        throw new Error(`${label} ${address.toBase58()} has size ${info.data.length}, expected ${space}`);
+      if (info.data[0] !== 0)
+        throw new Error(
+          `${label} ${address.toBase58()} is ALREADY INITIALIZED while the controller is not sealed — ` +
+            `the predeclared account was hijacked via the fork's public Initialize and can never be ` +
+            `reused; this deployment needs a fresh address set (new keypairs + fresh controller genesis)`
+        );
+      console.log(`  • ${label} — exists (fork-owned, still zeroed), claiming it in the atomic init`);
+      return false;
+    };
+    const needPool = await needsCreate("StakePool account", addrs.stakePool, kpPool, STAKE_POOL_SPACE);
+    const needList = await needsCreate("ValidatorList account", addrs.validatorList, kpList, VALIDATOR_LIST_SPACE);
+
+    const tx = new Transaction();
+    const signers: anchor.web3.Keypair[] = [];
+    if (needPool) {
+      tx.add(SystemProgram.createAccount({
+        fromPubkey: me, newAccountPubkey: addrs.stakePool, lamports: await rent(STAKE_POOL_SPACE),
+        space: STAKE_POOL_SPACE, programId: STAKE_POOL_FORK_ID,
+      }));
+      signers.push(kpPool);
+    }
+    if (needList) {
+      tx.add(SystemProgram.createAccount({
+        fromPubkey: me, newAccountPubkey: addrs.validatorList, lamports: await rent(VALIDATOR_LIST_SPACE),
+        space: VALIDATOR_LIST_SPACE, programId: STAKE_POOL_FORK_ID,
+      }));
+      signers.push(kpList);
+    }
+    tx.add(await program.methods.initializePool().accounts({
+      payer: me, config: configPda, stakePool: addrs.stakePool,
+      poolAuthority: poolAuthority(), depositAuthority: depositAuthority(),
+      poolWithdrawAuthority: pwAuthority, validatorList: addrs.validatorList,
+      reserveStake: addrs.reserveStake, fusolMint: addrs.fusolMint,
+      maintenanceVault: addrs.maintenanceVault, maintenanceAuthority: maintenanceAuthority(),
+      stakePoolProgram: STAKE_POOL_FORK_ID, tokenProgram: TOKEN_PROGRAM,
+    }).instruction());
+    const steps = [
+      ...(needPool ? ["create StakePool"] : []),
+      ...(needList ? [`create ValidatorList (${VALIDATOR_LIST_SPACE} bytes = ${MAX_VALIDATORS} entries)`] : []),
+      "initialize_pool",
+    ];
+    const sig = await provider.sendAndConfirm(tx, signers);
+    console.log(`  ✓ ${steps.join(" + ")} — one atomic tx  (${sig.slice(0, 16)}…)`);
+
+    // Post-init verification: read the pool back and check the full recorded authority graph.
+    const info = await connection.getAccountInfo(addrs.stakePool);
+    const mismatch = info ? verifyStakePool(info) : "account does not exist";
+    if (mismatch) throw new Error(`initialize_pool landed but StakePool verification failed: ${mismatch}`);
+    console.log("  ✓ StakePool state verified (manager/staker/deposit authority/list/reserve/mint/fee vault)");
   }
 
   // The immutability-checklist manifest: every predeclared / derived address of the deployment.

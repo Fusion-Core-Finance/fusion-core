@@ -253,6 +253,8 @@ pub fn handler(ctx: Context<InitMarketOracle>, args: InitMarketOracleArgs) -> Re
     o.bump = ctx.bumps.market_oracle;
     o.canonical_primary = args.canonical_primary as u8;
     o.liquidity_haircut_bps = args.liquidity_haircut_bps;
-    o._reserved = [0u8; 27];
+    // 0 = no canonical-primary rate ever committed: the first crank seeds it, never arms grace.
+    o.last_canonical_rate_ray = 0;
+    o._reserved = [0u8; 11];
     Ok(())
 }

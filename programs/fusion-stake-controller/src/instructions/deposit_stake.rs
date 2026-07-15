@@ -3,11 +3,18 @@
 //! the pool rate, and credits the physical stake against the deposited validator's next
 //! finalized target (flow-first: a deposit is never split across validators in-transaction).
 //!
-//! **Client contract (upstream custom-deposit-authority semantics):** BEFORE this instruction,
-//! the user must have assigned the stake account's STAKER and WITHDRAWER authorities to the
-//! controller's `[b"deposit_authority"]` PDA (two `stake authorize` instructions, normally in
-//! the same transaction). The stake-pool program requires its recorded deposit authority to
-//! sign the inner re-authorize CPI; our `invoke_signed` provides that signature, and CPI
+//! **Atomic authority handoff (single-instruction flow, no pre-authorize step):** the
+//! `depositor` must sign as the stake account's CURRENT withdrawer (and staker, or the
+//! withdrawer's signature overrides the staker role — native stake `Authorize` rules). The
+//! handler itself CPIs two native stake `Authorize` instructions (Staker, then Withdrawer →
+//! the `[b"deposit_authority"]` PDA) with the depositor's signature, THEN performs the pool
+//! deposit in the same instruction. Handoff and deposit can never be observed separately, so
+//! no other party can slip a deposit between them and claim the minted fuSOL: only the owner's
+//! own transaction — with the owner's choice of `user_fusol_account` — ever moves the account.
+//! Do NOT pre-assign the authorities to the deposit PDA out-of-band: the PDA signs nothing but
+//! the exact `spl_cpi` allowlist, so a pre-authorized account cannot be recovered or deposited
+//! through this program. The stake-pool program then requires its recorded deposit authority
+//! to sign the inner re-authorize CPI; our `invoke_signed` provides that signature, and CPI
 //! signer privilege extends through the stake-pool program's nested stake-program calls.
 //! Activating, deactivating, locked, or wrong-validator stake is rejected upstream.
 //!
@@ -15,10 +22,15 @@
 //! rejected when it would push the validator past its LIFECYCLE cap — checked against the
 //! CANONICAL validator-list entry (live active + transient lamports; the controller never
 //! trusts its own cached balances) plus this account's lamports. Draining/Registered
-//! validators accept no stake deposits at all.
+//! validators accept no stake deposits at all. The cap check is only meaningful if the CPI
+//! provably targets the SAME validator, so the handler additionally (a) binds the deposited
+//! account's delegation voter to the record's vote account (parsed from the raw
+//! `StakeStateV2` bytes; non-Stake states rejected) and (b) re-derives the validator stake
+//! account from the record's vote + the canonical entry's seed suffix — never trusting the
+//! caller-supplied account, which upstream would happily resolve to a DIFFERENT validator.
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_lang::solana_program::sysvar;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -34,8 +46,10 @@ use fusion_stake_math::lifecycle::{lifecycle_cap, ValidatorStatus};
 #[event_cpi]
 #[derive(Accounts)]
 pub struct DepositStake<'info> {
-    /// The depositing user (event attribution + fee payer; the stake account's authorities
-    /// must already point at the deposit-authority PDA — see the module doc).
+    /// The depositing user — the stake account's CURRENT withdrawer (and staker, or the
+    /// withdrawer overrides): signs the in-instruction authority handoff (see the module doc),
+    /// which is what binds the minted fuSOL to the account's real owner. Also fee payer and
+    /// event attribution.
     #[account(mut)]
     pub depositor: Signer<'info>,
 
@@ -71,14 +85,15 @@ pub struct DepositStake<'info> {
     #[account(address = config.pool_withdraw_authority @ ControllerError::AddressMismatch)]
     pub pool_withdraw_authority: UncheckedAccount<'info>,
 
-    /// CHECK: the user's stake account to absorb — its full validation (state, lockup,
-    /// delegation to `vote_account`, authorities) is upstream's; only its lamports feed the
-    /// cap pre-check here.
-    #[account(mut)]
+    /// CHECK: the user's stake account to absorb — handler-verified to be a stake-program
+    /// Stake-state account delegated to `vote_account` (the cap pre-check is only sound
+    /// against the validator it actually lands on); state/lockup/authority validation is
+    /// upstream's.
+    #[account(mut, owner = crate::constants::STAKE_PROGRAM_ID @ ControllerError::InvalidUserStakeAccount)]
     pub user_stake_account: UncheckedAccount<'info>,
 
-    /// CHECK: the vote account the deposited stake is delegated to (upstream rejects a
-    /// mismatch between this and the stake's actual voter via the validator stake account).
+    /// CHECK: the vote account the deposited stake is delegated to (handler-verified against
+    /// the stake account's own delegation AND the canonical list entry).
     pub vote_account: UncheckedAccount<'info>,
 
     /// The controller's record for that validator — must exist (register + admission first).
@@ -88,7 +103,10 @@ pub struct DepositStake<'info> {
     )]
     pub validator_record: Box<Account<'info, ValidatorRecord>>,
 
-    /// CHECK: the validator's pool stake account (re-derived and enforced upstream).
+    /// CHECK: the validator's pool stake account — handler-verified to equal the PDA derived
+    /// from the RECORD's vote account + the canonical entry's seed suffix (upstream re-derives
+    /// too, but from this account's own delegation, which would bind the deposit to whatever
+    /// validator the caller supplied instead of the one that passed the cap check).
     #[account(mut)]
     pub validator_stake_account: UncheckedAccount<'info>,
 
@@ -143,9 +161,22 @@ pub fn handler(ctx: Context<DepositStake>) -> Result<()> {
         ControllerError::ValidatorNotInPool
     );
 
+    // The deposited account's OWN delegation must point at this record's vote account (raw
+    // StakeStateV2 parse; non-Stake states fail closed). Without this, the cap math below
+    // would run against a validator the stake never reaches.
+    {
+        let stake_data = ctx.accounts.user_stake_account.try_borrow_data()?;
+        let voter = fusion_stake_view::stake_account::delegation_voter(&stake_data)
+            .ok_or(ControllerError::InvalidUserStakeAccount)?;
+        require!(
+            voter == record.vote_account.to_bytes(),
+            ControllerError::StakeDelegationMismatch
+        );
+    }
+
     // Cap pre-check against CANONICAL state: live entry balances + the whole deposited
     // account vs the lifecycle cap over the canonical total.
-    {
+    let validator_seed = {
         let pool_data = ctx.accounts.stake_pool.try_borrow_data()?;
         let pool = fusion_stake_view::stake_pool::parse(&pool_data)
             .map_err(|_| error!(ControllerError::InvalidStakePoolAccount))?;
@@ -172,6 +203,44 @@ pub fn handler(ctx: Context<DepositStake>) -> Result<()> {
             ACTIVE_VALIDATOR_CAP_BPS,
         );
         require!(physical_after <= cap, ControllerError::ValidatorCapExceeded);
+        entry.validator_seed_suffix
+    };
+
+    // Pin the forwarded validator stake account to the PDA of the CAP-CHECKED validator.
+    // Upstream derives this address from the account's own delegation voter — sound for the
+    // pool, but it would silently redirect the deposit to any other pool validator if the
+    // controller forwarded a caller-chosen account unchecked.
+    let expect_validator_stake = spl_cpi::derive_validator_stake(
+        &record.vote_account,
+        &ctx.accounts.stake_pool.key(),
+        validator_seed,
+    );
+    require!(
+        ctx.accounts.validator_stake_account.key() == expect_validator_stake,
+        ControllerError::AddressMismatch
+    );
+
+    // Atomic authority handoff: the depositor (current authority) hands staker then withdrawer
+    // to the deposit-authority PDA inside THIS instruction — the stake program verifies the
+    // depositor's actual authority on each CPI, and a failed pool deposit rolls the handoff
+    // back with everything else.
+    let deposit_authority_key = ctx.accounts.deposit_authority.key();
+    for role in [spl_cpi::STAKE_AUTHORIZE_STAKER, spl_cpi::STAKE_AUTHORIZE_WITHDRAWER] {
+        let ix = spl_cpi::stake_authorize(
+            &ctx.accounts.user_stake_account.key(),
+            &ctx.accounts.depositor.key(),
+            &deposit_authority_key,
+            role,
+        );
+        invoke(
+            &ix,
+            &[
+                ctx.accounts.user_stake_account.to_account_info(),
+                ctx.accounts.clock.to_account_info(),
+                ctx.accounts.depositor.to_account_info(),
+                ctx.accounts.stake_program.to_account_info(),
+            ],
+        )?;
     }
 
     let deposit_lamports = ctx.accounts.user_stake_account.lamports();

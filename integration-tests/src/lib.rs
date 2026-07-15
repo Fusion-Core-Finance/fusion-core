@@ -2869,6 +2869,9 @@ pub const E_CTRL_POSITION_STILL_OPEN: u32 = 6033;
 pub const E_CTRL_INVALID_RENT_RECIPIENT: u32 = 6034;
 pub const E_CTRL_INVALID_REWARD_RECIPIENT: u32 = 6035;
 pub const E_CTRL_PREFERENCE_CHANGE_LIMIT2: u32 = 6036;
+pub const E_CTRL_INVALID_USER_STAKE_ACCOUNT: u32 = 6037;
+pub const E_CTRL_STAKE_DELEGATION_MISMATCH: u32 = 6038;
+pub const E_CTRL_MINIMUM_DELEGATION_UNAVAILABLE: u32 = 6039;
 
 // ============================ controller: typed account readers ============================
 
@@ -3241,6 +3244,7 @@ pub fn ctrl_plan_directed_batch_ix(
         maintenance_vault: g.maintenance_vault,
         maintenance_authority: g.maintenance_authority,
         crank_reward_account: *crank_reward_account,
+        stake_program: STAKE_PROGRAM_ID,
         token_program: SPL_TOKEN_ID,
         event_authority: controller_event_authority_pda(),
         program: fusion_stake_controller::ID,
@@ -3353,6 +3357,7 @@ pub fn ctrl_finish_epoch_ix(g: &PoolGenesis, crank_reward_account: &Pubkey) -> I
             maintenance_vault: g.maintenance_vault,
             maintenance_authority: g.maintenance_authority,
             crank_reward_account: *crank_reward_account,
+            stake_program: STAKE_PROGRAM_ID,
             token_program: SPL_TOKEN_ID,
             event_authority: controller_event_authority_pda(),
             program: fusion_stake_controller::ID,
@@ -3573,4 +3578,166 @@ pub fn create_vote_account(
     );
     send(svm, &ixs, node, &[vote]).expect("create vote account (real vote program)");
     vote.pubkey()
+}
+
+// ============================ controller: shared crank/fixture helpers ============================
+//
+// Shared by the fuSOL scenario files (deposit-stake, allocation, epoch machine). Each helper
+// mirrors an on-chain derivation the handler re-checks, so a drift fails the test loudly.
+
+/// Rewrite a REAL vote account (created by [`create_vote_account`]) into a "healthy"
+/// observation through the reference serializer: positive epoch-credit growth for epochs 0..32
+/// and a far-future freshness slot (saturates to fresh in the observation policy). Synthesized
+/// because litesvm runs no leader schedule, so real votes can never land.
+pub fn make_vote_healthy(svm: &mut LiteSVM, vote: &Pubkey) {
+    use solana_sdk::vote::state::{BlockTimestamp, VoteState, VoteStateVersions};
+    let mut acct = svm.get_account(vote).expect("vote account exists");
+    let mut state = VoteState::deserialize(&acct.data).expect("real vote account parses");
+    state.epoch_credits = (0u64..32).map(|e| (e, 100 * (e + 1), 100 * e)).collect();
+    state.last_timestamp = BlockTimestamp { slot: 1_000_000, timestamp: 1 };
+    let mut data = vec![0u8; VoteStateVersions::vote_state_size_of(true)];
+    VoteState::serialize(&VoteStateVersions::new_current(state), &mut data)
+        .expect("serialize vote state");
+    acct.data = data;
+    svm.set_account(*vote, acct).unwrap();
+}
+
+/// One registered, healthy-observing real validator (vote account + `ValidatorRecord`).
+pub fn register_healthy_validator(svm: &mut LiteSVM, payer: &Keypair, commission: u8) -> Pubkey {
+    let node = Keypair::new();
+    let vote_kp = Keypair::new();
+    let vote = create_vote_account(svm, &node, &vote_kp, commission);
+    make_vote_healthy(svm, &vote);
+    send(svm, &[ctrl_register_validator_ix(&payer.pubkey(), &vote)], payer, &[])
+        .expect("register_validator");
+    vote
+}
+
+/// The current validator-list entry at `i` (fusion-stake-view parse over the live fork bytes).
+pub fn fork_list_entry(
+    svm: &LiteSVM,
+    validator_list: &Pubkey,
+    i: u32,
+) -> fusion_stake_view::validator_list::ValidatorEntry {
+    let list = svm.get_account(validator_list).expect("validator list exists");
+    fusion_stake_view::validator_list::entry_at(&list.data, i).expect("list entry")
+}
+
+/// Build the 4N reconcile quads for consecutive list indices `[start, start+n)` from the LIVE
+/// validator list (the exact derivation `reconcile_batch` re-checks on-chain).
+pub fn reconcile_quads(svm: &LiteSVM, g: &PoolGenesis, start: u32, n: u32) -> Vec<AccountMeta> {
+    use fusion_stake_controller::spl_cpi;
+    let mut tail = Vec::new();
+    for i in start..start + n {
+        let entry = fork_list_entry(svm, &g.validator_list, i);
+        let vote = Pubkey::new_from_array(entry.vote_account_address);
+        let vstake =
+            spl_cpi::derive_validator_stake(&vote, &g.stake_pool, entry.validator_seed_suffix);
+        let tstake =
+            spl_cpi::derive_transient_stake(&vote, &g.stake_pool, entry.transient_seed_suffix);
+        tail.push(AccountMeta::new(vstake, false));
+        tail.push(AccountMeta::new(tstake, false));
+        tail.push(AccountMeta::new(validator_record_pda(&vote), false));
+        tail.push(AccountMeta::new_readonly(vote, false));
+    }
+    tail
+}
+
+/// `(validator_record [w], vote [])` pairs for `plan_directed_batch`.
+pub fn plan_pairs(votes: &[Pubkey]) -> Vec<AccountMeta> {
+    votes
+        .iter()
+        .flat_map(|v| {
+            [
+                AccountMeta::new(validator_record_pda(v), false),
+                AccountMeta::new_readonly(*v, false),
+            ]
+        })
+        .collect()
+}
+
+/// Writable `ValidatorRecord`s for `plan_neutral_batch`.
+pub fn neutral_records(votes: &[Pubkey]) -> Vec<AccountMeta> {
+    votes.iter().map(|v| AccountMeta::new(validator_record_pda(v), false)).collect()
+}
+
+/// Warp to the preference-window deadline and close the window (PREFERENCES → PLAN-DIRECTED).
+pub fn ctrl_close_window_at_deadline(svm: &mut LiteSVM, payer: &Keypair) {
+    let target = read_epoch_state(svm).preference_window_close_slot;
+    let cur = current_slot(svm);
+    if cur < target {
+        warp_slots(svm, target - cur);
+    }
+    send(svm, &[ctrl_close_preference_window_ix()], payer, &[]).expect("close_preference_window");
+}
+
+/// Overwrite a program-owned account's data with a re-serialized Anchor account value (state
+/// synthesis for fixtures/defensive probes; same lamports/owner, only the bytes change).
+pub fn overwrite_anchor_account<T: AccountSerialize>(svm: &mut LiteSVM, addr: Pubkey, value: &T) {
+    let mut acct = svm.get_account(&addr).expect("account exists");
+    let mut data = Vec::with_capacity(acct.data.len());
+    value.try_serialize(&mut data).expect("serialize account");
+    assert!(data.len() <= acct.data.len(), "serialized form fits the allocation");
+    data.resize(acct.data.len(), 0);
+    acct.data = data;
+    svm.set_account(addr, acct).expect("set_account");
+}
+
+/// Execute the pending ADMISSION add for `vote` (a planned Candidate without a list slot):
+/// `AddValidatorToPool` at the seed-0 derived pair. Cursor-independent per the engine's
+/// admission mode. Returns the tx metadata for event asserts.
+pub fn execute_admission_add(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    g: &PoolGenesis,
+    crank: &Pubkey,
+    vote: &Pubkey,
+) -> litesvm::types::TransactionMetadata {
+    use fusion_stake_controller::spl_cpi;
+    let vstake = spl_cpi::derive_validator_stake(vote, &g.stake_pool, 0);
+    let tstake = spl_cpi::derive_transient_stake(vote, &g.stake_pool, 0);
+    svm.expire_blockhash();
+    send(svm, &[ctrl_execute_next_action_ix(g, vote, &vstake, &tstake, crank)], payer, &[])
+        .expect("execute_next_action (admission AddValidatorToPool)")
+}
+
+/// Drive the REBALANCE walk to completion by mirroring the engine's own deterministic slot
+/// selection (`fusion_stake_controller::logic::rebalance_slot` over the live list), executing
+/// one action per call. Returns `(action_tag, lamports, vote)` per executed slot — the caller
+/// asserts the choices. Panics if any step fails (the mirror and the engine must agree).
+pub fn run_rebalance_walk(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    g: &PoolGenesis,
+    crank: &Pubkey,
+) -> Vec<(u8, u64, Pubkey)> {
+    use fusion_stake_controller::spl_cpi;
+    let mut out = Vec::new();
+    loop {
+        let es = read_epoch_state(svm);
+        let Some(slot) = fusion_stake_controller::logic::rebalance_slot(
+            es.rebalance_cursor,
+            es.plan_directed_cursor,
+            es.controller_epoch,
+        ) else {
+            break;
+        };
+        let entry = fork_list_entry(svm, &g.validator_list, slot.index as u32);
+        let vote = Pubkey::new_from_array(entry.vote_account_address);
+        let vstake =
+            spl_cpi::derive_validator_stake(&vote, &g.stake_pool, entry.validator_seed_suffix);
+        let tstake =
+            spl_cpi::derive_transient_stake(&vote, &g.stake_pool, entry.transient_seed_suffix);
+        svm.expire_blockhash();
+        let meta = send(
+            svm,
+            &[ctrl_execute_next_action_ix(g, &vote, &vstake, &tstake, crank)],
+            payer,
+            &[],
+        )
+        .expect("execute_next_action (walk step at the mirrored slot)");
+        let ev: fusion_stake_controller::events::RebalanceActionExecuted = single_event(&meta);
+        out.push((ev.action, ev.lamports, vote));
+    }
+    out
 }

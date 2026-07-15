@@ -390,8 +390,10 @@
     {
       "name": "deposit_stake",
       "docs": [
-        "Stake owner: deposit a fully active stake account delegated to a pool validator (the",
-        "account's staker+withdrawer must already be authorized to the deposit-authority PDA)."
+        "Stake owner: deposit a fully active stake account delegated to a pool validator. The",
+        "signer must be the account's current withdrawer authority; the instruction performs",
+        "the staker+withdrawer handoff to the deposit-authority PDA and the pool deposit",
+        "atomically (never pre-authorize out-of-band)."
       ],
       "discriminator": [
         160,
@@ -407,8 +409,10 @@
         {
           "name": "depositor",
           "docs": [
-            "The depositing user (event attribution + fee payer; the stake account's authorities",
-            "must already point at the deposit-authority PDA — see the module doc)."
+            "The depositing user — the stake account's CURRENT withdrawer (and staker, or the",
+            "withdrawer overrides): signs the in-instruction authority handoff (see the module doc),",
+            "which is what binds the minted fuSOL to the account's real owner. Also fee payer and",
+            "event attribution."
           ],
           "writable": true,
           "signer": true
@@ -481,15 +485,16 @@
         {
           "name": "user_stake_account",
           "docs": [
-            "delegation to `vote_account`, authorities) is upstream's; only its lamports feed the",
-            "cap pre-check here."
+            "Stake-state account delegated to `vote_account` (the cap pre-check is only sound",
+            "against the validator it actually lands on); state/lockup/authority validation is",
+            "upstream's."
           ],
           "writable": true
         },
         {
           "name": "vote_account",
           "docs": [
-            "mismatch between this and the stake's actual voter via the validator stake account)."
+            "the stake account's own delegation AND the canonical list entry)."
           ]
         },
         {
@@ -522,6 +527,11 @@
         },
         {
           "name": "validator_stake_account",
+          "docs": [
+            "from the RECORD's vote account + the canonical entry's seed suffix (upstream re-derives",
+            "too, but from this account's own delegation, which would bind the deposit to whatever",
+            "validator the caller supplied instead of the one that passed the cap check)."
+          ],
           "writable": true
         },
         {
@@ -1300,6 +1310,13 @@
           "writable": true
         },
         {
+          "name": "stake_program",
+          "docs": [
+            "`GetMinimumDelegation` the budget-exhausted condition compares against."
+          ],
+          "address": "Stake11111111111111111111111111111111111111"
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1945,6 +1962,13 @@
             "The caller's fuSOL account for the crank reward."
           ],
           "writable": true
+        },
+        {
+          "name": "stake_program",
+          "docs": [
+            "`GetMinimumDelegation` the drained threshold derives from."
+          ],
+          "address": "Stake11111111111111111111111111111111111111"
         },
         {
           "name": "token_program",
@@ -3319,6 +3343,21 @@
       "code": 6036,
       "name": "PreferenceChangeLimit2",
       "msg": "Preference already changed this epoch (close+recreate does not reset the limit)"
+    },
+    {
+      "code": 6037,
+      "name": "InvalidUserStakeAccount",
+      "msg": "User stake account is not a delegated Stake-state account owned by the stake program"
+    },
+    {
+      "code": 6038,
+      "name": "StakeDelegationMismatch",
+      "msg": "User stake account is not delegated to the target validator's vote account"
+    },
+    {
+      "code": 6039,
+      "name": "MinimumDelegationUnavailable",
+      "msg": "Stake program GetMinimumDelegation returned no or malformed return data"
     }
   ],
   "types": [

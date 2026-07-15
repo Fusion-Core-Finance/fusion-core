@@ -72,8 +72,10 @@ pub mod fusion_stake_controller {
         instructions::deposit_sol::handler(ctx, lamports)
     }
 
-    /// Stake owner: deposit a fully active stake account delegated to a pool validator (the
-    /// account's staker+withdrawer must already be authorized to the deposit-authority PDA).
+    /// Stake owner: deposit a fully active stake account delegated to a pool validator. The
+    /// signer must be the account's current withdrawer authority; the instruction performs
+    /// the staker+withdrawer handoff to the deposit-authority PDA and the pool deposit
+    /// atomically (never pre-authorize out-of-band).
     pub fn deposit_stake(ctx: Context<DepositStake>) -> Result<()> {
         instructions::deposit_stake::handler(ctx)
     }

@@ -18,12 +18,16 @@
 //!   fusd-core's parser (cross-checked against it in tests).
 //! - [`vote_state`]: the agave reference deserializer — see that module's doc for the exact
 //!   crate files verified.
+//! - [`stake_account`]: the native stake program's `StakeStateV2` (solana-stake-interface, the
+//!   version pinned by the vendored fork), round-trip-pinned against the real type serialized
+//!   with the stake program's own codec.
 //! - [`position`]: fusd-core's `state/position.rs`, pinned by a round-trip test that serializes
 //!   the real `Position` type (dev-dependency) and reads it back through the fixed offsets.
 
 #![cfg_attr(not(test), no_std)]
 
 pub mod position;
+pub mod stake_account;
 pub mod stake_pool;
 pub mod validator_list;
 pub mod vote_state;

@@ -496,9 +496,21 @@ pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
 /// canonical rate is treated as stale → leg unavailable → mints freeze. Pools crank once per epoch
 /// (`UpdateStakePoolBalance`); a 1–2 epoch lag moves the rate negligibly, but a long-dead pool is
 /// rejected. The canonical leg is a manipulation-resistant FLOOR, so mild staleness is conservative.
-/// Shared by the canonical-primary (fuSOL) mode, where a lagged pool WITHHOLDS the commit entirely
-/// (no market feed exists to fall back on — the cache ages into the staleness machinery).
+/// The canonical-primary (fuSOL) mode is STRICTER: there the pool rate IS the price (not a cap on a
+/// live market feed), so `update_price` additionally enforces the slot-relative
+/// [`POOL_UPDATE_GRACE_DIVISOR`] deadline and WITHHOLDS the commit beyond it.
 pub const MAX_STAKE_POOL_EPOCH_LAG: u64 = 2;
+
+/// Canonical-primary (fuSOL) pool-update grace divisor: a mode-1 pool whose balance was last
+/// finalized in the PREVIOUS epoch is accepted only while the current epoch is within its first
+/// `1/POOL_UPDATE_GRACE_DIVISOR` of slots (the keeper's window to land `UpdateStakePoolBalance`
+/// after an epoch boundary — the spec's POOL_UPDATE_GRACE). Beyond that — or at ≥ 2 epochs of lag —
+/// the crank WITHHOLDS the commit (freeze mints, freshness clock unmoved) instead of re-committing
+/// the old pool rate under a fresh SOL/USD leg: each such re-commit would refresh
+/// `spot_updated_slot` and keep a pre-loss rate borrowable indefinitely, defeating the staleness
+/// fuse. Applies ONLY to the canonical-primary branch of `update_price`; the C1 min-cap leg keeps
+/// the looser `MAX_STAKE_POOL_EPOCH_LAG` tolerance (there the rate only caps a live market feed).
+pub const POOL_UPDATE_GRACE_DIVISOR: u64 = 16;
 
 /// The FUSION stake-pool FORK program — the pinned upstream-compatible SPL Stake Pool deployment
 /// backing fuSOL (vendor/spl-stake-pool: `declare_id!` swap only; controlled by the immutable

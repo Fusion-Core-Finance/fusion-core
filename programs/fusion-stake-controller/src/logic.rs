@@ -166,7 +166,9 @@ pub struct ActionInputs {
     pub reserve_lamports: u64,
     /// Rent-exempt minimum of a stake account.
     pub stake_rent: u64,
-    /// The pinned upstream minimum delegation (minimum action size for increase/decrease).
+    /// The EFFECTIVE upstream minimum delegation (minimum action size for increase/decrease),
+    /// derived at runtime by the handler (`spl_cpi::effective_minimum_delegation`) — never the
+    /// bare `UPSTREAM_MINIMUM_DELEGATION` floor.
     pub min_delegation: u64,
     /// Reconcile observed the validator healthy this epoch (a single liveness failure freezes
     /// increases without forcing a decrease) AND the observation is current-epoch.
@@ -178,8 +180,9 @@ pub struct ActionInputs {
 /// THE deterministic action for one walk visit. The caller supplies accounts; it chooses
 /// nothing — a visit either yields exactly one action or a skip.
 ///
-/// Rules (deviations from the spec's global-max ordering are documented in
-/// `execute_next_action`'s module doc):
+/// Rules (this is CURSOR-ORDER execution, not the spec's global greatest-deficit-first
+/// priority — the documented deviation and its rationale live in `execute_next_action`'s
+/// module doc):
 /// - A live transient or an already-executed move this epoch skips (one move per validator per
 ///   epoch — upstream's own transient discipline).
 /// - Pass 0, Removable: `Remove` (the whole-account deactivation is the only exit for the

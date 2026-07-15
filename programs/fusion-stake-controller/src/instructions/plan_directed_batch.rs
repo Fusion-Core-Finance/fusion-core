@@ -39,8 +39,8 @@ use crate::constants::{
     ACTIVE_VALIDATOR_CAP_BPS, CANDIDATE_CAP_BPS, COMMISSION_CAP_PERCENT, CONTROLLER_SEED,
     EPOCH_STATE_SEED, FUSION_STAKE_POOL_PROGRAM_ID, MAINTENANCE_AUTHORITY_SEED,
     MIN_ACTIVATION_TARGET_LAMPORTS, POOL_ENTRY_STATUS_NONE, REMOVAL_DELAY_EPOCHS,
-    STAKE_ACCOUNT_SPACE, UPSTREAM_MINIMUM_DELEGATION, VALIDATOR_LIST_INDEX_UNSET,
-    VOTE_FRESHNESS_WINDOW_DIVISOR, VOTE_PROGRAM_ID,
+    STAKE_ACCOUNT_SPACE, VALIDATOR_LIST_INDEX_UNSET, VOTE_FRESHNESS_WINDOW_DIVISOR,
+    VOTE_PROGRAM_ID,
 };
 use crate::errors::ControllerError;
 use crate::logic::{observe_vote, phase_transition_allowed, VoteObservation};
@@ -86,6 +86,11 @@ pub struct PlanDirectedBatch<'info> {
     #[account(mut, constraint = crank_reward_account.mint == config.fusol_mint @ ControllerError::AddressMismatch)]
     pub crank_reward_account: Box<Account<'info, TokenAccount>>,
 
+    /// CHECK: the native stake program — CPI'd (read-only, no accounts) for the runtime
+    /// `GetMinimumDelegation` the drained threshold derives from.
+    #[account(address = crate::constants::STAKE_PROGRAM_ID)]
+    pub stake_program: UncheckedAccount<'info>,
+
     pub token_program: Program<'info, Token>,
     // remaining_accounts: 2N — (validator_record [w], vote_account []) pairs: list-slice pairs
     // from `plan_directed_cursor` first, then admission extras (UNSET-index records).
@@ -96,8 +101,12 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, PlanDirectedBatch<'info
     let stake_rent = Rent::get()?.minimum_balance(STAKE_ACCOUNT_SPACE);
     // "Drained": transient empty AND no legal decrease remains (active below the retention
     // floor plus one minimum-delegation move) — the whole-account Remove is then the only exit.
+    // The minimum is the RUNTIME effective value (what the pool enforces at CPI time): a
+    // constant below it would classify a validator the pool still blocks from decreasing as
+    // not-yet-drained, stranding it in Draining forever.
+    let min_delegation = crate::spl_cpi::effective_minimum_delegation()?;
     let drained_threshold = stake_rent
-        .checked_add(UPSTREAM_MINIMUM_DELEGATION.saturating_mul(2))
+        .checked_add(min_delegation.saturating_mul(2))
         .ok_or(ControllerError::MathOverflow)?;
     let freshness_window =
         EpochSchedule::get()?.get_slots_in_epoch(clock.epoch) / VOTE_FRESHNESS_WINDOW_DIVISOR;

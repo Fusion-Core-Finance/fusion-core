@@ -81,4 +81,10 @@ pub enum ControllerError {
     InvalidRewardRecipient,
     #[msg("Preference already changed this epoch (close+recreate does not reset the limit)")]
     PreferenceChangeLimit2,
+    #[msg("User stake account is not a delegated Stake-state account owned by the stake program")]
+    InvalidUserStakeAccount,
+    #[msg("User stake account is not delegated to the target validator's vote account")]
+    StakeDelegationMismatch,
+    #[msg("Stake program GetMinimumDelegation returned no or malformed return data")]
+    MinimumDelegationUnavailable,
 }

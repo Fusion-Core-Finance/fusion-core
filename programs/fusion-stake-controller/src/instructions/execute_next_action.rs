@@ -2,19 +2,24 @@
 //! remove) for the current walk slot. The caller chooses nothing: it must supply the accounts
 //! for the validator the controller derives.
 //!
-//! ## Determinism model (documented deviation from the spec's global-max ordering)
+//! ## Determinism model (documented deviation from the spec's global-priority ordering)
 //!
-//! The spec orders ordinary moves by GLOBAL greatest deficit/surplus. Verifying a global
-//! maximum on-chain requires the full record set in one transaction — infeasible at
-//! `MAX_VALIDATORS = 1024` under transaction account limits — and any subset-based selection
-//! would let a caller steer the choice by omission. This handler therefore enforces
-//! **monotonic cursor-order execution** (`logic::rebalance_slot`): two full passes over the
-//! planned validator ordinals — pass 0 executes ONLY Draining decreases and removals ("drains
-//! first" preserved globally), pass 1 the ordinary deficit/surplus moves — each pass walking
-//! from the epoch-rotating start index (`fusion_stake_math::targets::rotation_start`, the
-//! spec's tie-break rotation applied as walk order, so scarce budget/reserve is not
-//! permanently biased toward low indices). Exactly one validator per call; the passed record
-//! must sit at the cursor's index or the call fails WITHOUT advancing. Skips (hysteresis, live
+//! The spec's per-epoch rule orders ordinary moves by GLOBAL greatest deficit/surplus
+//! (greatest-deficit-first). This handler does NOT implement that priority — deliberately.
+//! Verifying a global maximum on-chain requires the full record set in one transaction —
+//! infeasible at `MAX_VALIDATORS = 1024` under transaction account limits — and any
+//! subset-based selection would let a caller steer the choice by omission. What it enforces
+//! instead is **monotonic cursor-order execution** (`logic::rebalance_slot`): two full passes
+//! over the planned validator ordinals — pass 0 executes ONLY Draining decreases and removals
+//! ("drains first" preserved globally), pass 1 the ordinary deficit/surplus moves in cursor
+//! order, NOT deficit order — each pass walking from the epoch-rotating start index
+//! (`fusion_stake_math::targets::rotation_start`, the spec's tie-break rotation applied as
+//! walk order, so scarce budget/reserve is not permanently biased toward low indices).
+//! The trade is priority for batchability and non-steerability: under a binding churn budget
+//! or reserve shortfall, budget goes to the rotated walk order's earlier visits rather than
+//! the largest deviations; every planned validator is still visited exactly once per pass, and
+//! the walk converges to the same finalized targets over epochs. Exactly one validator per
+//! call; the passed record must sit at the cursor's index or the call fails WITHOUT advancing. Skips (hysteresis, live
 //! transient, budget, minimum-action floor, frozen increases) advance the cursor, pay zero,
 //! and emit `RebalanceActionExecuted { action: ACTION_SKIP }` — the executed CHOICE is always
 //! returned in the event. Every action amount is `fusion_stake_math::churn::action_amount`
@@ -31,9 +36,14 @@
 //!
 //! ## Upstream minimum reconciliation (plan obligation)
 //!
-//! Increases and decreases are floored at `UPSTREAM_MINIMUM_DELEGATION`; a decrease must also
-//! leave `stake_rent + minimum_delegation` on the validator account. A Draining residual below
-//! one minimum move can therefore NEVER leave via a decrease — it exits via
+//! Increases and decreases are floored at the EFFECTIVE minimum delegation, derived at
+//! runtime per call (`spl_cpi::effective_minimum_delegation`: the stake program's
+//! `GetMinimumDelegation` with the upstream `MINIMUM_ACTIVE_STAKE` floor — exactly what the
+//! pool re-computes at CPI time); a decrease must also leave `stake_rent + minimum_delegation`
+//! on the validator account. Sizing from a constant instead would let a sub-minimum action
+//! fail its CPI, which rolls back the WHOLE instruction — the cursor would never advance past
+//! that validator and the walk would wedge until the next epoch preemption. A Draining
+//! residual below one minimum move can NEVER leave via a decrease — it exits via
 //! `RemoveValidatorFromPool` (whole-account deactivation) once the record reaches Removable:
 //! that is how the crate-level full-drain exemption (D15) reconciles with the pinned pool
 //! rules. Draining decreases are hysteresis-EXEMPT (a lifecycle exit, not an optimization);
@@ -47,8 +57,8 @@ use anchor_spl::token::{Token, TokenAccount};
 use crate::constants::{
     CONTROLLER_SEED, EPOCH_STATE_SEED, FUSION_STAKE_POOL_PROGRAM_ID, HYSTERESIS_BPS,
     HYSTERESIS_MIN_LAMPORTS, MAINTENANCE_AUTHORITY_SEED, MIN_ACTIVATION_TARGET_LAMPORTS,
-    POOL_AUTHORITY_SEED, STAKE_ACCOUNT_SPACE, STAKE_CONFIG_ID, UPSTREAM_MINIMUM_DELEGATION,
-    VALIDATOR_LIST_INDEX_UNSET, VALIDATOR_MOVE_CAP_BPS, VALIDATOR_RECORD_SEED,
+    POOL_AUTHORITY_SEED, STAKE_ACCOUNT_SPACE, STAKE_CONFIG_ID, VALIDATOR_LIST_INDEX_UNSET,
+    VALIDATOR_MOVE_CAP_BPS, VALIDATOR_RECORD_SEED,
 };
 use crate::errors::ControllerError;
 use crate::logic::{decide_action, rebalance_slot, Action, ActionInputs};
@@ -302,6 +312,11 @@ pub fn handler(ctx: Context<ExecuteNextAction>) -> Result<()> {
         )
     };
 
+    // The EFFECTIVE minimum delegation, derived at runtime (never the constant alone): every
+    // floor below must match what the pool itself will enforce inside the CPI, or a
+    // sub-minimum action fails and wedges the cursor for the epoch (see the module doc).
+    let min_delegation = spl_cpi::effective_minimum_delegation()?;
+
     let reserve_lamports = ctx.accounts.reserve_stake.lamports();
     let inputs = ActionInputs {
         pass: slot.pass,
@@ -309,7 +324,7 @@ pub fn handler(ctx: Context<ExecuteNextAction>) -> Result<()> {
         active_lamports: entry_active,
         transient_lamports: entry_transient,
         final_target: record.final_target,
-        drained_floor: stake_rent.saturating_add(UPSTREAM_MINIMUM_DELEGATION),
+        drained_floor: stake_rent.saturating_add(min_delegation),
         hysteresis_threshold: hysteresis(
             es.nav_total_lamports,
             HYSTERESIS_MIN_LAMPORTS,
@@ -322,7 +337,7 @@ pub fn handler(ctx: Context<ExecuteNextAction>) -> Result<()> {
             .saturating_sub(stake_rent),
         reserve_lamports,
         stake_rent,
-        min_delegation: UPSTREAM_MINIMUM_DELEGATION,
+        min_delegation,
         increases_allowed: record.observed_epoch == controller_epoch
             && record.observed_liveness_ok,
         acted_this_epoch: record.last_increase_epoch == controller_epoch

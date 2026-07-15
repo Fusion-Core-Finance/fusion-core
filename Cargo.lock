@@ -1894,6 +1894,7 @@ dependencies = [
  "fusd-core",
  "proptest",
  "solana-pubkey",
+ "solana-stake-interface",
  "solana-vote-interface",
 ]
 

@@ -90,13 +90,15 @@ impl Position {
 
     /// The ONLY sanctioned way to change `ink`: writes the new value and bumps `ink_nonce` iff
     /// the value actually changed (a no-op write — e.g. re-zeroing an already-drained zombie in
-    /// `liquidate` — is not a collateral change and must not bump). `wrapping_add` because 2^64
-    /// increments are physically unreachable, and even a hypothetically stuck nonce only fails
+    /// `liquidate` — is not a collateral change and must not bump). `saturating_add` keeps the
+    /// documented invariant literal — the nonce is MONOTONICALLY INCREASING, never wraps back
+    /// below a previously-observed value — while being behaviorally unreachable either way: 2^64
+    /// increments are physically impossible, and even a hypothetically saturated nonce only fails
     /// toward "stale preference stays synced" in the direction layer — never funds or solvency.
     pub fn set_ink(&mut self, new_ink: u64) {
         if new_ink != self.ink {
             self.ink = new_ink;
-            self.ink_nonce = self.ink_nonce.wrapping_add(1);
+            self.ink_nonce = self.ink_nonce.saturating_add(1);
         }
     }
 }

@@ -97,13 +97,26 @@ pub struct MarketOracle {
     /// Carved from `_reserved`.
     pub liquidity_haircut_bps: u16,
 
+    /// Last COMMITTED canonical-primary pool rate: `total_lamports / pool_token_supply`, RAY-scaled
+    /// (SOL per whole fuSOL — both 9-decimal, so the ratio is the whole-token rate directly).
+    /// Written by `update_price` on every mode-1 crank that commits a fresh price. A NEW rate
+    /// strictly BELOW this one is a pool NAV decrease (slashing / negative finalization) — the
+    /// crank commits the lower price immediately AND arms the standard on-resume liquidation grace
+    /// (`Market.liq_grace_until`, monotone `max`), so a loss borrowers could not front-run gets the
+    /// same cure window as a staleness resume. Deliberately keyed on the POOL RATE, not `debt_spot`:
+    /// a plain SOL/USD move is normal market risk and must never arm the grace. `0` = never
+    /// committed (the first crank only seeds it, never arms). Mode-0 markets never write it.
+    /// Carved from `_reserved`.
+    pub last_canonical_rate_ray: u128,
+
     /// Forward-compat reserve. WIDENED 32 → 64 bytes pre-launch (layout-freeze checklist): a Borsh
     /// account cannot grow without realloc post-launch, so carve-from-`_reserved` headroom is free
     /// now and impossible later. Carve new fields from the HEAD; old accounts' zeroed bytes must
     /// decode as the new field's `0 = disabled/none` sentinel. Holds feed-rebind and future
     /// oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62;
-    /// `canonical_primary` + `liquidity_haircut_bps` carved 3 more: was 30.)
-    pub _reserved: [u8; 27],
+    /// `canonical_primary` + `liquidity_haircut_bps` carved 3 more: was 30;
+    /// `last_canonical_rate_ray` carved 16 more: was 27.)
+    pub _reserved: [u8; 11],
 }
 
 impl MarketOracle {
@@ -117,5 +130,7 @@ impl MarketOracle {
         + 32                        // lst_stake_pool (C1 LST canonical-rate leg)
         + 1                         // bump
         + 1 + 2                     // canonical_primary, liquidity_haircut_bps (fuSOL mode)
-        + 27; // reserved (62 → 30 for lst_stake_pool → 27 for the fuSOL mode fields)
+        + 16                        // last_canonical_rate_ray (fuSOL NAV-decrease grace)
+        + 11; // reserved (62 → 30 for lst_stake_pool → 27 for the fuSOL mode fields
+              //           → 11 for last_canonical_rate_ray)
 }

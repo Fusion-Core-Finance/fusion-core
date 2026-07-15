@@ -6,7 +6,9 @@
 //! - the deterministic walk visited every planned slot (`rebalance_cursor == 2 × planned`),
 //!   which structurally implies every remaining deviation was within hysteresis, blocked by a
 //!   live transient, or unfundable this epoch (the walk skipped it after inspection); OR
-//! - the remaining churn budget is below one minimum action — nothing can move anymore.
+//! - the remaining churn budget is below one minimum action (the RUNTIME effective minimum
+//!   delegation, the same floor the actions themselves are sized by) — nothing can move
+//!   anymore.
 //!
 //! Pending admission adds do not block finishing: they remain executable next epoch after
 //! re-planning (fail-safe delay, no allocation effect this epoch).
@@ -17,9 +19,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Token, TokenAccount};
 
-use crate::constants::{
-    CONTROLLER_SEED, EPOCH_STATE_SEED, MAINTENANCE_AUTHORITY_SEED, UPSTREAM_MINIMUM_DELEGATION,
-};
+use crate::constants::{CONTROLLER_SEED, EPOCH_STATE_SEED, MAINTENANCE_AUTHORITY_SEED};
 use crate::errors::ControllerError;
 use crate::logic::phase_transition_allowed;
 use crate::state::{ControllerConfig, EpochState, PHASE_IDLE, PHASE_REBALANCE};
@@ -49,6 +49,11 @@ pub struct FinishEpoch<'info> {
     #[account(mut, constraint = crank_reward_account.mint == config.fusol_mint @ ControllerError::AddressMismatch)]
     pub crank_reward_account: Box<Account<'info, TokenAccount>>,
 
+    /// CHECK: the native stake program — CPI'd (read-only, no accounts) for the runtime
+    /// `GetMinimumDelegation` the budget-exhausted condition compares against.
+    #[account(address = crate::constants::STAKE_PROGRAM_ID)]
+    pub stake_program: UncheckedAccount<'info>,
+
     pub token_program: Program<'info, Token>,
 }
 
@@ -58,8 +63,11 @@ pub fn handler(ctx: Context<FinishEpoch>) -> Result<()> {
     require!(es.phase == PHASE_REBALANCE, ControllerError::WrongPhase);
 
     let walk_complete = es.rebalance_cursor >= es.plan_directed_cursor.saturating_mul(2);
+    // The RUNTIME effective minimum (the actions' own floor): a smaller constant here would
+    // deny finishing an epoch whose remaining budget can no longer fund any legal action.
+    let min_delegation = crate::spl_cpi::effective_minimum_delegation()?;
     let budget_exhausted =
-        es.churn_budget_total.saturating_sub(es.churn_budget_used) < UPSTREAM_MINIMUM_DELEGATION;
+        es.churn_budget_total.saturating_sub(es.churn_budget_used) < min_delegation;
     require!(walk_complete || budget_exhausted, ControllerError::EpochNotFinished);
 
     require!(phase_transition_allowed(es.phase, PHASE_IDLE), ControllerError::WrongPhase);

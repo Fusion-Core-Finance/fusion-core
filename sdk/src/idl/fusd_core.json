@@ -6094,6 +6094,12 @@
         },
         {
           "name": "market_oracle",
+          "docs": [
+            "Mutable ONLY for the canonical-primary rate memory (`last_canonical_rate_ray`, the",
+            "NAV-decrease grace detector); every config read stays as before, and mode-0 cranks never",
+            "write it."
+          ],
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -6152,9 +6158,11 @@
         {
           "name": "sol_usd_pyth_update",
           "docs": [
-            "when this is an LST market (`market_oracle.lst_stake_pool != default`); verified in the",
-            "handler (owner == a configured Pyth receiver, full verification, feed-id ==",
-            "`PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is unavailable → mints freeze."
+            "when this is a mode-0 LST market (`market_oracle.lst_stake_pool != default` and",
+            "`canonical_primary == 0`); verified in the handler (owner == a configured Pyth receiver,",
+            "full verification, feed-id == `PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is",
+            "unavailable → mints freeze. IGNORED in canonical-primary mode (the PRIMARY feed is already",
+            "SOL/USD and the rate is composed in step 2b) — supplying it there is harmless."
           ],
           "optional": true
         },
@@ -9880,6 +9888,22 @@
             "type": "u16"
           },
           {
+            "name": "last_canonical_rate_ray",
+            "docs": [
+              "Last COMMITTED canonical-primary pool rate: `total_lamports / pool_token_supply`, RAY-scaled",
+              "(SOL per whole fuSOL — both 9-decimal, so the ratio is the whole-token rate directly).",
+              "Written by `update_price` on every mode-1 crank that commits a fresh price. A NEW rate",
+              "strictly BELOW this one is a pool NAV decrease (slashing / negative finalization) — the",
+              "crank commits the lower price immediately AND arms the standard on-resume liquidation grace",
+              "(`Market.liq_grace_until`, monotone `max`), so a loss borrowers could not front-run gets the",
+              "same cure window as a staleness resume. Deliberately keyed on the POOL RATE, not `debt_spot`:",
+              "a plain SOL/USD move is normal market risk and must never arm the grace. `0` = never",
+              "committed (the first crank only seeds it, never arms). Mode-0 markets never write it.",
+              "Carved from `_reserved`."
+            ],
+            "type": "u128"
+          },
+          {
             "name": "_reserved",
             "docs": [
               "Forward-compat reserve. WIDENED 32 → 64 bytes pre-launch (layout-freeze checklist): a Borsh",
@@ -9887,12 +9911,13 @@
               "now and impossible later. Carve new fields from the HEAD; old accounts' zeroed bytes must",
               "decode as the new field's `0 = disabled/none` sentinel. Holds feed-rebind and future",
               "oracle refinements. (`lst_stake_pool` above carved 32 bytes for the C1 LST leg: was 62;",
-              "`canonical_primary` + `liquidity_haircut_bps` carved 3 more: was 30.)"
+              "`canonical_primary` + `liquidity_haircut_bps` carved 3 more: was 30;",
+              "`last_canonical_rate_ray` carved 16 more: was 27.)"
             ],
             "type": {
               "array": [
                 "u8",
-                27
+                11
               ]
             }
           }

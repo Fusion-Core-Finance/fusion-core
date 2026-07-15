@@ -17,8 +17,9 @@ use pyth_solana_receiver_sdk::price_update::{PriceUpdateV2, VerificationLevel};
 use switchboard_on_demand::PullFeedAccountData;
 
 use crate::constants::{
-    CONFIG_SEED, DEX_TWAP_SEED, FUSION_STAKE_POOL_PROGRAM_ID, MARKET_ORACLE_SEED, MARKET_SEED,
-    MAX_STAKE_POOL_EPOCH_LAG, PYTH_SOL_USD_FEED_ID, SPL_STAKE_POOL_PROGRAM_ID,
+    CONFIG_SEED, DEX_TWAP_SEED, FUSION_STAKE_POOL_PROGRAM_ID, LIQ_RESUME_GRACE_SLOTS,
+    MARKET_ORACLE_SEED, MARKET_SEED, MAX_STAKE_POOL_EPOCH_LAG, POOL_UPDATE_GRACE_DIVISOR,
+    PYTH_SOL_USD_FEED_ID, SPL_STAKE_POOL_PROGRAM_ID,
 };
 use crate::errors::FusdError;
 use crate::instructions::init_protocol::FUSD_DECIMALS;
@@ -40,7 +41,11 @@ pub struct UpdatePrice<'info> {
     #[account(mut, seeds = [MARKET_SEED, collateral_mint.key().as_ref()], bump = market.bump)]
     pub market: Account<'info, Market>,
 
+    /// Mutable ONLY for the canonical-primary rate memory (`last_canonical_rate_ray`, the
+    /// NAV-decrease grace detector); every config read stays as before, and mode-0 cranks never
+    /// write it.
     #[account(
+        mut,
         seeds = [MARKET_ORACLE_SEED, collateral_mint.key().as_ref()],
         bump = market_oracle.bump,
     )]
@@ -60,9 +65,11 @@ pub struct UpdatePrice<'info> {
     pub dex_twap: AccountLoader<'info, DexTwap>,
 
     /// CHECK: OPTIONAL Pyth `PriceUpdateV2` for SOL/USD — the C1 canonical underlying. Required only
-    /// when this is an LST market (`market_oracle.lst_stake_pool != default`); verified in the
-    /// handler (owner == a configured Pyth receiver, full verification, feed-id ==
-    /// `PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is unavailable → mints freeze.
+    /// when this is a mode-0 LST market (`market_oracle.lst_stake_pool != default` and
+    /// `canonical_primary == 0`); verified in the handler (owner == a configured Pyth receiver,
+    /// full verification, feed-id == `PYTH_SOL_USD_FEED_ID`). Absent/stale ⇒ the canonical leg is
+    /// unavailable → mints freeze. IGNORED in canonical-primary mode (the PRIMARY feed is already
+    /// SOL/USD and the rate is composed in step 2b) — supplying it there is harmless.
     pub sol_usd_pyth_update: Option<UncheckedAccount<'info>>,
 
     /// CHECK: OPTIONAL `StakePool` account. Two consumers: (a) the C1 canonical-rate leg on an LST
@@ -140,6 +147,9 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
     // wrong pool mint / degenerate totals) WITHHOLDS the commit entirely and freezes mints:
     // there is no market feed to fall back on, so the cache must age into the staleness
     // machinery rather than serve an unscaled SOL/USD price as if it were fuSOL.
+    // The pool rate this crank composed into the views (RAY SOL-per-fuSOL), for the NAV-decrease
+    // grace check at commit time. `None` on every non-canonical-primary or withheld path.
+    let mut canonical_rate_ray: Option<u128> = None;
     if canonical_primary {
         let rate = parse_bound_stake_pool(
             ctx.accounts.lst_stake_pool.as_ref(),
@@ -148,8 +158,27 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
             &collateral_mint_key,
             clock.epoch,
         )?;
+        // The POOL_UPDATE_GRACE deadline: in mode 1 the pool rate IS the price, so a lagged
+        // finalization is a stale PRICE the normal staleness fuse cannot see (each crank would
+        // refresh `spot_updated_slot` off a fresh SOL/USD leg while silently re-committing the
+        // old rate). Accepted iff finalized THIS epoch, or LAST epoch while still within the
+        // current epoch's first `1/POOL_UPDATE_GRACE_DIVISOR` of slots; otherwise degrade to the
+        // same withhold path as an absent pool. The C1 min-cap leg deliberately keeps the looser
+        // `MAX_STAKE_POOL_EPOCH_LAG` tolerance (there the rate only caps a live market feed).
+        let rate = match rate {
+            Some(s) if !within_pool_update_grace(s.last_update_epoch, &clock)? => None,
+            other => other,
+        };
         match rate {
             Some(sample) => {
+                canonical_rate_ray = Some(
+                    fusd_math::mul_div_floor(
+                        fusd_math::RAY,
+                        sample.total_lamports as u128,
+                        sample.pool_token_supply as u128,
+                    )
+                    .ok_or(FusdError::MathOverflow)?,
+                );
                 pyth_pv = scale_view(&pyth_pv, sample.total_lamports, sample.pool_token_supply)
                     .ok_or(FusdError::MathOverflow)?;
                 sb_pv = match sb_pv {
@@ -184,11 +213,14 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         .ring()
         .twap(now, twap_window_secs, &twap_cfg);
 
-    // --- 3b. C1 canonical-rate leg (LST markets only) → RAY USD per whole LST ----------------
+    // --- 3b. C1 canonical-rate leg (LST markets only, NEVER canonical-primary) ---------------
     // `MIN(market, canonical)` caps the COLLATERAL valuation at the trustless on-chain stake-pool
-    // rate. Computed only for an LST market; any degradation (absent/stale/degenerate) ⇒ None ⇒
-    // (because `canonical_required`) mints freeze, but prices still serve off the market leg.
-    let canonical = if lst_stake_pool_key != Pubkey::default() {
+    // rate. Computed only for a mode-0 LST market; any degradation (absent/stale/degenerate) ⇒
+    // None ⇒ (because `canonical_required`) mints freeze, but prices still serve off the market
+    // leg. In canonical-primary mode the rate is already IN the composed views (step 2b), so the
+    // leg is forced off: running it would owner-check the FORK-owned pool against the upstream
+    // `SPoo1…` program and hard-fail any crank that merely supplied the optional SOL/USD account.
+    let canonical = if !canonical_primary && lst_stake_pool_key != Pubkey::default() {
         compute_canonical(
             ctx.accounts.sol_usd_pyth_update.as_ref(),
             ctx.accounts.lst_stake_pool.as_ref(),
@@ -266,6 +298,21 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
             // Advances the staleness clock and arms the on-resume liquidation grace window if this
             // fresh price recovers from a staleness halt.
             market.commit_fresh_spot(spot, debt_spot, slot);
+            // Canonical-primary NAV-decrease grace (spec 12.4): a committed pool rate strictly
+            // BELOW the last committed one is a NAV loss (slashing / negative finalization) —
+            // the lower price lands immediately (above), and borrowers get the standard
+            // liquidation grace to cure, exactly as after a staleness resume. Keyed on the POOL
+            // RATE, never `debt_spot`: a plain SOL/USD move is normal market risk and must not
+            // arm. Monotone `max` (never shortens another writer's window); a stored 0 (first
+            // ever commit) only seeds the memory.
+            if let Some(new_rate) = canonical_rate_ray {
+                let mo = &mut ctx.accounts.market_oracle;
+                if mo.last_canonical_rate_ray > 0 && new_rate < mo.last_canonical_rate_ray {
+                    market.liq_grace_until =
+                        market.liq_grace_until.max(slot.saturating_add(LIQ_RESUME_GRACE_SLOTS));
+                }
+                mo.last_canonical_rate_ray = new_rate;
+            }
         }
     }
 
@@ -279,6 +326,26 @@ pub fn handler(ctx: Context<UpdatePrice>) -> Result<()> {
         plausible: result.plausible,
     });
     Ok(())
+}
+
+/// Canonical-primary POOL_UPDATE_GRACE: is a pool finalized at `last_update_epoch` still an
+/// acceptable PRICE source at the current clock? `true` iff finalized this epoch (or, defensively,
+/// a future stamp), or in the immediately-previous epoch while the current epoch is within its
+/// first `1/POOL_UPDATE_GRACE_DIVISOR` of slots (the post-boundary window the epoch crank needs to
+/// land `UpdateStakePoolBalance`). Anything older is a stale rate the caller must WITHHOLD — see
+/// `POOL_UPDATE_GRACE_DIVISOR` in constants.rs. Uses the slot-relative deadline (Clock +
+/// EpochSchedule) so the grace is a fixed fraction of the epoch regardless of epoch length.
+fn within_pool_update_grace(last_update_epoch: u64, clock: &Clock) -> Result<bool> {
+    if last_update_epoch >= clock.epoch {
+        return Ok(true);
+    }
+    if last_update_epoch.saturating_add(1) != clock.epoch {
+        return Ok(false);
+    }
+    let schedule = EpochSchedule::get()?;
+    let slots_into_epoch =
+        clock.slot.saturating_sub(schedule.get_first_slot_in_epoch(clock.epoch));
+    Ok(slots_into_epoch <= schedule.get_slots_in_epoch(clock.epoch) / POOL_UPDATE_GRACE_DIVISOR)
 }
 
 /// Verify + normalize the Pyth `PriceUpdateV2` to a `usd_ray` `PriceView`. Hard-errors (rather

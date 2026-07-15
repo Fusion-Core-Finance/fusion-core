@@ -23,5 +23,9 @@ anchor-lang = { workspace = true }
 # solana 2.3 line (Cargo.lock already holds solana-vote-interface 2.2.6). `bincode` feature gives
 # `VoteStateV3::serialize` (account-sized, zero-padded); the bincode crate gives exact-length bytes.
 solana-vote-interface = { version = "2.2.6", features = ["bincode"] }
+# Real stake-program state types for the stake_account round-trip pin — `serde` gives the
+# bincode (= on-chain) encoding of `StakeStateV2` (1.2.1 co-resolves with the workspace lock;
+# the layout is byte-identical across every published interface version).
+solana-stake-interface = { version = "1.2.1", features = ["serde"] }
 solana-pubkey = "2.2"
 bincode = "1.3"

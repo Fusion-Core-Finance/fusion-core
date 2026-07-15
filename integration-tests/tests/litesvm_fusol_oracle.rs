@@ -10,7 +10,10 @@
 //!
 //! Requires the dev-oracle `.so`: `anchor build -- --features dev-oracle`.
 
-use fusd_core::constants::{FUSION_STAKE_POOL_PROGRAM_ID, PYTH_SOL_USD_FEED_ID};
+use fusd_core::constants::{
+    FUSION_STAKE_POOL_PROGRAM_ID, LIQ_RESUME_GRACE_SLOTS, MAX_PRICE_STALENESS_SLOTS,
+    POOL_UPDATE_GRACE_DIVISOR, PYTH_SOL_USD_FEED_ID,
+};
 use fusd_integration_tests::*;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
@@ -283,4 +286,214 @@ fn init_rejections() {
     .expect("valid canonical-primary init");
     let mo = read_market_oracle(&svm, &coll);
     assert_eq!((mo.canonical_primary, mo.liquidity_haircut_bps), (1, 1_000));
+    assert_eq!(mo.last_canonical_rate_ray, 0, "no canonical rate committed yet (sentinel)");
+}
+
+/// A canonical-primary crank that ALSO supplies the (mode-0-only) optional `sol_usd_pyth_update`
+/// account must still succeed and commit: mode 1 never runs the C1 min-cap leg (the rate is IN the
+/// composed price), so the extra account is ignored — it must not hard-fail the permissionless
+/// crank against the FORK-owned pool (whose owner is not the upstream `SPoo1…` program the C1 leg
+/// checks for).
+#[test]
+fn crank_with_sol_usd_account_supplied_still_succeeds() {
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fusol(&mut svm, &gov, &cma);
+
+    post_sol_usd(&mut svm, &h, 100);
+    post_fork_pool(&mut svm, &stake_pool, &coll, fusol(1_200_000), fusol(1_000_000)); // rate 1.2
+    // The realistic keeper shape: the same SOL/USD update passed in BOTH the primary and the
+    // C1 `sol_usd_pyth_update` slot.
+    send(
+        &mut svm,
+        &[update_price_lst_ix(
+            &gov.pubkey(),
+            &coll,
+            &h.pyth,
+            Some(h.sb),
+            Some(h.pyth),
+            Some(stake_pool),
+        )],
+        &gov,
+        &[],
+    )
+    .expect("canonical-primary crank with the optional sol_usd account must not hard-fail");
+
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(!m.mint_frozen, "commit is byte-identical to the omit path");
+    assert_eq!(m.spot, spot_for_usd(108), "$120 NAV − 10% haircut");
+    assert_eq!(m.debt_spot, spot_for_usd(120));
+}
+
+/// Warp to `(epoch, first_slot_of_epoch + offset)` keeping Clock/EpochSchedule consistent (the
+/// slot-precise sibling of the harness `warp_epochs`, which always lands on offset 0).
+fn warp_to_epoch_slot(svm: &mut litesvm::LiteSVM, epoch: u64, offset: u64) {
+    let schedule: solana_sdk::epoch_schedule::EpochSchedule = svm.get_sysvar();
+    let mut clock: solana_sdk::clock::Clock = svm.get_sysvar();
+    clock.epoch = epoch;
+    clock.slot = schedule.get_first_slot_in_epoch(epoch) + offset;
+    svm.set_sysvar(&clock);
+    svm.warp_to_slot(clock.slot);
+    svm.expire_blockhash();
+}
+
+/// The POOL_UPDATE_GRACE deadline on a lagged pool, at exact boundaries: a pool finalized in the
+/// PREVIOUS epoch commits while the current epoch is within its first 1/16 of slots, WITHHOLDS one
+/// slot past that, and a 2-epoch-lagged pool withholds even at the very first slot. Without the
+/// deadline a keeper could keep re-committing a pre-loss pool rate under fresh SOL/USD legs,
+/// refreshing `spot_updated_slot` forever and defeating the staleness fuse.
+#[test]
+fn lagged_pool_update_grace_boundaries() {
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fusol(&mut svm, &gov, &cma);
+
+    // Land on a consistent (epoch, slot) and baseline-commit with a pool finalized THIS epoch.
+    warp_epochs(&mut svm, 6);
+    let e = now_epoch(&svm);
+    post_sol_usd(&mut svm, &h, 100);
+    post_fork_pool(&mut svm, &stake_pool, &coll, fusol(1_200_000), fusol(1_000_000)); // stamps e
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("baseline crank");
+    assert!(!read_market(&svm, &market_pda(&coll)).mint_frozen);
+
+    let schedule: solana_sdk::epoch_schedule::EpochSchedule = svm.get_sysvar();
+    let grace = schedule.get_slots_in_epoch(e + 1) / POOL_UPDATE_GRACE_DIVISOR;
+    assert!(grace > 1, "epoch long enough to probe the boundary");
+
+    // Just INSIDE the grace (the window's last slot): the 1-epoch-lagged pool still commits.
+    warp_to_epoch_slot(&mut svm, e + 1, grace);
+    post_sol_usd(&mut svm, &h, 100);
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("inside-grace crank");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(!m.mint_frozen, "1-epoch lag INSIDE the grace window still prices + mints");
+    assert_eq!(m.spot_updated_slot, current_slot(&svm), "committed — freshness clock advanced");
+    let committed_slot = m.spot_updated_slot;
+
+    // Just PAST the grace (one slot later, same lagged epoch): the commit is WITHHELD.
+    warp_to_epoch_slot(&mut svm, e + 1, grace + 1);
+    post_sol_usd(&mut svm, &h, 100);
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool))
+        .expect("past-grace crank still lands (the permissionless crank never bricks)");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.mint_frozen, "1-epoch lag PAST the grace ⇒ mints frozen");
+    assert_eq!(m.spot_updated_slot, committed_slot, "withheld — freshness clock unmoved");
+    assert_eq!(m.spot, spot_for_usd(108), "last good price retained");
+
+    // 2 epochs of lag: withheld even at the FIRST slot of the epoch (the grace never applies).
+    warp_to_epoch_slot(&mut svm, e + 2, 0);
+    post_sol_usd(&mut svm, &h, 100);
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("2-epoch-lag crank lands");
+    let m = read_market(&svm, &market_pda(&coll));
+    assert!(m.mint_frozen, "2-epoch-lagged pool ⇒ withheld under canonical-primary");
+    assert_eq!(m.spot_updated_slot, committed_slot, "still withheld");
+}
+
+/// The NAV-decrease grace detector is keyed on the POOL RATE, never the composed price: a pool
+/// rate drop arms `liq_grace_until` (while the lower price commits IMMEDIATELY, same crank), a
+/// plain SOL/USD dip never does, and the first commit only seeds the rate memory.
+#[test]
+fn nav_drop_arms_liq_grace_but_sol_usd_dip_does_not() {
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fusol(&mut svm, &gov, &cma);
+    let market = market_pda(&coll);
+
+    // First crank: seeds the rate memory, never arms.
+    post_sol_usd(&mut svm, &h, 100);
+    post_fork_pool(&mut svm, &stake_pool, &coll, fusol(1_200_000), fusol(1_000_000)); // rate 1.2
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("first crank");
+    assert_eq!(read_market(&svm, &market).liq_grace_until, 0, "first commit never arms");
+    assert_eq!(
+        read_market_oracle(&svm, &coll).last_canonical_rate_ray,
+        fusd_math::RAY * 12 / 10,
+        "rate memory seeded at 1.2 RAY"
+    );
+
+    // SOL/USD dips $100 → $75 with the pool rate UNCHANGED: normal market movement — the lower
+    // price commits, the grace stays unarmed.
+    warp_unix(&mut svm, 5);
+    warp_slots(&mut svm, 10);
+    post_sol_usd(&mut svm, &h, 75);
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("sol/usd dip crank");
+    let m = read_market(&svm, &market);
+    assert_eq!(m.spot, spot_for_usd(81), "75 × 1.2 = 90 NAV − 10% haircut, committed");
+    assert_eq!(m.debt_spot, spot_for_usd(90));
+    assert_eq!(m.liq_grace_until, 0, "a SOL/USD move must NOT arm the NAV grace");
+
+    // Pool NAV drops 1.2 → 0.8 (slashing / negative finalization): the loss commits in the SAME
+    // crank AND the standard liquidation grace arms.
+    warp_unix(&mut svm, 5);
+    warp_slots(&mut svm, 10);
+    post_sol_usd(&mut svm, &h, 75);
+    post_fork_pool(&mut svm, &stake_pool, &coll, fusol(800_000), fusol(1_000_000)); // rate 0.8
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("NAV-drop crank");
+    let m = read_market(&svm, &market);
+    assert_eq!(m.spot, spot_for_usd(54), "75 × 0.8 = 60 NAV − 10% haircut — committed immediately");
+    assert_eq!(m.debt_spot, spot_for_usd(60), "liquidation leg dropped in the same crank");
+    let armed = current_slot(&svm) + LIQ_RESUME_GRACE_SLOTS;
+    assert_eq!(m.liq_grace_until, armed, "pool NAV decrease arms the on-resume grace");
+    assert_eq!(
+        read_market_oracle(&svm, &coll).last_canonical_rate_ray,
+        fusd_math::RAY * 8 / 10,
+        "rate memory tracks the committed rate"
+    );
+
+    // An equal-rate follow-up crank never re-arms (monotone; no new loss observed).
+    warp_unix(&mut svm, 5);
+    warp_slots(&mut svm, 10);
+    post_sol_usd(&mut svm, &h, 75);
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("equal-rate crank");
+    assert_eq!(read_market(&svm, &market).liq_grace_until, armed, "no re-arm at an equal rate");
+}
+
+/// End-to-end 12.4 semantics on a borrower: a pool NAV drop makes the position under-MCR at the
+/// (immediately committed) lower price, but liquidation is REJECTED through the grace window and
+/// opens exactly once the boundary passes — with a keeper keeping the price fresh the whole time.
+#[test]
+fn nav_drop_liquidation_blocked_through_grace_boundary() {
+    let (mut svm, gov, cma) = actors();
+    let (coll, h, stake_pool) = reach_fusol(&mut svm, &gov, &cma);
+    let market = market_pda(&coll);
+
+    // Healthy market at SOL $100 × rate 1.2 (spot $108 / debt_spot $120); mints are open.
+    post_sol_usd(&mut svm, &h, 100);
+    post_fork_pool(&mut svm, &stake_pool, &coll, fusol(1_200_000), fusol(1_000_000));
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("healthy crank");
+    assert!(!read_market(&svm, &market).mint_frozen);
+
+    // A $1000 Reactor Pool (absorbs any liquidation) and borrower B: 10 fuSOL vs $600 debt —
+    // healthy at debt_spot $120 (10×120 = $1200 ≥ 600×1.5), under-MCR once debt_spot hits $80.
+    let d = open_borrower(&mut svm, &cma, &coll, 100, usd(1_000));
+    provide_sp(&mut svm, &d, &coll, usd(1_000));
+    let b = open_borrower(&mut svm, &cma, &coll, 10, usd(600));
+
+    // NAV 1.2 → 0.8: the loss reaches BOTH prices this crank, and the grace arms.
+    warp_unix(&mut svm, 5);
+    warp_slots(&mut svm, 10);
+    post_sol_usd(&mut svm, &h, 100);
+    post_fork_pool(&mut svm, &stake_pool, &coll, fusol(800_000), fusol(1_000_000));
+    crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("NAV-drop crank");
+    let m = read_market(&svm, &market);
+    assert_eq!(m.debt_spot, spot_for_usd(80), "loss committed immediately (10×80 = $800 < $900)");
+    let deadline = m.liq_grace_until;
+    assert_eq!(deadline, current_slot(&svm) + LIQ_RESUME_GRACE_SLOTS, "grace armed");
+
+    // Inside the window: liquidation is grace-blocked, the victim untouched.
+    let f = liquidate(&mut svm, &gov, &coll, &b.position)
+        .expect_err("the NAV-decrease grace must block liquidation");
+    assert_eq!(custom_code(&f), E_LIQUIDATION_GRACE_PERIOD);
+    assert_eq!(read_position(&svm, &b.position).recorded_debt, usd(600) as u128);
+
+    // Walk past the boundary the way a keeper would: fresh cranks at the SAME 0.8 rate (equal
+    // rate never re-arms; hops < MAX_PRICE_STALENESS_SLOTS never resume-arm).
+    while current_slot(&svm) < deadline {
+        warp_slots(&mut svm, MAX_PRICE_STALENESS_SLOTS - 1);
+        warp_unix(&mut svm, 5);
+        post_sol_usd(&mut svm, &h, 100);
+        crank(&mut svm, &gov, &coll, &h, Some(stake_pool)).expect("keeper crank during grace");
+    }
+    assert_eq!(read_market(&svm, &market).liq_grace_until, deadline, "window never extended");
+
+    // At/past the boundary the uncured borrower liquidates normally.
+    liquidate(&mut svm, &gov, &coll, &b.position)
+        .expect("liquidation re-enabled once the NAV-decrease grace elapses");
+    let bp = read_position(&svm, &b.position);
+    assert_eq!((bp.recorded_debt, bp.ink), (0, 0), "uncured borrower liquidated after the window");
 }

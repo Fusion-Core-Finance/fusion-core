@@ -42,12 +42,29 @@
 //! deterministic anti-cherry-picking withdrawal source). The Deposit variant is never built:
 //! forcing all stake deposits through one validator would break per-validator directed
 //! deposits.
+//!
+//! ## Native stake-program helpers (NOT part of the pool allowlist above)
+//!
+//! Two instructions against the NATIVE stake program (bincode-encoded: 4-byte u32 LE variant
+//! tag; solana-stake-interface `instruction.rs` variant order, byte-pinned below). Neither
+//! extends the PDA signing surface:
+//!
+//! - [`stake_authorize`] — `Authorize` (variant 1), signed by the USER inside `deposit_stake`'s
+//!   atomic authority handoff (a controller PDA never signs it; there is no path that could
+//!   move a user authority without the user's own signature in the same transaction).
+//! - [`stake_get_minimum_delegation`] — `GetMinimumDelegation` (variant 13), read-only: no
+//!   accounts, no signer; the runtime minimum comes back via return data
+//!   ([`effective_minimum_delegation`] mirrors upstream's `max(runtime, MINIMUM_ACTIVE_STAKE)`).
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::{get_return_data, invoke};
 use anchor_lang::solana_program::{system_program, sysvar};
 
-use crate::constants::{FUSION_STAKE_POOL_PROGRAM_ID, STAKE_CONFIG_ID, STAKE_PROGRAM_ID};
+use crate::constants::{
+    FUSION_STAKE_POOL_PROGRAM_ID, STAKE_CONFIG_ID, STAKE_PROGRAM_ID, UPSTREAM_MINIMUM_DELEGATION,
+};
+use crate::errors::ControllerError;
 
 // --- Allowlisted discriminants (borsh enum variant indices, byte 0 of instruction data) -----
 pub const IX_INITIALIZE: u8 = 0;
@@ -382,8 +399,9 @@ pub fn cleanup_removed_validator_entries(
 /// `DepositStake` (9). Accounts (instruction.rs:270-295 + builder :1761-1843):
 /// 0 `[w]` stake pool; 1 `[w]` validator list; 2 `[s]` stake deposit authority (OUR custom
 /// PDA — signer, provided by `invoke_signed`); 3 `[]` withdraw authority; 4 `[w]` user stake
-/// account to absorb (its staker+withdrawer must ALREADY be authorized to the deposit
-/// authority); 5 `[w]` validator stake account; 6 `[w]` reserve stake (receives the rent/extra
+/// account to absorb (its staker+withdrawer must be the deposit-authority PDA AT CPI TIME —
+/// the `deposit_stake` handler hands them off atomically via [`stake_authorize`] in the same
+/// instruction); 5 `[w]` validator stake account; 6 `[w]` reserve stake (receives the rent/extra
 /// SOL portion); 7 `[w]` user pool-token account; 8 `[w]` manager fee account; 9 `[w]`
 /// referrer pool-token account; 10 `[w]` pool mint; 11 `[]` clock; 12 `[]` stake history;
 /// 13 `[]` token program; 14 `[]` stake program.
@@ -510,6 +528,78 @@ pub fn decrease_validator_stake_with_reserve(
         ],
         data,
     }
+}
+
+// --- Native stake-program instructions (see the module doc's native-helpers section) ---------
+
+/// `StakeInstruction::Authorize` bincode variant tag (u32 LE at data[0..4]).
+pub const STAKE_IX_AUTHORIZE: u32 = 1;
+/// `StakeInstruction::GetMinimumDelegation` bincode variant tag (u32 LE at data[0..4]).
+pub const STAKE_IX_GET_MINIMUM_DELEGATION: u32 = 13;
+/// `StakeAuthorize::Staker` (bincode enum, u32 LE).
+pub const STAKE_AUTHORIZE_STAKER: u32 = 0;
+/// `StakeAuthorize::Withdrawer` (bincode enum, u32 LE).
+pub const STAKE_AUTHORIZE_WITHDRAWER: u32 = 1;
+
+/// Native stake `Authorize` (variant 1). Data: tag u32 LE + 32-byte new authorized key +
+/// `StakeAuthorize` role u32 LE (40 bytes). Accounts (stake-interface `instruction.rs`
+/// `authorize` builder): 0 `[w]` stake account; 1 `[]` clock; 2 `[s]` the CURRENT authority
+/// (the stake program enforces role rules: a staker change accepts the staker or withdrawer's
+/// signature, a withdrawer change requires the withdrawer). The optional lockup-custodian
+/// meta is never appended — locked-up stake is rejected by the pool anyway.
+pub fn stake_authorize(
+    stake_account: &Pubkey,
+    current_authority: &Pubkey,
+    new_authorized: &Pubkey,
+    role: u32,
+) -> Instruction {
+    let mut data = Vec::with_capacity(4 + 32 + 4);
+    data.extend_from_slice(&STAKE_IX_AUTHORIZE.to_le_bytes());
+    data.extend_from_slice(new_authorized.as_ref());
+    data.extend_from_slice(&role.to_le_bytes());
+    Instruction {
+        program_id: STAKE_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*stake_account, false),
+            AccountMeta::new_readonly(sysvar::clock::ID, false),
+            AccountMeta::new_readonly(*current_authority, true),
+        ],
+        data,
+    }
+}
+
+/// Native stake `GetMinimumDelegation` (variant 13). No accounts, no signer; the result comes
+/// back through `set_return_data` (stake-interface `tools.rs`).
+pub fn stake_get_minimum_delegation() -> Instruction {
+    Instruction {
+        program_id: STAKE_PROGRAM_ID,
+        accounts: vec![],
+        data: STAKE_IX_GET_MINIMUM_DELEGATION.to_le_bytes().to_vec(),
+    }
+}
+
+/// The pool's EFFECTIVE minimum delegation, derived at runtime: CPI
+/// [`stake_get_minimum_delegation`], read the u64 LE return data, and apply the
+/// `MINIMUM_ACTIVE_STAKE` floor — exactly upstream's `minimum_delegation()`
+/// (vendor `lib.rs:73-75` `max(runtime, MINIMUM_ACTIVE_STAKE)`), which every stake-moving pool
+/// instruction re-computes at CPI time (vendor processor.rs:983, :1296, :1618). Sizing any
+/// action from a hard-coded constant instead would diverge the moment the cluster's
+/// `GetMinimumDelegation` value changes (it is 1 SOL where the raise feature is active), and a
+/// sub-minimum CPI failure rolls back the WHOLE controller instruction. The caller must have
+/// the native stake program among its instruction accounts.
+pub fn effective_minimum_delegation() -> Result<u64> {
+    invoke(&stake_get_minimum_delegation(), &[])?;
+    let (program_id, data) =
+        get_return_data().ok_or(ControllerError::MinimumDelegationUnavailable)?;
+    require!(
+        program_id == STAKE_PROGRAM_ID,
+        ControllerError::MinimumDelegationUnavailable
+    );
+    let raw: [u8; 8] = data
+        .as_slice()
+        .try_into()
+        .map_err(|_| error!(ControllerError::MinimumDelegationUnavailable))?;
+    Ok(u64::from_le_bytes(raw).max(UPSTREAM_MINIMUM_DELEGATION))
 }
 
 #[cfg(test)]
@@ -847,6 +937,35 @@ mod tests {
         assert_meta(&ix, 8, sysvar::stake_history::ID, false, false);
         assert_meta(&ix, 9, system_program::ID, false, false);
         assert_meta(&ix, 10, STAKE_PROGRAM_ID, false, false);
+    }
+
+    /// Native stake `Authorize`: bincode u32 LE tag + new-authorized key + role u32 LE, and the
+    /// current authority signs (pinned against solana-stake-interface `instruction.rs`).
+    #[test]
+    fn stake_authorize_data_and_metas() {
+        let new_auth = key(7);
+        let ix = stake_authorize(&key(1), &key(2), &new_auth, STAKE_AUTHORIZE_STAKER);
+        assert_eq!(ix.program_id, STAKE_PROGRAM_ID);
+        assert_eq!(ix.data.len(), 40);
+        assert_eq!(&ix.data[0..4], &1u32.to_le_bytes()); // Authorize variant tag
+        assert_eq!(&ix.data[4..36], new_auth.as_ref());
+        assert_eq!(&ix.data[36..40], &0u32.to_le_bytes()); // StakeAuthorize::Staker
+        assert_eq!(ix.accounts.len(), 3);
+        assert_meta(&ix, 0, key(1), false, true); // stake account
+        assert_meta(&ix, 1, sysvar::clock::ID, false, false);
+        assert_meta(&ix, 2, key(2), true, false); // current authority signs
+
+        let ix = stake_authorize(&key(1), &key(2), &new_auth, STAKE_AUTHORIZE_WITHDRAWER);
+        assert_eq!(&ix.data[36..40], &1u32.to_le_bytes()); // StakeAuthorize::Withdrawer
+    }
+
+    /// Native stake `GetMinimumDelegation`: tag only, zero accounts (return-data instruction).
+    #[test]
+    fn stake_get_minimum_delegation_data_and_metas() {
+        let ix = stake_get_minimum_delegation();
+        assert_eq!(ix.program_id, STAKE_PROGRAM_ID);
+        assert!(ix.accounts.is_empty());
+        assert_eq!(ix.data, vec![13, 0, 0, 0]);
     }
 
     /// The allowlist is EXACTLY the eleven pinned discriminants — this module must never grow a

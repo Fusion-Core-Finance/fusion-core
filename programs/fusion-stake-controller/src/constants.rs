@@ -181,14 +181,18 @@ pub const CRANK_EPOCH_PAYOUT_BUDGET: u64 = 500_000_000; // 0.5 fuSOL
 /// interface 4.2.0 (`vendor/spl-stake-pool`, UPSTREAM.md).
 pub const STAKE_ACCOUNT_SPACE: usize = 200;
 
-/// The stake pool's effective minimum delegation:
-/// `max(stake program get_minimum_delegation(), MINIMUM_ACTIVE_STAKE = 1_000_000)` upstream.
-/// Pinned as the 1_000_000-lamport (0.001 SOL) constant because anchor-lang 0.32's
-/// `solana_program` shim exposes no `stake::tools::get_minimum_delegation` syscall wrapper,
-/// and the raise-to-1-SOL feature is inactive on today's clusters. If that feature ever
-/// activates, the upstream program enforces the higher minimum at CPI time: an action sized
-/// between 0.001 and 1 SOL fails harmlessly (no stake moves, cursor does not advance) and
-/// larger deviations still process — fail-safe, never fail-open.
+/// The minimum-delegation FLOOR — upstream `MINIMUM_ACTIVE_STAKE = 1_000_000` (vendor
+/// `lib.rs:31`). This is NOT the effective minimum: the pool computes
+/// `max(stake program GetMinimumDelegation, MINIMUM_ACTIVE_STAKE)` at every CPI (vendor
+/// `lib.rs:73-75`; processor.rs:983/:1296/:1618), and the runtime value is cluster-dependent
+/// (1 SOL where the raise feature is active). Every consumer therefore derives the effective
+/// value at runtime via `spl_cpi::effective_minimum_delegation()` (a `GetMinimumDelegation`
+/// CPI with this constant applied as the floor, mirroring upstream exactly); this constant
+/// exists only as that fail-safe floor. Never size an action from it alone: a sub-minimum
+/// amount makes the upstream CPI fail, which rolls back the WHOLE controller instruction —
+/// the deterministic rebalance cursor would then re-select the same action forever and wedge
+/// the walk until the next epoch preemption (and a Draining validator would never meet the
+/// Removable threshold).
 pub const UPSTREAM_MINIMUM_DELEGATION: u64 = 1_000_000;
 
 // --- Misc sentinels --------------------------------------------------------------------------
