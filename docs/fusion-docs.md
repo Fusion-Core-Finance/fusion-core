@@ -31,8 +31,9 @@ Fusion is an overcollateralized, multi-collateral CDP stablecoin protocol in the
 9. [Prior Art & Competitive Landscape](#9-prior-art--competitive-landscape)
 10. [Compliance & Regulatory Posture](#10-compliance--regulatory-posture)
 11. [Reference, Build & Roadmap](#11-reference-build--roadmap)
-12. [Component Status Summary](#12-component-status-summary)
-13. [Document Conventions & Caveats](#13-document-conventions--caveats)
+12. [fuSOL — Native Stake Share Pool](#12-fusol--native-stake-share-pool)
+13. [Component Status Summary](#13-component-status-summary)
+14. [Document Conventions & Caveats](#14-document-conventions--caveats)
 
 ---
 
@@ -78,7 +79,7 @@ A fifth and sixth decision are likewise locked: redemption targeting uses an **o
 
 ### 1.4 System architecture: one program, isolation from the account layout
 
-FUSD is **one on-chain Anchor program, `fusd-core`** (program ID `FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud` on dev; regenerate for any real deploy). All instructions and account types live in it.
+The FUSD protocol is **one on-chain Anchor program, `fusd-core`** (program ID `FuSiontgYvCc2N2Cinvo5gxSuxt2UfGxKMcbzkB67kud` on dev; regenerate for any real deploy). All CDP instructions and account types live in it. (The fuSOL native stake pool — §12 — ships as a self-contained sibling subsystem: a pinned SPL Stake Pool fork plus an Allocation Controller program. Neither is on any FUSD debt path: `fusd-core` never CPIs into them and treats fuSOL as an ordinary isolated collateral, so the one-program hot-path analysis below is unchanged.)
 
 The critical design insight: **isolation and parallelism come from the *account* layout, not from splitting into many programs.** Sealevel parallelizes transactions by their **write-lock set** — two transactions run concurrently iff they don't both write the same account — and the binding scalability limit is the *per-writable-account* compute cap (~12M CU/block today), not the block budget. So FUSD shards state instead of sharding programs:
 
@@ -86,7 +87,7 @@ The critical design insight: **isolation and parallelism come from the *account*
 - This is the explicit rejection of Maker's single global `Vat`, which would serialize every state change behind one write-lock and one CU lane — fatal on Solana.
 - `ProtocolConfig` is **read-only on the hot path** (read by every op, written almost never), so it never serializes.
 
-Splitting peripherals (oracle/params) into a separately-upgradeable program is an **open** question, deferred until the immutability lockdown — the default is one program now.
+Splitting peripherals (oracle/params) into a separately-upgradeable program is an **open** question, deferred until the immutability lockdown — the default is one program now. (The fuSOL subsystem's two deployables are not such a split: they are a separate product surface with their own immutability plan, coupled to the core only by read-only account parses.)
 
 ### 1.5 Shared logic as compiled-in Rust crates (no CPI hop)
 
@@ -94,8 +95,8 @@ Reusable math and oracle logic live in **plain Rust crates compiled *into* `fusd
 
 | Crate | Role | Status |
 |---|---|---|
-| `fusd-math` | The fixed-point money-math core: U256-backed `mul_div` (floor/ceil), WAD/RAY mul-div, `ray_pow`, `present_debt` (the `art*rate` realization), `apply_bps`; the `reactor_pool` P/S product-sum, `redistribution` reward-per-unit accumulators, `rate_bucket` bitmap math, and the `oracle_scale` price scaling (`px_to_ray`, `usd_ray_to_spot`, `sqrt_price_q64_to_ray`). | [Built] (**113 host tests** + 25 Kani formal-verification harnesses; SBF-clean) |
-| `fusd-oracle` | Pure validation/aggregation logic: `PriceView`, conf-ratio, asymmetric collateral/debt pricing, `aggregate` (the sole mode path, with the `fresh`-feed flag), and the `ObservationRing` DEX-TWAP. Now wired to `market.spot` by the `update_price`/`sample_twap` cranks (§6.4). | [Built] (33 tests; live feed parsing wired) |
+| `fusd-math` | The fixed-point money-math core: U256-backed `mul_div` (floor/ceil), WAD/RAY mul-div, `ray_pow`, `present_debt` (the `art*rate` realization), `apply_bps`; the `reactor_pool` P/S product-sum, `redistribution` reward-per-unit accumulators, `rate_bucket` bitmap math, and the `oracle_scale` price scaling (`px_to_ray`, `usd_ray_to_spot`, `sqrt_price_q64_to_ray`). | [Built] (**124 host tests** + 25 Kani formal-verification harnesses; SBF-clean) |
+| `fusd-oracle` | Pure validation/aggregation logic: `PriceView`, conf-ratio, asymmetric collateral/debt pricing, `aggregate` (the sole mode path, with the `fresh`-feed flag), and the `ObservationRing` DEX-TWAP. Now wired to `market.spot` by the `update_price`/`sample_twap` cranks (§6.4). | [Built] (39 tests; live feed parsing wired) |
 
 Both crates are `no_std` (`fusd-math` is `#![cfg_attr(not(test), no_std)]`) and dependency-light, so they drop straight into the program with no host-only baggage on-chain.
 
@@ -232,7 +233,8 @@ A user's CDP. Only the owner's transactions write it (`has_one = owner`), so all
 | `bucket` | `u16` | The redemption rate-bucket this position is counted in — valid iff `recorded_debt > 0`; stored explicitly (not re-derived) so a `bucket_width_bps` change can't mis-target the decrement. The `ZOMBIE_BUCKET` sentinel parks a collateral-exhausted / sub-`min_debt` position out of the ordering. |
 | `coll_surplus` | `u64` | Collateral the liquidation bonus collar returned to this owner (native), held in the vault, withdrawn via `claim_coll_surplus`. |
 | `last_rate_adjust_ts` | `i64` | Last `adjust_rate` time; drives the BOLD premature-rate-change fee/cooldown. |
-| `_reserved` | `[u8; 32]` | Forward-compat padding (widened 6→32 pre-launch for additive-upgrade headroom). |
+| `ink_nonce` | `u64` | Monotonic collateral-change nonce: bumps whenever `ink` actually changes (deposit, withdraw, redemption drain, liquidation seize, the lazy redistribution fold — all routed through the sole mutator `Position::set_ink`). No FUSD solvency/debt path reads it; the fuSOL Allocation Controller (§12) reads it to invalidate stale validator direction whenever collateral moves. Carved from `_reserved`. |
+| `_reserved` | `[u8; 24]` | Forward-compat padding (widened 6→32 pre-launch, carved to 24 by `ink_nonce`). |
 
 ### 2.2 Per-position interest accounting (Liquity-v2 / BOLD weighted-debt-sum) [Built]
 
@@ -390,7 +392,7 @@ The matching liquidation call sits in `liquidate.rs`: it computes the RP-coverab
 
 ### 3.5 Test coverage
 
-The `reactor_pool` module ships with unit tests covering the load-bearing paths: fresh-pool init, single- and two-depositor pro-rata offsets, full-pool drain (epoch rollover + deposit wipe + gain still claimable), scale bump on near-total offset, the 1000-round no-drift error-feedback test, and rejection of over-sized / empty-pool offsets. The scale/epoch rollover is the classic precision bug, so it is hard property/fuzz tested: the **B8 proptest suite [Built]** adds a stateful random-offset-sequence model crossing scale/epoch boundaries plus a depositor-snapshot round-trip carried across scale bumps and the epoch roll — alongside the Kani harnesses (the full `fusd-math` layer is 113 host tests + 25 Kani harnesses; §11.3, `PROOF_STRENGTH.md`).
+The `reactor_pool` module ships with unit tests covering the load-bearing paths: fresh-pool init, single- and two-depositor pro-rata offsets, full-pool drain (epoch rollover + deposit wipe + gain still claimable), scale bump on near-total offset, the 1000-round no-drift error-feedback test, and rejection of over-sized / empty-pool offsets. The scale/epoch rollover is the classic precision bug, so it is hard property/fuzz tested: the **B8 proptest suite [Built]** adds a stateful random-offset-sequence model crossing scale/epoch boundaries plus a depositor-snapshot round-trip carried across scale bumps and the epoch roll — alongside the Kani harnesses (the full `fusd-math` layer is 124 host tests + 25 Kani harnesses; §11.3, `PROOF_STRENGTH.md`).
 
 ---
 
@@ -626,6 +628,10 @@ Anything missing, stale, divergent, with mismatched exponents, or **implausible*
 
 For **liquid-staking-token (LST) collateral**, `aggregate` takes a fourth input, `canonical: Option<u128>` — the trustless on-chain valuation `sol_usd · (total_lamports / pool_token_supply)` (RAY USD per whole LST), read from the SPL stake pool by the crank. When present, the **collateral** (mint/LTV) price is capped at `MIN(market, canonical)` *before* the −k·σ haircut, so an upward-manipulated market feed cannot inflate borrowing power past the stake-pool reality — the BOLD-08 upward-manip→over-mint→depeg defense, mirroring BOLD's `MIN(LST-USD, ETH-USD·exchange_rate)`. The **debt** price (liquidation/redemption) is left on the raw market view — the worst case is not forced on redeemers. `OracleConfig.canonical_required` (set for LST markets) makes a healthy canonical *mandatory to mint*: an absent/stale/degenerate stake-pool rate freezes mints (the defense can't be verified) but still serves a conservative price off the market (the peg floor stays alive). A canonical *above* the market is a no-op (the leg only ever lowers collateral). Non-LST markets pass `None` + `false` and are byte-identical to the pre-C1 behavior. The stake-pool rate is read directly from on-chain state (`programs/fusd-core/src/stake_pool.rs`, verified byte offsets), **never** a swap/DEX.
 
+#### Canonical-primary mode (fuSOL) — [Built]
+
+The C1 leg assumes an external market feed exists to be *capped*. fuSOL (§12) has none — no Pyth or Switchboard feed quotes it, and no DEX venue exists pre-listing — so a **canonical-primary** market inverts the composition: the price IS `sol_usd × pool_rate`. The bound Pyth/Switchboard feeds are the **SOL/USD legs** (init enforces `pyth_feed_id == PYTH_SOL_USD_FEED_ID`), and `update_price` scales BOTH parsed views — price *and* confidence — by the bound fork pool's `total_lamports / pool_token_supply` before `aggregate` runs. Because conf scales with price, the conf-ratio gate and the Pyth↔SB deviation corridor are scale-invariant and keep their meaning untouched. Consequences that differ from C1 by design: **`spot` AND `debt_spot` both track pool NAV** (a negative-NAV finalization reaches the liquidation path on the next crank — with a real market feed C1 deliberately leaves debt on the market view; with no market feed the NAV must bind both sides); a mandatory **`liquidity_haircut_bps`** discounts the collateral (mint/LTV) leg only, standing in conservatively for the missing market corridor (the debt leg keeps the conservative HIGH side); the TWAP corridor is **optional** in this mode (`OracleConfig.twap_corridor_optional` — a present-but-divergent TWAP still freezes mints); and an unavailable pool rate (absent account, parse failure, epoch lag > 2, pool-mint mismatch, degenerate totals) freezes mints **and withholds the commit entirely** — there is no market price to fall back on, so the cache ages into the staleness machinery rather than serving an unscaled SOL/USD price. A pool owned by the wrong deployment hard-reverts: mode-1 markets bind the FUSION stake-pool fork (`FUSION_STAKE_POOL_PROGRAM_ID`), C1 markets keep the upstream `SPoo1…` (shared `parse_bound_stake_pool`). Every pre-existing market decodes `canonical_primary = 0` and is bit-for-bit unchanged.
+
 #### Oracle-degradation freeze semantics — [Built]
 
 `OracleMode` has exactly two variants — `Ok` and `MintFrozen` — encoding the central rule:
@@ -667,7 +673,7 @@ A per-market config account (PDA `[b"oracle", collateral_mint]`), read-only on t
 | Aggregate thresholds | `max_conf_bps` (u16), `max_deviation_bps` (u16), `twap_max_divergence_bps` (u16), `max_age_secs` (i64), `k_bps` (u16) |
 | TWAP guards | `twap_window_secs`, `twap_min_samples`, `twap_max_staleness_secs` |
 
-Thresholds are stored as the smallest sufficient int (bps fit `u16`; the clamps guarantee it). `MarketOracle` also binds **`lst_stake_pool`** — the SPL stake-pool account for the C1 canonical-rate leg (`Pubkey::default()` = a non-LST market, leg off); init requires a 9-decimal collateral mint when it is set. The remaining `_reserved` is 30 bytes (was 62; `lst_stake_pool` carved 32) for forward-compat.
+Thresholds are stored as the smallest sufficient int (bps fit `u16`; the clamps guarantee it). `MarketOracle` also binds **`lst_stake_pool`** — the stake-pool account for the C1 canonical-rate leg (`Pubkey::default()` = a non-LST market, leg off); init requires a 9-decimal collateral mint when it is set. Two further carves serve the canonical-primary mode (§6.1): **`canonical_primary: u8`** (the mode flag; `0` on every pre-carve account = market-feed oracle, bit-identical prior behavior) and **`liquidity_haircut_bps: u16`** (mandatory `[1, 2_000]` in mode 1, must be `0` otherwise). Both are init-only. The remaining `_reserved` is 27 bytes (was 62; `lst_stake_pool` carved 32, the mode fields 3) for forward-compat.
 
 #### `DexTwap` — zero-copy ring account — [Built]
 
@@ -680,7 +686,7 @@ A per-market zero-copy account (PDA `[b"twap", collateral_mint]`) that **mirrors
 
 #### `init_market_oracle` — [Built]
 
-Governance-gated (`gov_authority`) instruction that creates both `MarketOracle` and `DexTwap` for an existing market. It validates feed bindings (a zero feed id or default pubkey can never verify; **at least one** DEX pool is required because the TWAP corridor is load-bearing for mint-mode), enforces the compile-time clamps on every threshold, and zero-initializes the ring via `load_init()`.
+Governance-gated (`gov_authority`) instruction that creates both `MarketOracle` and `DexTwap` for an existing market. It validates feed bindings (a zero feed id or default pubkey can never verify), enforces the compile-time clamps on every threshold, and zero-initializes the ring via `load_init()`. The validation splits on `canonical_primary`: a market-feed oracle (mode 0, every market pre-fuSOL) requires **at least one** DEX pool (the TWAP corridor is load-bearing for mint-mode) and rejects the haircut knob; a canonical-primary market (mode 1) instead requires the SOL/USD feed id, a fork stake-pool binding, **no** DEX pools, and a haircut in `[1, MAX_LIQUIDITY_HAIRCUT_BPS]` (§6.1).
 
 Clamps (`constants.rs` — governance-tunable *within* these hard bounds; defaults pending a backtesting pass):
 
@@ -1072,7 +1078,7 @@ This section is the cross-check between the design and the bytecode: the exact i
 
 ### 11.1 Instruction reference
 
-The `#[program]` block in `fusd-core` exports **52 production instructions** plus one dev/test-only instruction (`dev_set_price`, compiled only under `#[cfg(feature = "dev-oracle")]` and **excluded from every production build and from the IDL**, enforced by a release gate). Init-time setup instructions and the admin `set_guardian` authorize via `require_keys_eq!` against `ProtocolConfig.gov_authority` (itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`). **Market-parameter changes flow through the bounded `GovernanceGate` + FUSD-owned timelock [Built]:** `queue_param_change` (gated on the gate's migratable inbound authority, clamped + relationally validated) → after the delay → permissionless `execute_param_change` (with the two-step `migrate_inbound_authority`/`accept_inbound_authority` and `cancel_param_change`). The same flow now also tunes the **RiskParamRegistry** set (the `MarketOracle` thresholds + `Market.scr_bps`, the eight added `MarketParam`s) via an optional oracle account on queue/execute. The independent **`guardian_derisk`** (gated on `config.guardian`) is [Built]. All events ride the Anchor `#[event_cpi]` self-CPI transport (immune to RPC log truncation).
+The `#[program]` block in `fusd-core` exports **52 production instructions** plus one dev/test-only instruction (`dev_set_price`, compiled only under `#[cfg(feature = "dev-oracle")]` and **excluded from every production build and from the IDL**, enforced by a release gate). Init-time setup instructions and the admin `set_guardian` authorize via `require_keys_eq!` against `ProtocolConfig.gov_authority` (itself rotated via the two-step `migrate_gov_authority`/`accept_gov_authority`). **Market-parameter changes flow through the bounded `GovernanceGate` + FUSD-owned timelock [Built]:** `queue_param_change` (gated on the gate's migratable inbound authority, clamped + relationally validated) → after the delay → permissionless `execute_param_change` (with the two-step `migrate_inbound_authority`/`accept_inbound_authority` and `cancel_param_change`). The same flow now also tunes the **RiskParamRegistry** set (the `MarketOracle` thresholds + `Market.scr_bps`, the eight added `MarketParam`s) via an optional oracle account on queue/execute. The independent **`guardian_derisk`** (gated on `config.guardian`) is [Built]. All events ride the Anchor `#[event_cpi]` self-CPI transport (immune to RPC log truncation). The repo additionally ships the fuSOL subsystem's two deployables (§12): `fusion-stake-controller` (**18 instructions**, its own append-only error enum and event set, same event-CPI transport and layout discipline) and the pinned `vendor/spl-stake-pool` fork — neither adds to, nor is callable from, the `fusd-core` surface.
 
 | Instruction | Caller | Effect (one line) | Status |
 |---|---|---|---|
@@ -1165,8 +1171,8 @@ The SBF cargo (1.84) **rejects** `edition2024`/MSRV-1.85 crates that the host ca
 
 Tests live in three places, deliberately separated so the dev oracle cannot leak into production artifacts:
 
-- **Crate unit tests** (`crates/fusd-math`, `crates/fusd-oracle`) — pure, dependency-free, tests-first: the U256 WAD/RAY math, the P/S reactor-pool product-sum, the redistribution accumulators, the rate-bucket bitmap, the oracle scaling + TWAP ring + `aggregate`. `fusd-math` carries **113 host tests** (unit + the B8 fuzz-pass proptest properties — the stateful BTreeSet bitmap model, RP scale/epoch round-trips, conservation + fail-closed) plus **25 Kani formal-verification harnesses** (run under the Kani solver, not `cargo test`; see `PROOF_STRENGTH.md`); `fusd-oracle` carries **33**.
-- **The isolated `integration-tests` crate** — a **non-program** workspace member running **in-process litesvm** (`litesvm = "=0.7.1"`, the last release on the Solana 2.3 line). It loads the real `.so` and exercises full instruction flows with exact balance/state assertions and revert-code checks. A shared harness (`src/lib.rs`) holds the PDA derivations, every instruction builder, typed account readers, and scenario helpers. The suite is now **~230 litesvm tests** across 35 files (CDP, liquidation, redistribution, reserve/gas-comp, buckets, redemption, zombie-pen, closed-candidate-skip, oracle-crank, oracle-pause-matrix, governance, gov-authority, guardian, shutdown, rate-limit, CCR, MCR-grace, buffer, interest, events, value-recovery, vault-reconcile, lever-matrix, …) — putting the workspace at roughly **400 tests** (~230 litesvm + ~165 host).
+- **Crate unit tests** (`crates/fusd-math`, `crates/fusd-oracle`) — pure, dependency-free, tests-first: the U256 WAD/RAY math, the P/S reactor-pool product-sum, the redistribution accumulators, the rate-bucket bitmap, the oracle scaling + TWAP ring + `aggregate`. `fusd-math` carries **124 host tests** (unit + the B8 fuzz-pass proptest properties — the stateful BTreeSet bitmap model, RP scale/epoch round-trips, conservation + fail-closed) plus **25 Kani formal-verification harnesses** (run under the Kani solver, not `cargo test`; see `PROOF_STRENGTH.md`); `fusd-oracle` carries **39**.
+- **The isolated `integration-tests` crate** — a **non-program** workspace member running **in-process litesvm** (`litesvm = "=0.7.1"`, the last release on the Solana 2.3 line). It loads the real `.so` and exercises full instruction flows with exact balance/state assertions and revert-code checks. A shared harness (`src/lib.rs`) holds the PDA derivations, every instruction builder, typed account readers, and scenario helpers. The suite is now **304 litesvm tests** across 50 files (CDP, liquidation, redistribution, reserve/gas-comp, buckets, redemption, zombie-pen, closed-candidate-skip, oracle-crank, oracle-pause-matrix, governance, gov-authority, guardian, shutdown, rate-limit, CCR, MCR-grace, buffer, interest, events, value-recovery, vault-reconcile, lever-matrix, the fuSOL genesis/preference/epoch-machine/oracle suites, …) — putting the release gates at **617 tests** (304 litesvm + 313 host).
 - **TS/anchor-mocha e2e** (`tests/`) — wired via `Anchor.toml`, but `solana-test-validator` is killed by this sandbox; the in-process litesvm path is the load-bearing one here.
 
 **The `dev-oracle` feature is needed in two places at once**: in the `.so` at runtime (`anchor build -- --features dev-oracle`) *and* on the `integration-tests` crate's dependency on `fusd-core` (so the generated `instruction::*`/`accounts::*` client modules, including `DevSetPrice`, are importable). Because `integration-tests` is not a program and is excluded from `anchor build`, its `dev-oracle` dependency can **never** unify into the deployed program or IDL — that isolation is the whole reason the tests do not live in the program crate.
@@ -1203,7 +1209,77 @@ The phased decentralization plan gates each step on hard exit criteria; the tabl
 
 ---
 
-## 12. Component Status Summary
+## 12. fuSOL — Native Stake Share Pool
+
+fuSOL is productive, natively staked SOL as Fusion collateral — a non-rebasing legacy SPL share
+token over a dedicated stake pool, with **no LST operator**: no human manager, no
+validator-selection authority, no freeze authority, no upgrade path after launch sealing, and no
+generic CPI executor. Validator direction is optional, expressed by Fusion collateral owners;
+everything above a small operational reserve is delegated by fixed directed-or-neutral rules.
+The full subsystem doc lives at [`docs/stake-pool/README.md`](stake-pool/README.md); this
+section covers what a FUSD reader needs.
+
+### 12.1 Components — [Built]
+
+| Component | Where | Role |
+|---|---|---|
+| Stake pool (custody + shares) | `vendor/spl-stake-pool` | Pinned upstream-compatible SPL Stake Pool fork (fork ID `3pYHXui7Zk21TKE6oqivqbVJWRXt74wdDkqsnb3Q8mMi`); the complete source diff is the two `declare_id` lines — [`UPSTREAM.md`](../vendor/spl-stake-pool/UPSTREAM.md) is the audit pin manifest. |
+| Allocation Controller | `programs/fusion-stake-controller` | Immutable Anchor program (`Fz3z1yh21PQ59smsPjmjeyK6ngh8KoK6PiPxUgCgspFq`) holding the pool's manager/staker/deposit authorities as PDAs; signs exactly an 11-instruction byte-pinned CPI allowlist. `SetFee`/`SetManager`/`SetStaker`/`SetFundingAuthority`/withdraw/metadata builders are structurally absent from the binary. |
+| Pure math | `crates/fusion-stake-math` | Directed floors + deterministic equal-capacity neutral rounds (an incremental fold, cursor-batchable on-chain), churn caps, hysteresis, lifecycle transitions, the preference predicate, reward bounds. Conservation and termination are property-tested and Kani-verified. |
+| Read-only parsers | `crates/fusion-stake-view` | Bounds-checked byte parsers for `StakePool`, `ValidatorList`, `VoteState` (fails closed on unknown versions), and the `fusd-core` `Position` (pinned by a round-trip test against the real type). |
+| Ops | `keepers/stake-pool-crank.ts`, `scripts/bootstrap-fusol.ts` | Permissionless reference crank; idempotent genesis orchestrator that prints the launch-manifest address block. |
+
+Withdrawals (stake or SOL) go **directly** to the stake-pool program and can never be
+authority-gated — the guaranteed exit. Deposits route through the controller. Fees are fixed at
+pool initialization (5 bps per deposit/withdrawal flavor, 1% of positive epoch rewards, referral
+0) and no fee setter exists.
+
+### 12.2 Direction & allocation — [Built]
+
+A fuSOL-backed `Position` may direct its collateral weight at ONE objectively eligible validator
+(commission ≤ 10%, live voting, positive prior-epoch credits — no allowlist, no identity
+registry). Direction is an epoch-snapshot right, not a yield entitlement: every share earns the
+same blended pool return. The anti-reuse property rides `Position.ink_nonce` (§2): any
+collateral change bumps the nonce, invalidating the recorded preference until a permissionless
+re-sync that is eligible only NEXT epoch — so the same fungible shares can never direct two
+validators in one epoch — plus a once-per-epoch count guard on the preference itself.
+
+Each epoch a permissionless crank machine (single `EpochState` write lane; every batch cursor
+monotonic; wrong/duplicate accounts fail without advancing) reconciles the validator list,
+finalizes NAV, opens the preference window, computes directed targets (`floor(productive ×
+shares / supply)`, lifecycle-capped at 2% Active / 0.25% Candidate of the pool), distributes the
+neutral remainder EQUALLY across Active validators in deterministic capacity rounds, proves
+conservation on-chain (`directed + neutral + recorded shortfall == productive`, exactly), and
+rebalances under a 3% global churn budget with an epoch-rotated, caller-unsteerable cursor.
+Crank rewards are bounded fuSOL payouts from the fee-funded maintenance vault; an empty vault
+never blocks a crank.
+
+### 12.3 FUSD integration — [Built]
+
+fuSOL is an ordinary **isolated market**: own MCR/ceiling/Reactor Pool/insurance buffer, priced
+by the canonical-primary oracle mode (§6.1) off the REAL pool account. The exit-path guarantee
+is structural and adversarially verified: `fusd-core` never CPIs into the controller, the
+controller only ever READS `Position` bytes, and no FUSD debt path (borrow/repay/liquidate/
+redeem/shutdown) takes a controller account. A controller failure can therefore never block
+repayment, redemption, or liquidation; if nobody cranks, the stale NAV freezes NEW fuSOL
+borrowing while every de-risk path stays open on the last conservative price.
+
+### 12.4 Verification & launch posture
+
+18 cross-program litesvm scenarios run the genesis, deposit, preference, and epoch-machine flows
+against the **mainnet-dumped** stake-pool binary at the fork address (behaviorally identical —
+the fork's one source change is unused at runtime). Component-level adversarial reviews ran
+clean (CPI allowlist byte-exact vs the pinned source; state machine passed all eight
+adversarial categories). Still owed before any launch, per the checklist in
+[`docs/stake-pool/README.md`](stake-pool/README.md): independent audits (fork diff + controller),
+reproducible from-source fork builds (needs the upstream platform-tools line), `VoteStateV4`
+parsing if the target cluster has migrated vote accounts, economic simulation of the draft
+fee/reward constants, and the sealing ceremony (upgrade authorities to `None`, verified, THEN
+deposits open).
+
+---
+
+## 13. Component Status Summary
 
 Every component from each section's per-section status table, grouped by area.
 
@@ -1212,7 +1288,7 @@ Every component from each section's per-section status table, grouped by area.
 | Single-program design (`fusd-core`) | Architecture | [Built] | One program; isolation from the account/write-lock layout |
 | Isolated per-collateral markets | Architecture | [Built] | `Market` per collateral mint; Sealevel-parallel hot path |
 | Four peg loops (redeem floor / repay-arb / RP / user-set rates) | Architecture | [Built] | All four wired & litesvm-tested; dynamic base-rate fee also [Built] (C9) |
-| `fusd-math` (WAD/RAY, U256, ray_pow, P/S, redist, rate-bucket) | Architecture | [Built] | Compiled-in crate; **113 host tests** + 25 Kani harnesses, SBF-clean |
+| `fusd-math` (WAD/RAY, U256, ray_pow, P/S, redist, rate-bucket) | Architecture | [Built] | Compiled-in crate; **124 host tests** + 25 Kani harnesses, SBF-clean |
 | `fusd-oracle` (validation + TWAP ring) | Architecture | [Built] | Aggregation/TWAP logic + the live `update_price`/`sample_twap` cranks wired to `spot` |
 | WAD/RAY fixed-point discipline | Architecture | [Built] | U256 intermediates, multiply-before-divide, round-against-protocol, checked release math |
 | RAD (1e45) balances | Architecture | [Partial] | Documented convention; not yet a defined constant — v1 accounting works in WAD/RAY |
@@ -1318,7 +1394,7 @@ Every component from each section's per-section status table, grouped by area.
 | Permissioned / KYC'd institutional venue (Aave-Arc pattern) | Compliance | [Planned] | Phase 4+; segregated, opt-in; never gates the core |
 | Legal entity / "software, not an MSB/issuer" positioning | Compliance | [Planned] | Social/legal; highest-leverage; no team-run flagship front-end |
 | Protocol-level freeze / denylist / clawback | Compliance | [Rejected by design] | Would forfeit the thesis and the *Van Loon* shield; closed at every layer |
-| `#[program]` instruction surface (46 prod) | Reference/Build | [Built] | Verified against `lib.rs`; production IDL has no `dev_set_price` |
+| `#[program]` instruction surface (52 prod) | Reference/Build | [Built] | Verified against `lib.rs`; production IDL has no `dev_set_price` |
 | `dev_set_price` (`dev-oracle`) | Reference/Build | [Built] (dev-gated) | Excluded from production IDL/`.so` |
 | `update_price` / `sample_twap` | Reference/Build | [Built] | Live feed parsing + CLMM sampler; the borrow blocker cleared |
 | Governance + recap + guardian instructions (in `lib.rs`) | Reference/Build | [Built] | gate/timelock, two-step authorities, guardian, shutdown, value-recovery trio, buffer, `claim_coll_surplus` — all [Built] |
@@ -1332,14 +1408,22 @@ Every component from each section's per-section status table, grouped by area.
 | RiskParamRegistry | Reference/Build | [Built] | Realized as eight added `MarketParam`s (oracle thresholds + `scr_bps`) on the existing timelock — no separate account. The `[b"registry"]` seed stays reserved. |
 | Account layout discipline (klend C10) | Reference/Build | [Built] | const-assert size pins + Borsh SPACE-pin test; pre-launch reserve widening |
 | Toolchain + SBF pins | Reference/Build | [Built] | Anchor 0.32.1 / Solana 2.3 / platform-tools 1.84.1 |
-| Test architecture (litesvm + crate units) | Reference/Build | [Built] | ~400 tests (~230 litesvm + ~165 host incl. 113 `fusd-math`); isolated `integration-tests` crate |
+| Test architecture (litesvm + crate units) | Reference/Build | [Built] | 617 tests in the release gates (304 litesvm across 50 files + 313 host across six crates/programs incl. 124 `fusd-math`); isolated `integration-tests` crate |
 | Release gates (3 scripts) | Reference/Build | [Built] | verifiable-build, check-no-dev-oracle, check-stack-offsets |
 | Phase 1 core | Reference/Build | [Built] | Functionally complete; launch wiring Planned |
 | Phases 2–4 | Reference/Build | [Planned] | Hardening → governance-min → immutability |
+| `Position.ink_nonce` (collateral-change nonce) | fuSOL Stake Pool | [Built] | Sole mutator `set_ink`; all 6 ink-mutation sites routed incl. the redistribution fold; litesvm-pinned |
+| Canonical-primary oracle mode | fuSOL Stake Pool | [Built] | `sol_usd × pool_rate` on BOTH `spot`/`debt_spot`; mandatory liquidity haircut; withhold-on-unavailable-rate; 6 litesvm scenarios |
+| Vendored stake-pool fork (pin `a27629b`) | fuSOL Stake Pool | [Built] | Two-line `declare_id` diff; lock fidelity proven; from-source build = deploy-time (upstream platform-tools) |
+| `fusion-stake-math` / `fusion-stake-view` | fuSOL Stake Pool | [Built] | 50 + 33 tests; conservation/termination Kani-verified; VoteState fails closed on V4 (must land pre-mainnet) |
+| Allocation Controller (`fusion-stake-controller`) | fuSOL Stake Pool | [Built] | 18 ix; 11-builder byte-pinned CPI allowlist; on-chain plan conservation proof; 3 adversarial lenses clean |
+| fuSOL cross-program test suites | fuSOL Stake Pool | [Built] | 18 litesvm scenarios against the mainnet-dumped pool binary at the fork id |
+| fuSOL TS surface (SDK / bootstrap / crank keeper) | fuSOL Stake Pool | [Built] | Genesis E2E-verified on a live test validator; keeper ports the rebalance walk, pinned vs Rust vectors |
+| fuSOL launch items (audits, from-source builds, VoteStateV4, economic sim, sealing) | fuSOL Stake Pool | [Planned] | The §12.4 checklist; deposits open only after sealing is verified |
 
 ---
 
-## 13. Document Conventions & Caveats
+## 14. Document Conventions & Caveats
 
 A few standing caveats apply to everything above:
 
