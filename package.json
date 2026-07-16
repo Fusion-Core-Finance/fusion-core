@@ -10,7 +10,8 @@
   "scripts": {
     "lint": "prettier --check \"{tests,sdk,scripts,migrations}/**/*.ts\"",
     "lint:fix": "prettier --write \"{tests,sdk,scripts,migrations}/**/*.ts\"",
-    "test:sdk": "ts-mocha -p ./tsconfig.json -t 20000 'sdk/test/**/*.spec.ts' 'keepers/**/*.spec.ts'"
+    "test:sdk": "ts-mocha -p ./tsconfig.json -t 20000 'sdk/test/**/*.spec.ts' 'keepers/**/*.spec.ts'",
+    "verify-fusol": "ts-node scripts/verify-fusol-deployment.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

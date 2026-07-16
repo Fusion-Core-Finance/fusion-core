@@ -110,9 +110,61 @@ ANCHOR_PROVIDER_URL=<rpc> npx ts-node scripts/bootstrap-fusol.ts [config.json]
 # the permissionless crank (any wallet; earns fuSOL rewards)
 STAKE_CRANK_CONFIG=<cfg.json> npx ts-node keepers/stake-pool-crank.ts
 
+# the FAIL-CLOSED launch verifier (read-only; run it — and it must PASS — BEFORE renouncing the
+# program upgrade authorities, then AGAIN after, to confirm they are None)
+npx ts-node scripts/verify-fusol-deployment.ts <config.json> --phase pre-seal   # pre-renounce
+npx ts-node scripts/verify-fusol-deployment.ts <config.json> --phase sealed     # post-renounce
+#   config path may also come from --config <path> or FUSOL_VERIFY_CONFIG; --json emits a
+#   machine-readable report; the process exits 1 if ANY check fails or could not run.
+
 # refresh the litesvm test fixture (gitignored)
 bash scripts/fetch-spl-stake-pool.sh
 ```
+
+### Deployment verifier (the launch gate — FUSOL-08)
+
+`scripts/verify-fusol-deployment.ts` is an independent, **read-only** tool (a plain `Connection` —
+no wallet, no signing, no mutation) that checks the LIVE on-chain deployment against the expected
+immutable configuration. It is the last launch-blocker: it must be run — and PASS — twice, once
+BEFORE the program upgrade authorities are renounced (config `expectUpgradeAuthority` = the guarded
+authority per program) and once AFTER (config `expectUpgradeAuthority` = `"none"`, proving the
+authorities are actually `None`).
+
+It is a **security gate**, so every check is fail-closed: a missing / unreadable / unparseable
+account, an RPC error, a missing pinned ELF hash, or ANY mismatch is a FAILURE, never a skip. It
+re-derives every PDA from `sdk/src/stake-pool.ts` and asserts the config matches (a config that lies
+about a PDA fails) before reading a single account. The checks:
+
+0. Derived PDAs match config.
+1. **Programs executable + upgrade authority** — controller + fork (+ optionally fusd-core):
+   executable, owned by the BPF upgradeable loader, and the ProgramData `upgrade_authority` equals
+   the config's `expectUpgradeAuthority` (`None` when `"none"`). The headline immutability check.
+2. **Program ELF hash** — sha256 of the on-chain ProgramData ELF vs the pinned hash (a missing
+   expected hash is `NOT-VERIFIED`, itself a non-pass); reports any on-chain `security.txt`.
+3. **fuSOL mint** — legacy SPL, 9 decimals, mint authority = pool withdraw PDA, **freeze authority
+   None**, supply > 0 and == the pool's `pool_token_supply`.
+4. **StakePool** — the full authority graph (manager = staker = pool-authority PDA; stake + SOL
+   deposit authority = deposit-authority PDA; `sol_withdraw_authority` = None) and the fee schedule
+   (epoch 1/100, deposit/withdrawal 5/10000, referral 0), walked out of the borsh tail.
+5. **ValidatorList** — owned by the fork, `max_validators` = 1024.
+6. **Maintenance vault** — fuSOL token account, authority = maintenance PDA, no delegate/close.
+7. **Reserve stake** — staker = withdrawer = pool withdraw PDA, no lockup.
+8. **ControllerConfig** — sealed, version pinned, every recorded address = expected/derived, canonical bumps.
+9. **fusd-core fuSOL market + oracle** — canonical-primary oracle (`lst_stake_pool` = the fork pool,
+   `pyth_feed_id` = SOL/USD, no DEX pools), market `debt_ceiling` > 0, liquidation infra ready.
+10. **Emergency posture** — the observable no-freeze / no-clawback facts, plus the source-verified
+    positive controls (no fee setter, controller CPI-allowlist) reported as on-chain-unobservable.
+
+The sealed (post-renounce) run reads at **`finalized`** commitment — it certifies an irreversible
+step, so a `confirmed`-but-not-finalized renounce that a fork could still roll back must never flash
+PASS (`--commitment` overrides for a dev fork). fusd-core is deliberately upgradeable through the
+guarded Phases 1–3, so its program block is optional; when omitted the report says so explicitly
+(an informational, non-gating line) rather than silently skipping it.
+
+The config shape is the bootstrap genesis manifest (`rpcUrl` + every predeclared/derived address +
+per-program `expectUpgradeAuthority` and optional `expectedElfSha256`). The pure check functions are
+unit-tested against hand-built byte fixtures in `keepers/verify-fusol-deployment.spec.ts` (run via
+`yarn test:sdk`) — a good fixture passes and each individual corruption fails.
 
 Integration tests run the REAL stake-pool program: the mainnet-deployed upstream binary loaded
 at the fork address (behaviorally identical — the fork's only source change is unused at
@@ -132,8 +184,9 @@ runtime). Building the fork from source requires the upstream platform-tools lin
    (`fusion-stake-view` currently fails closed on V4 — validators would be ineligible, a
    liveness issue, not a fund-safety one).
 7. Aggregate Active-validator capacity ≥ 100% of productive AUM at public opening.
-8. Upgrade authorities set to `None` on both programs, independently verified — THEN open
-   deposits, not before.
+8. Upgrade authorities set to `None` on both programs, independently verified by
+   `scripts/verify-fusol-deployment.ts` (run `--phase pre-seal` before renouncing and `--phase
+   sealed` after — both must PASS) — THEN open deposits, not before.
 9. External audit (received 2026-07-14): findings remediated in-tree, closure evidence
    published.
 
